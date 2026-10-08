@@ -311,6 +311,7 @@ def parse_task(path):
         "priority": priority if priority in PRIORITY_VALUES else "P2",
         "priority_raw": head.get("priority", ""), "tier": tier, "tier_raw": head.get("tier", ""),
         "has_steps": bool(steps), "verify_cmd": any("`" in l for l in verify),
+        "has_evidence": any(l.strip() for l in sec.get("evidence", [])),
         "vague": sorted({m.group(1).lower() for m in VAGUE_RE.finditer(spec_text)}),
         "next": nxt, "blocked": blocked, "lines": len(text.splitlines()), "text": text,
         "header_id": re.findall(r"^# (PB-\d+)", text, re.M),
@@ -400,13 +401,13 @@ def trailer_values(body, key):
 
 
 def pb_base(root):
-    """Newest commit made under the protocol (message mentions PB-); commits after it are external.
-
-    ponytail: agents often commit task work without a checkpoint trailer, so "newest checkpoint" would flag
-    their own commits as foreign. Upgrade path: per-domain bases once trailer names match heading names.
-    """
-    return (git(root, "log", "-1", "--grep=PB-", r"--grep=\[PB\]", "--format=%H")
-            or git(root, "log", "-1", "--format=%H", "--", BRAIN_DIR) or None)
+    """Last explicit all-domain checkpoint; legacy fallback is the last Current edit."""
+    for sha, body in git_records(root, "PB-Current-Checkpoint:"):
+        domains = [norm_domain(d) for v in trailer_values(body, "PB-Current-Checkpoint") for d in v.split(",")]
+        if "all" in domains and not is_wip(body):
+            return sha
+    return git(root, "log", "-1", "--format=%H", "--",
+               f"{BRAIN_DIR}/current.md", f"{BRAIN_DIR}/current") or None
 
 
 def is_wip(body):
@@ -417,12 +418,25 @@ def task_ids_in(body):
     return [norm_id("PB", n) for v in trailer_values(body, "PB-Tasks?") for n in re.findall(r"PB-(\d+)", v)]
 
 
+def closed_ids(root, sha, body):
+    """Completion needs verification and task absence in that commit, not just today's worktree."""
+    if is_wip(body) or not set(trailer_values(body, "PB-Verification")) & {"local", "domain", "global"}:
+        return set()
+    paths = git_paths(root, "ls-tree", "-r", "--name-only", sha, "--", f"{BRAIN_DIR}/tasks")
+    if paths is None:
+        return set()
+    present = {norm_id("PB", m.group(1)) for p in paths if (m := TASK_FILE_RE.match(Path(p).name))}
+    return set(task_ids_in(body)) - present
+
+
 def recent_closed(root, open_ids, n=3):
     """[(ids, agent, short sha)] for the newest commits that closed tasks."""
     out = []
+    seen = set(open_ids)
     for sha, body in git_records(root, "PB-Task"):
-        ids = [i for i in task_ids_in(body) if i not in open_ids]
-        if ids and not is_wip(body):
+        ids = sorted(closed_ids(root, sha, body) - seen)
+        seen.update(ids)
+        if ids:
             out.append((",".join(ids), (trailer_values(body, "PB-Agent") or ["?"])[0], sha[:7]))
             if len(out) >= n:
                 break
@@ -433,9 +447,8 @@ def closed_since_audit(root, open_ids):
     """Number of tasks closed since the newest commit carrying PB-Plan-Audit (or since the start)."""
     last = git(root, "log", "-1", "--grep=PB-Plan-Audit:", "--format=%H")
     ids = set()
-    for _, body in git_records(root, "PB-Task", *([f"{last}..HEAD"] if last else [])):
-        if not is_wip(body):
-            ids |= set(task_ids_in(body))
+    for sha, body in git_records(root, "PB-Task", *([f"{last}..HEAD"] if last else [])):
+        ids |= closed_ids(root, sha, body)
     return len(ids - open_ids)
 
 
@@ -455,27 +468,39 @@ def legacy_kind(root):
 def history_task_ids(root):
     """(all ids ever committed incl. WIP, ids durably completed)."""
     every, done = set(), set()
-    for _, body in git_records(root, "PB-Task"):
+    for sha, body in git_records(root, "PB-Task"):
         ids = set(task_ids_in(body))
         every |= ids
-        if not is_wip(body):
-            done |= ids
+        done |= closed_ids(root, sha, body)
+    names = git(root, "log", "--format=", "--name-only", "--", f"{BRAIN_DIR}/tasks") or ""
+    every.update(norm_id("PB", m.group(1)) for p in names.splitlines()
+                 if (m := TASK_FILE_RE.match(Path(p).name)))
     return every, done
 
 
 def staleness(root, base):
-    """({domain: [files]}, [unmapped files]) changed by commits after `base`."""
+    """Changes since each domain's actual checkpoint; unrelated PB commits cannot erase drift."""
     if not base:
         return {}, []
     srcs = domain_sources(root)
-    changed = [p for p in (git_paths(root, "diff", "--name-only", f"{base}..HEAD") or [])
-               if not p.startswith(BRAIN_DIR + "/")]
+    bases = {}
+    for sha, body in git_records(root, "PB-Current-Checkpoint:"):
+        if is_wip(body):
+            continue
+        for val in trailer_values(body, "PB-Current-Checkpoint"):
+            for domain in (norm_domain(d) for d in val.split(",")):
+                for d in (srcs if domain == "all" else [domain]):
+                    bases.setdefault(d, sha)
+    deltas = {}
+    for checkpoint in {base, *bases.values()}:
+        deltas[checkpoint] = [p for p in (git_paths(root, "diff", "--name-only", f"{checkpoint}..HEAD") or [])
+                             if not p.startswith(BRAIN_DIR + "/")]
     stale = {}
     for d, globs in srcs.items():
-        hit = [p for p in changed if any(matches(p, g) for g in globs)]
+        hit = [p for p in deltas[bases.get(d, base)] if any(matches(p, g) for g in globs)]
         if hit:
             stale[d] = hit
-    unmapped = [p for p in changed if not any(matches(p, g) for gl in srcs.values() for g in gl)]
+    unmapped = [p for p in deltas[base] if not any(matches(p, g) for gl in srcs.values() for g in gl)]
     return stale, unmapped
 
 
@@ -593,7 +618,7 @@ def cmd_boot(root):
     if len(ip) > 1:
         notes.append(f"several IN_PROGRESS: {', '.join(t['id'] for t in ip)}: keep one, set the rest READY")
     if kept:
-        notes.append(f"finished task files still present: {', '.join(kept)}: delete them in the next commit")
+        notes.append(f"finished task files still present: {', '.join(kept)}: retain until evidence is committed (or while Git is unavailable)")
     if legacy:
         state = "LEGACY"
         notes.append(f"schema {legacy[1:]}: run `migrate`")
@@ -602,6 +627,8 @@ def cmd_boot(root):
     active = ip[0] if ip else None
 
     stale, unmapped, done, recent, since_audit = {}, [], set(), [], 0
+    local_done = {t['id'] for t in all_tasks if t['status'] == 'DONE' and t['has_evidence']}
+    done.update(local_done)
     if not has_git:
         state = state or "NO_GIT"
         gitline = "git: none (degraded: no checkpoints, no history)"
@@ -619,8 +646,8 @@ def cmd_boot(root):
         other = [p for p in dirty if not p.startswith(BRAIN_DIR + "/")]
         owned = [p for p in other if active and any(matches(p, a) for a in active["areas"])]
         unowned = [p for p in other if p not in owned]
-        every, _ = history_task_ids(root)
-        done = every - open_ids
+        every, completed = history_task_ids(root)
+        done = (completed | local_done) - open_ids
         stale, unmapped = staleness(root, base)
         recent = recent_closed(root, open_ids)
         since_audit = closed_since_audit(root, open_ids)
@@ -630,7 +657,7 @@ def cmd_boot(root):
                      else "ADVANCED" if stale or unmapped else "RESUME")
         elif state == "LEGACY" and op:
             state = "CONFLICTED"
-        gitline = (f"git: {branch or 'DETACHED'} @ {head} | last PB commit {cp or 'none'}"
+        gitline = (f"git: {branch or 'DETACHED'} @ {head} | current baseline {cp or 'none'}"
                    f"{' (= HEAD)' if cp and cp == head else ''} | dirty {len(other)} (+{len(brain_dirty)} brain)")
         if op:
             notes.append(f"{op} in progress")
@@ -663,9 +690,13 @@ def cmd_boot(root):
     if len(tasks) > BUDGETS["open_tasks"]:
         print(f"   ... {len(tasks) - BUDGETS['open_tasks']} more")
 
-    ready = sorted((t for t in tasks if t["status"] == "READY" and not [d for d in t["deps"] if d in open_ids]),
+    ready = sorted((t for t in tasks if t["status"] == "READY" and set(t["deps"]) <= done),
                    key=lambda t: (t["priority"], int(t["id"][3:])))
-    promote = [t["id"] for t in tasks if t["status"] == "PLANNED" and not [d for d in t["deps"] if d in open_ids]]
+    promote = [t["id"] for t in tasks if t["status"] == "PLANNED" and set(t["deps"]) <= done]
+    for t in tasks:
+        unresolved = set(t["deps"]) - open_ids - done
+        if unresolved:
+            print(f"  ! {t['id']}: dependencies without completion evidence: {', '.join(sorted(unresolved))}")
     focus = active or (ready[0] if ready else None)
     if focus:
         n_open = len(focus["open_items"])
@@ -697,17 +728,18 @@ def cmd_boot(root):
     load = []
     if focus:
         load.append(focus["file"])
-        dom_files = [bp(root) / "current" / f"{d}.md" for d in focus["domains"]]
-        dom_files = [f for f in dom_files if f.exists()]
-        load += dom_files or [current_slices(f, focus["domains"]) for f, fixed in current_files(root) if fixed is None]
+        load += [current_slices(f, focus["domains"]) if fixed is None else f
+                 for f, fixed in current_files(root)
+                 if fixed is None or not focus["domains"] or fixed in focus["domains"]]
         for n in sorted(set(re.findall(r"ADR-(\d+)", focus["text"]))):
             adr = next((f for f in (bp(root) / "decisions").glob(f"ADR-{int(n):03d}*.md")), None) \
                 if (bp(root) / "decisions").is_dir() else None
             if adr:
                 load.append(adr)
     else:
-        load += [f for f, fixed in current_files(root) if fixed is None]
-        load += [f for f in (bp(root) / "target.md", bp(root) / "target") if f.exists()]
+        load += [f for f, _ in current_files(root)]
+    load += [f for f in (bp(root) / "target.md",) if f.exists()]
+    load += sorted((bp(root) / "target").glob("*.md"))
     if (bp(root) / "constraints.md").exists():
         load.append(bp(root) / "constraints.md")
     def show(item):
@@ -853,8 +885,7 @@ def cmd_new(root, title, depends, risk, priority=None, tier=None):
     nums += [int(i[3:]) for i in every]
     tid = norm_id("PB", max(nums, default=0) + 1)
     deps = [norm_id("PB", n) for n in re.findall(r"PB-(\d+)", depends or "")]
-    open_ids = {t["id"] for t in list_tasks(root) if t["status"] != "DONE"}
-    status = "PLANNED" if any(d in open_ids for d in deps) else "READY"
+    status = "PLANNED"  # A scaffold is never an executable spec.
     risk = risk or "MEDIUM"
     path = tdir / f"{tid}.md"
     path.write_text(TASK_TMPL.format(id=tid, title=title, status=status, risk=risk,
@@ -876,7 +907,7 @@ def cmd_changed(root):
         return 1
     stale, unmapped = staleness(root, base)
     if not stale and not unmapped:
-        print("NO_CHANGES: no commits outside the protocol since the last PB commit")
+        print("NO_CHANGES: no source changes since the applicable Current checkpoints")
         return 0
     for d, files in stale.items():
         print(f"STALE {d} ({len(files)}):")
@@ -933,10 +964,13 @@ def cmd_validate(root):
     all_tasks = list_tasks(root)
     tasks = [t for t in all_tasks if t["status"] != "DONE"]
     ids = {t["id"] for t in tasks}
-    every, _ = history_task_ids(root) if has_git else (set(), set())
+    every, completed = history_task_ids(root) if has_git else (set(), set())
+    completed |= {t['id'] for t in all_tasks if t['status'] == 'DONE' and t['has_evidence']}
+    if len({t['id'] for t in all_tasks}) != len(all_tasks):
+        fails.append("duplicate task IDs (including differently padded filenames)")
     for t in all_tasks:
-        if t["status"] == "DONE":
-            warns.append(f"{t['id']}: finished task file kept; delete it in a commit (Git keeps the history)")
+        if t["status"] == "DONE" and not t["has_evidence"]:
+            warns.append(f"{t['id']}: finished task file kept without Evidence; verify before checkpointing")
     if len(tasks) > BUDGETS["open_tasks"]:
         warns.append(f"{len(tasks)} open tasks > {BUDGETS['open_tasks']} (merge or defer distant work)")
     ip = [t["id"] for t in tasks if t["status"] == "IN_PROGRESS"]
@@ -981,8 +1015,8 @@ def cmd_validate(root):
             if d in ids:
                 if t["status"] == "READY":
                     warns.append(f"{tid}: READY but depends on open {d}")
-            elif has_git and d not in every and d not in {x["id"] for x in all_tasks}:
-                warns.append(f"{tid}: depends on {d}, not open and not in Git history")
+            elif d not in completed:
+                warns.append(f"{tid}: depends on {d}, no verified completion evidence")
         for n in set(re.findall(r"ADR-(\d+)", t["text"])):
             if int(n) not in adrs:
                 warns.append(f"{tid}: references missing ADR-{n}")

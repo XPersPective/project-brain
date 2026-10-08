@@ -24,7 +24,8 @@ Sources: `skills/project-brain/*.md`, `README.md`, `docs/design/**`
 Status: VERIFIED
 Sources: `skills/project-brain/scripts/**`
 - Seven commands; Markdown and a two-level config subset. Baseline self-check passes.
-- Checkpoint, dependency and migration regressions are under audit.
+- Per-domain checkpoints preserve unreconciled changes; verified completion gates dependencies.
+- New tasks start PLANNED; domain LOAD includes Current and target context. Migration remains under audit.
 
 ### Packaging
 Status: OBSERVED

@@ -11,6 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import brain as B
+
 BRAIN = Path(__file__).resolve().parent / "brain.py"
 
 
@@ -65,7 +67,8 @@ def main():
               "# Current Architecture\n\n## Map\n- `src/auth/a.py` — auth\n\n## Domains\n\n"
               "### Auth\nStatus: VERIFIED\nSources: `src/auth/**`\n\n"
               "### Billing\nStatus: OBSERVED\nSources: `src/billing/**`\n")
-        assert run(root, "new", "Auth task")[1].startswith("CREATED .project-brain/tasks/PB-001.md (READY)")
+        assert run(root, "new", "Auth task")[1].startswith("CREATED .project-brain/tasks/PB-001.md (PLANNED)")
+        edit(root, ".project-brain/tasks/PB-001.md", "Status: PLANNED", "Status: READY")
         assert "(PLANNED)" in run(root, "new", "Billing task", "--depends", "PB-001")[1]
         edit(root, ".project-brain/tasks/PB-001.md", "Areas: <`src/x/**`, `tests/x/**`>", "Areas: `src/auth/**`")
         commit(root, "chore(brain): establish project baseline\n\nPB-Genesis: true\nPB-Current-Checkpoint: all")
@@ -95,8 +98,8 @@ def main():
 
         # IDs are never reused, even after every task file is gone
         (root / ".project-brain/tasks/PB-002.md").unlink()
-        assert "PB-002.md" in run(root, "new", "Next")[1]
-        (root / ".project-brain/tasks/PB-002.md").unlink()
+        assert "PB-003.md" in run(root, "new", "Next")[1]
+        (root / ".project-brain/tasks/PB-003.md").unlink()
         commit(root, "chore: drop")
         # checkpoint-less brain commit above keeps billing/auth fresh; external source commit makes billing stale
         write(root, "src/billing/b.py", "b = 3\n")
@@ -141,6 +144,70 @@ def main():
     finally:
         shutil.rmtree(root, ignore_errors=True)
     migrate_checks()
+    recovery_checks()
+
+
+def recovery_checks():
+    with tempfile.TemporaryDirectory(prefix="pb-recovery-") as tmp:
+        root = Path(tmp)
+        git(root, "init", "-q", "-b", "main")
+        git(root, "config", "user.email", "t@t")
+        git(root, "config", "user.name", "t")
+        run(root, "init")
+        write(root, ".project-brain/current.md", "# Current\n## Map\n### Auth\nSources: `auth.py`\n"
+              "### Billing\nSources: `billing.py`\n")
+        write(root, "auth.py", "old\n")
+        write(root, "billing.py", "old\n")
+        commit(root, "baseline\n\nPB-Current-Checkpoint: all")
+        write(root, "auth.py", "new\n")
+        write(root, "billing.py", "new\n")
+        commit(root, "external changes")
+        write(root, ".project-brain/constraints.md", "new rule\n")
+        commit(root, "record rule [PB]")
+        stale, _ = B.staleness(root, B.pb_base(root))
+        assert set(stale) == {"auth", "billing"}, stale
+        git(root, "commit", "--allow-empty", "-qm", "reconcile auth\n\nPB-Current-Checkpoint: auth")
+        assert set(B.staleness(root, B.pb_base(root))[0]) == {"billing"}
+        git(root, "commit", "--allow-empty", "-qm", "unverified\n\nPB-WIP: true\nPB-Current-Checkpoint: all")
+        assert set(B.staleness(root, B.pb_base(root))[0]) == {"billing"}
+
+        # Neither a partial task commit nor WIP/deletion is completion.
+        write(root, ".project-brain/tasks/PB-010.md", "# PB-010 — partial\nStatus: IN_PROGRESS\n")
+        commit(root, "part\n\nPB-Task: PB-010\nPB-Verification: local")
+        (root / ".project-brain/tasks/PB-010.md").unlink()
+        commit(root, "abandon\n\nPB-Task: PB-010\nPB-WIP: true")
+        every, done = B.history_task_ids(root)
+        assert "PB-010" in every and "PB-010" not in done, (every, done)
+        write(root, ".project-brain/tasks/PB-011.md", "# PB-011 — dependent\nStatus: READY\nDepends: PB-010\n")
+        out = run(root, "boot")[1]
+        assert "FOCUS PB-011" not in out and "without completion evidence: PB-010" in out, out
+        edit(root, ".project-brain/tasks/PB-011.md", "PB-010", "PB-999")
+        assert "FOCUS PB-011" not in run(root, "boot")[1]
+        assert "no verified completion evidence" in run(root, "validate")[1]
+        # A verified deletion is durable completion and unblocks the task.
+        git(root, "commit", "--allow-empty", "-qm", "complete\n\nPB-Task: PB-010\nPB-Verification: local")
+        edit(root, ".project-brain/tasks/PB-011.md", "PB-999", "PB-010")
+        assert "FOCUS PB-011" in run(root, "boot")[1]
+
+        # Domain mode always supplies Current plus global intent, even without a focus.
+        (root / ".project-brain/current.md").unlink()
+        write(root, ".project-brain/current/auth.md", "# Auth\nSources: `auth.py`\n")
+        write(root, ".project-brain/current/billing.md", "# Billing\nSources: `billing.py`\n")
+        write(root, ".project-brain/target/auth.md", "# Auth target\n")
+        load = run(root, "boot")[1].split("LOAD:")[1].splitlines()[0]
+        assert all(p in load for p in ("current/auth.md", "current/billing.md", "target.md", "target/auth.md")), load
+        edit(root, ".project-brain/tasks/PB-011.md", "Status: READY", "Status: BLOCKED")
+        assert "current/auth.md" in run(root, "boot")[1].split("LOAD:")[1]
+
+    with tempfile.TemporaryDirectory(prefix="pb-no-git-") as tmp:
+        root = Path(tmp)
+        run(root, "init")
+        run(root, "new", "finished locally")
+        write(root, ".project-brain/tasks/PB-001.md", "# PB-001 — done\nStatus: DONE\n\n## Evidence\nCheck passed.\n")
+        assert "PB-002.md" in run(root, "new", "next", "--depends", "PB-001")[1]
+        edit(root, ".project-brain/tasks/PB-002.md", "Status: PLANNED", "Status: READY")
+        assert "FOCUS PB-002" in run(root, "boot")[1]
+    print("OK: checkpoint, dependency and recovery checks passed")
 
 
 V3_TASK = """# PB-004 — Old style task
