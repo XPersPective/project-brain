@@ -1,17 +1,17 @@
 ---
 name: project-brain
 description: >-
-  Git-native project memory and planning protocol that lets any coding agent
-  (strong or weak; Claude, Codex, Gemini or other) continue a project exactly
-  where the previous one stopped: verified current architecture, confirmed
-  target, prioritized task plan written for weaker models, checkpoints and
+  Git-native project memory and planning protocol that helps coding agents
+  (Claude, Codex, Gemini or others) resume from recorded repository state:
+  verified current architecture, confirmed target, prioritized task plans
+  designed for smaller models, checkpoints and
   audits. Use when the repository has .project-brain/ or a legacy
   PROJECT_BRAIN.md; when the user says continue, resume, where were we, devam
   et, kaldığın yerden; when starting or adopting a multi-session project; or
   when asked to plan, roadmap or audit one.
 license: MIT
 metadata:
-  version: 2.0.1
+  version: 2.1.0
   author: XPersPective
 ---
 
@@ -317,7 +317,7 @@ file map, open tasks, decision log, handoff). Nothing is deleted; old files stay
 
 ## 13. Delegation and parallel agents
 
-Mechanical work goes to the script first (`map`, `changed`, `validate`, `migrate` cost no model tokens). If
+Mechanical work goes to the script first (`map`, `changed`, `validate`, `migrate` avoid model-side bookkeeping). If
 your platform can start sub-agents on a cheaper model, delegate Tier L tasks, test runs that return only
 failures, file summaries for Genesis/reconcile, and executability probes. Keep for yourself: Intake,
 planning, Tier H work, escalation, review, and every write to `.project-brain/`. Sub-agent prompts are

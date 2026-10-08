@@ -31,8 +31,8 @@ Sources: `skills/project-brain/scripts/**`
 ### Packaging
 Status: OBSERVED
 Sources: `plugin.json`, `.claude-plugin/**`, `.agents/plugins/**`, `gemini-extension.json`, `assets/**`, `PRIVACY.md`, `CHANGELOG.md`
-- Version 2.0.1 in manifests, skill metadata and runtime.
+- Version 2.1.0 in manifests, skill metadata and runtime.
 
 ## Known Unknowns
-- Cross-vendor/small-model reliability and live marketplace installation are not established by this audit.
-- Claude manifest validation passes with five ignored directory-metadata warnings. Python 3.8 syntax checked; runtime tests use 3.11.15.
+- GPT-6-Luna passed isolated narrow-fix/no-commit and legacy read-only scenarios; cross-vendor/general reliability remains unmeasured.
+- Claude manifest validation passes with five ignored directory-metadata warnings. Python 3.8 syntax checked; runtime tests pass on 3.8.20 and 3.11.15.

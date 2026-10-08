@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.0 — 2026-10-08
 
 - Reconcile source drift against actual per-domain checkpoints; PB mentions no longer hide changes.
 - Require completion evidence before satisfying dependencies; retain DONE+Evidence until committed.

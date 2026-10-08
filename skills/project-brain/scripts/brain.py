@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "2.0.1"
+VERSION = "2.1.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"

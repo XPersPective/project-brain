@@ -1,8 +1,8 @@
 {
   "name": "project-brain",
   "displayName": "Project Brain",
-  "version": "2.0.1",
-  "description": "Git-native project memory and planning protocol: any coding agent, strong or weak, continues a project exactly where the last one stopped. Verified current architecture, confirmed target, prioritized task plan written for weaker models, audits and migration.",
+  "version": "2.1.0",
+  "description": "Git-native memory and planning for coding agents: verified architecture, user-owned goals, executable tasks, evidence-based recovery and legacy migration.",
   "author": {
     "name": "XPersPective",
     "url": "https://github.com/XPersPective"

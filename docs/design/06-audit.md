@@ -19,7 +19,11 @@ Bu denetimde yeniden üretilebilen uygulama hataları ve yürütme talimatların
 - Başlangıç testleri çalıştırıldı; ayrıca başlangıç kaynak kodu geçici dizinde yüklenerek öncesi/sonrası karşılaştırıldı.
 - Geçici Git depolarında WIP, dış değişiklik, kısmi checkpoint, eksik bağımlılık, Git'siz çalışma ve kesinti sınandı.
 - Ayrı bir inceleyici ajan, protokolü dar istek, salt soru, commit yasağı, PLANNED ve kesinti senaryolarıyla okudu.
-  Bu statik senaryo incelemesidir; küçük modelle gerçek görev tamamlama deneyi sayılmaz.
+  Buna ek olarak GPT-6-Luna ile izole bir depoda gerçek hata düzeltme deneyi yapıldı: yanlış toplam düzeltildi,
+  üç assertion geçti, P3 backlog görevi çalıştırılmadı, commit sayısı 1 kaldı ve DONE+Evidence korundu.
+  Sonuçlar ana ajan tarafından dosya, Git geçmişi ve test çalıştırmasıyla bağımsız doğrulandı.
+  İkinci deneyde legacy PROJECT_BRAIN.md bulunan depoda yalnız soru soruldu; model doğru fonksiyonu
+  açıkladı, migration başlatmadı, dosya yazmadı ve test çalıştırmadı.
 - Kaynak düzeltmeleri yerel depoda yapıldı. Canlı kurulum kopyaları ve marketplace yayınları güncellenmedi.
 
 ## Bulgular ve düzeltmeler
@@ -34,7 +38,7 @@ Bu denetimde yeniden üretilebilen uygulama hataları ve yürütme talimatların
 | P1 | Migration şema 4'ü önce yazıyordu; sonraki yazma kesilirse araç "zaten taşınmış" diyebiliyordu. Ham içerik ve görev Priority/Tier kaybolabiliyordu. | Orijinaller `migration-backup/` altında saklanır; Priority/Tier korunur; şema son adımda dosya değiştirmeyle tamamlanır. Enjekte edilmiş yazma hatası ve kesilmiş task dosyasından yeniden çalıştırma test edilir. |
 | P1 | Onay statüsü olmayan eski hedef otomatik CONFIRMED yapılıyordu. | Onay yokluğu DRAFT olur. Mevcut açık CONFIRMED/DRAFT bilgisi korunur; ajan eksik onayı kullanıcı niyeti olarak uyduramaz. |
 | P1 | Dar bug fix §4 üzerinden ilgisiz tüm backlog'a yayılıyor; salt soru, intake'ten önce migration/commit/test başlatabiliyordu. | Intake önce gelir. Yeni istek ve önkoşulları kapsamı belirler; kuyruk geneli yalnız devam yetkisiyle çalışır. Helper NEXT metinleri de aynı sırayı izler. |
-| P1 | Python 3.8+ şartına rağmen `Path.write_text(newline=...)` kullanılıyordu; bu argüman 3.10'da eklenmiştir. | Python 3.8'de bulunan `Path.open(..., newline=...)` kullanılır. 3.8 sözdizimi kontrolü geçti; 3.8 runtime bu makinede çalıştırılmadı. [Python belgesi](https://docs.python.org/3/library/pathlib.html#pathlib.Path.write_text). |
+| P1 | Python 3.8+ şartına rağmen `Path.write_text(newline=...)` kullanılıyordu; bu argüman 3.10'da eklenmiştir. | Python 3.8'de bulunan `Path.open(..., newline=...)` kullanılır. 3.8 sözdizimi kontrolü geçti; tam testler ayrıca Python 3.8.20 üzerinde geçti. [Python belgesi](https://docs.python.org/3/library/pathlib.html#pathlib.Path.write_text). |
 | P2 | Yeni görev iskeleti READY oluyordu; hiç commit trailer'ı olmayan eski task ID'leri yeniden kullanılabiliyordu. | Yeni iskelet PLANNED. ID rezervasyonu açık dosyalar, Git dosya geçmişi/trailer'ları ve v0 yedeğindeki numaraları kapsar. T99 kapalı eski görevinden sonra PB-100 üretilir. |
 | P2 | Domain modunda odak yoksa Current yüklenmeyebiliyor; odak varken global hedef dışarıda kalıyordu. | LOAD global target.md ve hedef parçalarını her zaman, ilgili Current dosyalarını da odak durumuna göre içerir. Global Goal/Status için target.md gereklidir. |
 | P2 | `git add <paths>` önceden staged kullanıcı işini sonraki normal commit'ten dışlamaz. | Protokol index incelemesi ve gerektiğinde `git commit --only -- <owned paths>` ister; aynı dosyadaki bilinmeyen değişiklikleri sahiplenmez. |
@@ -66,7 +70,7 @@ Kontroller gerçek geçici Git depolarıyla ve migration yazma hatası enjeksiyo
 | `python skills/project-brain/scripts/test_brain.py` | Baseline, migration, checkpoint/dependency recovery ve persistence/kesinti grupları geçti. |
 | `python skills/project-brain/scripts/brain.py validate` | Bu deponun planında 0 fail, 0 warn. |
 | Skill Creator `quick_validate.py skills/project-brain` | Skill frontmatter geçerli. Davranış doğruluğunu tek başına kanıtlamaz. |
-| Python `ast.parse(..., feature_version=(3,8))` | Üç Python dosyası 3.8 sözdizimiyle ayrışıyor. Çalışma zamanı doğrulaması 3.11.15 üzerinde. |
+| Python `ast.parse(..., feature_version=(3,8))` | Üç Python dosyası 3.8 sözdizimiyle ayrışıyor. Tam çalışma zamanı doğrulaması 3.8.20 ve 3.11.15 üzerinde. |
 | `claude plugin validate .` | Başarılı; beş metadata alanı için uyarı: icon, documentationUrl, supportUrl, privacyPolicyUrl, termsOfServiceUrl. CLI bunları yok saydığını bildiriyor. |
 | `git diff --check` | Boşluk/patch hatası yok. |
 | Başlangıç koduyla ayrı karşılaştırma | Tırnaklı komut ve bilinmeyen bağımlılık senaryolarında hata önce mevcut, düzeltmeden sonra yok. |
@@ -77,9 +81,9 @@ Paketin canlı ortamda kurulduğu veya Gemini/Codex marketplace tarafından kabu
 
 ## Kalan sınırlar ve ölçülmesi gerekenler
 
-1. **Model davranışı:** Farklı model/üreticilerle sıfır sohbet geçmişinden gerçek görevi tamamlama deneyi yok.
-   Bir sonraki ürün doğrulaması, aynı küçük depoda güçlü ve küçük modellerle task seçimi, hedefe sadakat,
-   kesintiden dönüş ve kapsamı aşmama ölçümleridir. Ajan incelemesi bu deneyin yerine geçmez.
+1. **Model davranışı:** GPT-6-Luna dar bug fix + commit yasağı + ilgisiz backlog senaryosunu geçti.
+   Bu tek kontrollü deneydir; farklı üreticiler, karmaşık mimari işler ve uzun kesinti zincirleri için
+   genellenemez. Sonraki ölçüm farklı modellerle aynı görevlerin ve devir senaryolarının tekrarlanmasıdır.
 2. **Git geçmişi:** Shallow clone, squash sırasında trailer kaybı veya erişilemeyen geçmiş için sınırsız ID
    benzersizliği/kanıt garantisi yok. Araç eksik kanıtı tamamlanma saymaz; REFERENCE uzlaştırma yolunu anlatır.
 3. **Legacy fallback:** Eski Current dosyasına son dokunan commit gerçek bir domain doğrulaması olmayabilir.
