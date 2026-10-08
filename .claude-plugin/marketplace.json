@@ -1,0 +1,15 @@
+{
+  "name": "project-brain",
+  "description": "Project Brain: Git-native project memory and planning for coding agents",
+  "owner": {
+    "name": "XPersPective",
+    "url": "https://github.com/XPersPective"
+  },
+  "plugins": [
+    {
+      "name": "project-brain",
+      "source": "./",
+      "description": "Continue any project across sessions, models and vendors from the repository alone"
+    }
+  ]
+}

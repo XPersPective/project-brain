@@ -1,0 +1,14 @@
+{
+  "name": "project-brain",
+  "displayName": "Project Brain",
+  "version": "2.0.0",
+  "description": "Git-native project memory and planning protocol: any coding agent, strong or weak, continues a project exactly where the last one stopped. Verified current architecture, confirmed target, prioritized task plan written for weaker models, audits and migration.",
+  "author": {
+    "name": "XPersPective",
+    "url": "https://github.com/XPersPective"
+  },
+  "homepage": "https://github.com/XPersPective/project-brain",
+  "repository": "https://github.com/XPersPective/project-brain",
+  "license": "MIT",
+  "keywords": ["memory", "planning", "handoff", "resume", "architecture", "roadmap", "git", "agents", "context"]
+}
