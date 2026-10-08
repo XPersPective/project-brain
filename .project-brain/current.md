@@ -25,7 +25,7 @@ Status: VERIFIED
 Sources: `skills/project-brain/scripts/**`
 - Seven commands; Markdown and a two-level config subset. Baseline self-check passes.
 - Per-domain checkpoints preserve unreconciled changes; verified completion gates dependencies.
-- New tasks start PLANNED; domain LOAD includes Current and target context. Migration remains under audit.
+- New tasks start PLANNED; domain LOAD includes Current and target context. Configuration round-trips quoted commands; migration keeps original input and finalizes schema last.
 
 ### Packaging
 Status: OBSERVED

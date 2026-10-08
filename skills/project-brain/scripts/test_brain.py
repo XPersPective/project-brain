@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 from pathlib import Path
 
 import brain as B
@@ -20,7 +21,7 @@ def run(root, *args):
     r = subprocess.run([sys.executable, str(BRAIN), *args, str(root)] if args[0] != "new"
                        else [sys.executable, str(BRAIN), "new", str(root), *args[1:]],
                        capture_output=True, text=True, encoding="utf-8")
-    return r.returncode, r.stdout
+    return r.returncode, r.stdout + r.stderr
 
 
 def git(root, *args):
@@ -30,12 +31,13 @@ def git(root, *args):
 def write(root, rel, text):
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding="utf-8", newline="\n")
+    with p.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
 
 
 def edit(root, rel, old, new):
     p = root / rel
-    p.write_text(p.read_text(encoding="utf-8").replace(old, new), encoding="utf-8", newline="\n")
+    write(root, rel, p.read_text(encoding="utf-8").replace(old, new))
 
 
 def commit(root, msg):
@@ -113,8 +115,8 @@ def main():
         write(root, ".project-brain/tasks/PB-021.md", "# PB-021 — y\n\n## Status\n\nDONE (2026-09-29) — commit abc\n")
         commit(root, "wip part 1\n\nPB-Task: PB-020")
         out = run(root, "boot")[1]
-        assert "PB-020 READY" in out and "PB-021" not in out.split("PLAN:")[1].split("FOCUS")[0], out
-        assert "finished task files still present: PB-021" in out and "1 open, 1 done" in out, out
+        assert "PB-020 READY" in out and "DONE without Evidence: PB-021" in out, out
+        assert "finished task files still present: PB-021" in out and "2 open, 1 done" in out, out
         val = run(root, "validate")[1]
         assert "PB-020: notes on the Status line" in val and "PB-021: finished task file kept" in val, val
         (root / ".project-brain/tasks/PB-020.md").unlink()
@@ -145,6 +147,7 @@ def main():
         shutil.rmtree(root, ignore_errors=True)
     migrate_checks()
     recovery_checks()
+    persistence_checks()
 
 
 def recovery_checks():
@@ -188,6 +191,11 @@ def recovery_checks():
         git(root, "commit", "--allow-empty", "-qm", "complete\n\nPB-Task: PB-010\nPB-Verification: local")
         edit(root, ".project-brain/tasks/PB-011.md", "PB-999", "PB-010")
         assert "FOCUS PB-011" in run(root, "boot")[1]
+        write(root, ".project-brain/tasks/PB-012.md", "# PB-012 — complete\nStatus: DONE\n\n## Evidence\nChecks passed.\n")
+        commit(root, "verified work\n\nPB-Task: PB-012\nPB-Verification: local")
+        assert "PB-012" in B.history_task_ids(root)[1]
+        (root / ".project-brain/tasks/PB-012.md").unlink()
+        assert "PB-012" in B.history_task_ids(root)[1]  # Cleanup can safely wait for the next commit.
 
         # Domain mode always supplies Current plus global intent, even without a focus.
         (root / ".project-brain/current.md").unlink()
@@ -207,6 +215,9 @@ def recovery_checks():
         assert "PB-002.md" in run(root, "new", "next", "--depends", "PB-001")[1]
         edit(root, ".project-brain/tasks/PB-002.md", "Status: PLANNED", "Status: READY")
         assert "FOCUS PB-002" in run(root, "boot")[1]
+        edit(root, ".project-brain/tasks/PB-001.md", "## Evidence", "## Notes")
+        out = run(root, "boot")[1]
+        assert "2 open, 0 done" in out and "FOCUS PB-002" not in out and "Queue empty" not in out, out
     print("OK: checkpoint, dependency and recovery checks passed")
 
 
@@ -312,9 +323,9 @@ def migrate_checks():
                        "`flutter test`", "irreversible store upload", "credentials.py", "waiting on a design note"):
             assert needle in t, (needle, t)
         cfg = (root / ".project-brain/config.yaml").read_text(encoding="utf-8")
-        assert "schema_version: 4" in cfg and "history_mode: preserve" in cfg and "push: every-task" in cfg, cfg
+        assert B.parse_config(root)["git"]["history_mode"] == "preserve" and B.parse_config(root)["git"]["push"] == "every-task", cfg
         tgt = (root / ".project-brain/target.md").read_text(encoding="utf-8")
-        assert "Status: CONFIRMED" in tgt and "## Goal" in tgt, tgt
+        assert "Status: DRAFT" in tgt and "## Goal" in tgt, tgt
         assert "STATE: LEGACY" not in run(root, "boot")[1]
         assert "NOTHING TO MIGRATE" in run(root, "migrate")[1]
     finally:
@@ -342,6 +353,74 @@ def migrate_checks():
         print("OK: migrate checks passed")
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def persistence_checks():
+    import migrate
+    with tempfile.TemporaryDirectory(prefix="pb-config-") as tmp:
+        root = Path(tmp)
+        command = 'python -c "print(\'Türkçe # literal\')"'
+        original = ("schema_version: 3\ngit:\n  commit: ask\n  push_policy: manual\ncommands:\n"
+                    f"  test: {json.dumps(command)} # comment\n  lint: ''\n"
+                    "  typecheck: 'python -c ''print(1)'''\ncustom:\n  path: C:\\work\\repo\n")
+        write(root, ".project-brain/config.yaml", original)
+        cfg = B.parse_config(root)
+        assert cfg["commands"]["test"] == command, cfg
+        assert cfg["commands"]["typecheck"] == "python -c 'print(1)'", cfg
+        write(root, ".project-brain/config.yaml", B.config_text(root, cfg))
+        result = B.parse_config(root)
+        assert result["commands"] == {"build": "", **cfg["commands"]}, result
+        assert result["custom"] == cfg["custom"] and result["git"]["commit"] == "ask", result
+        for malformed in ("commands: broken\n", "commands:\n  test: |\n    echo nope\n",
+                          "schema_version: 99\n", "git:\n  push: manual\n  push: every-task\n"):
+            write(root, ".project-brain/config.yaml", malformed)
+            code, out = run(root, "boot")
+            assert code == 2 and "FAIL" in out and "Traceback" not in out, out
+        write(root, ".project-brain/config.yaml", original)
+        write(root, ".project-brain/current.md", "# Current\n")
+        write(root, ".project-brain/target.md", "# Target\n## Objective\nUser goal\n")
+        task = V3_TASK.replace("## Objective", "Priority: P1\nTier: H\n\n## Objective")
+        write(root, ".project-brain/tasks/PB-004.md", task)
+        actual_open = Path.open
+        def fail_task(path, *args, **kwargs):
+            if path == root / ".project-brain/tasks/PB-004.md" and args and args[0] == "w":
+                raise OSError("simulated interrupted migration")
+            return actual_open(path, *args, **kwargs)
+        with patch.object(Path, "open", fail_task):
+            try:
+                migrate.run(root, True)
+                raise AssertionError("injected failure not reached")
+            except OSError as exc:
+                assert "simulated" in str(exc)
+        assert B.parse_config(root)["schema_version"] == "3"
+        backup = root / ".project-brain/migration-backup"
+        assert (backup / "config.yaml").read_text(encoding="utf-8") == original
+        # Retry from preserved input, including a task whose prior write was truncated.
+        write(root, ".project-brain/tasks/PB-004.md", "# interrupted\n")
+        code, out = run(root, "migrate", "--apply")
+        assert code == 0, out
+        t = B.parse_task(root / ".project-brain/tasks/PB-004.md")
+        assert t["priority"] == "P1" and t["tier"] == "H" and "first condition" in t["text"], t
+        assert B.parse_config(root)["commands"]["test"] == command
+        assert B.parse_config(root)["custom"] == cfg["custom"]
+        assert (backup / "tasks/PB-004.md").read_text(encoding="utf-8") == task
+        assert B.target_status(root) == "DRAFT"
+
+    with tempfile.TemporaryDirectory(prefix="pb-v0-retry-") as tmp:
+        root = Path(tmp)
+        original = V0_FILE.replace("## 6. DECISION LOG", "- [x] T99 [L] Retired task\n\n## 6. DECISION LOG")
+        write(root, "PROJECT_BRAIN.md", original)
+        with patch.object(migrate.B, "ensure_pointers", side_effect=OSError("interrupted")):
+            try:
+                migrate.run(root, True)
+                raise AssertionError("injected failure not reached")
+            except OSError:
+                pass
+        assert B.legacy_kind(root) == "v0"
+        assert run(root, "migrate", "--apply")[0] == 0
+        assert "PB-100.md" in run(root, "new", "next task")[1]
+        assert (root / ".project-brain/migration-backup/PROJECT_BRAIN.md").read_text(encoding="utf-8") == original
+    print("OK: configuration and interrupted migration checks passed")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ Nothing is deleted. The model finishes the semantic part (Map, Sources, Steps) v
 """
 
 import re
+import shutil
 from pathlib import Path
 
 import brain as B
@@ -163,7 +164,8 @@ def convert_task(path, open_ids):
                    and not re.fullmatch(r"\s*expected\s*:\s*(yes|no)\.?\s*", l, re.I)]
     if impact_rest:
         notes.append("- Architecture impact (migrated): " + " ".join(x.strip() for x in impact_rest))
-    head = {"Status": status, "Priority": "P2", "Risk": risk,
+    head = {"Status": status, "Priority": " ".join(trim(get(secs, "priority"))) or "P2",
+            "Tier": " ".join(trim(get(secs, "tier"))), "Risk": risk,
             "Depends": ", ".join(deps) or "-",
             "Areas": ", ".join(f"`{a}`" for a in areas),
             "Domains": ", ".join(B.split_list(domains_src)) if domains_src else "",
@@ -184,15 +186,17 @@ def convert_task(path, open_ids):
 def migrate_dir(root, plan, todo):
     b = B.bp(root)
     plan.append((b / "config.yaml", B.config_text(root, B.parse_config(root)), "schema 4 (old values kept)"))
-    target = B.read(b / "target.md")
-    if target is not None and B.target_status(root) == "UNSET":
+    backup = b / "migration-backup"
+    target_source = backup / "target.md" if (backup / "target.md").exists() else b / "target.md"
+    target = B.read(target_source)
+    if target is not None and not re.search(r"^Status:\s*(DRAFT|CONFIRMED)\b", target, re.M | re.I):
         lines = target.splitlines()
         i = next((k + 1 for k, l in enumerate(lines) if l.startswith("# ")), 0)
-        lines.insert(i, "Status: CONFIRMED")
+        lines.insert(i, "Status: DRAFT")
         text = "\n".join(lines) + "\n"
         if "## Goal" not in text:
             text = re.sub(r"^## (Objective)\s*$", "## Goal", text, count=1, flags=re.M)
-        plan.append((b / "target.md", text, "Status: CONFIRMED (pre-v4 targets were approved by definition)"))
+        plan.append((b / "target.md", text, "Status: DRAFT (approval absent; verify user intent)"))
     cur = "\n".join(B.read(f) or "" for f, _ in B.current_files(root))
     if "## Map" not in cur:
         todo.append("current.md has no `## Map` (path -> role): write it from the code (<=40 lines)")
@@ -206,10 +210,11 @@ def migrate_dir(root, plan, todo):
     ip = [t["id"] for t in tasks if t["status"] == "IN_PROGRESS"]
     if len(ip) > 1:
         todo.append(f"several IN_PROGRESS ({', '.join(ip)}): keep the one really active, set the rest READY")
-    for f in sorted(tdir.iterdir() if tdir.is_dir() else [], key=lambda x: x.name):
-        if not B.TASK_FILE_RE.match(f.name):
-            continue
-        new, issue = convert_task(f, open_ids)
+    files = {f.name: f for f in tdir.glob("PB-*.md") if B.TASK_FILE_RE.match(f.name)}
+    files.update({f.name: f for f in (backup / "tasks").glob("PB-*.md") if B.TASK_FILE_RE.match(f.name)})
+    for name, source in sorted(files.items()):
+        f = tdir / name
+        new, issue = convert_task(source, open_ids)
         if issue:
             todo.append(issue)
         elif new != B.read(f):
@@ -329,7 +334,7 @@ def migrate_v0(root, plan, todo):
     if legacy_notes:
         todo.append("constraints.md: turn the legacy sections into one-line rules or delete them")
     todo.append(f"{B.LEGACY_FILE}: delete it after reviewing the migration (Git keeps it)")
-    todo.append("closed legacy tasks were not migrated (their history is in Git); IDs continue after the highest legacy number")
+    todo.append("closed legacy tasks remain in migration-backup/PROJECT_BRAIN.md; review them before claiming completion")
 
 
 # ── entry point ───────────────────────────────────────────────────────────
@@ -350,15 +355,38 @@ def run(root, apply):
         return 0
     if not apply:
         print(f"PREVIEW ({kind}): nothing written. Run `migrate --apply` to write.")
+    else:
+        # Preserve raw input, including syntax the converter does not interpret. Never overwrite a backup.
+        backup = B.bp(root) / "migration-backup"
+        for source in [root / B.LEGACY_FILE] + [p for p, _, _ in plan]:
+            if source.is_file():
+                relative = source.relative_to(B.bp(root)) if source != root / B.LEGACY_FILE else Path(B.LEGACY_FILE)
+                saved = backup / relative
+                if not saved.exists():
+                    saved.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, saved)
+        print("BACKUP .project-brain/migration-backup/: original input retained; review before removing")
+    # A failed write must leave the old schema so the next invocation retries conversion.
+    config = [(p, t, why) for p, t, why in plan if p.name == "config.yaml"]
+    plan = [(p, t, why) for p, t, why in plan if p.name != "config.yaml"]
     for path, text, why in plan:
         rel = path.relative_to(root).as_posix()
         verb = ("UPDATE" if path.exists() else "CREATE") if apply else ("would update" if path.exists() else "would create")
         print(f"{verb} {rel}: {why}")
         if apply:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8", newline="\n")
+            with path.open("w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
     for name, action in B.ensure_pointers(root, write=apply):
         print(f"{'POINTER' if apply else 'would add pointer to'} {name} ({action})")
+    for path, text, why in config:
+        print(f"{'FINALIZE' if apply else 'would finalize'} {path.relative_to(root).as_posix()}: {why}")
+        if apply:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".yaml.tmp")
+            with temporary.open("w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+            temporary.replace(path)
     for t in todo:
         print(f"TODO {t}")
     print("NEXT: " + ("`validate`, finish the TODO lines, Plan audit (SKILL.md section 9), commit "

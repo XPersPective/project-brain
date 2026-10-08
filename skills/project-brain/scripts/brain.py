@@ -6,7 +6,7 @@
   init     <root>   Create .project-brain/ skeleton. Never overwrites.
   new      <root> "title" [--priority P1|P2|P3] [--tier L|M|H] [--risk LOW|MEDIUM|HIGH] [--depends PB-001]
                     Create the next task file. IDs are never reused (Git history checked).
-  changed  <root>   Domains touched by commits made outside the protocol (after the last PB commit).
+  changed  <root>   Domains changed since their Current checkpoints.
   validate <root>   Structural checks, executable-spec checks, size budgets.
   migrate  <root> [--apply]   Convert a legacy Brain (schema <=3 or PROJECT_BRAIN.md); preview by default.
 
@@ -47,22 +47,6 @@ SKIP_DIRS = {
     ".mypy_cache", ".ruff_cache", ".turbo", ".cache", ".idea", ".gradle",
     "bin", "obj", ".dart_tool", ".pub-cache", BRAIN_DIR,
 }
-
-CONFIG_TMPL = """schema_version: 4
-
-architecture:
-  mode: single          # single: current.md/target.md | domains: current/<d>.md, target/<d>.md
-
-git:
-  history_mode: unknown # preserve | squash | rewrite-prone | unknown
-  commit: auto          # auto: commit each checkpoint | ask: prepare the commit, ask the user
-  push: manual          # every-task | milestone | session-end | manual
-
-commands:               # exact commands; boot prints them so nobody rediscovers them
-  test: {test}
-  lint: {lint}
-  build: {build}
-"""
 
 CURRENT_TMPL = """# Current Architecture
 
@@ -164,7 +148,7 @@ def git(root, *args, timeout=60):
 
 def git_paths(root, *args):
     """Run a -z git command that lists paths; None on failure."""
-    out = git(root, *args, "-z")
+    out = git(root, args[0], "-z", *args[1:])
     return None if out is None else [p for p in out.split("\0") if p]
 
 
@@ -193,23 +177,46 @@ def matches(path, pat):
 
 
 def parse_config(root):
-    """Two-level YAML subset: `section:` then `  key: value`."""
+    """Two-level scalar YAML subset. Reject unsupported syntax instead of dropping data."""
     text = read(Path(root) / BRAIN_DIR / "config.yaml") or ""
     out, section = {}, None
-    for line in text.splitlines():
-        s = line.split(" #", 1)[0].rstrip() if not line.lstrip().startswith("#") else ""
-        if not s.strip() or ":" not in s:
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
-        key, val = (x.strip() for x in s.split(":", 1))
-        val = val.strip("\"'") if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'" else val
-        if line[0] not in " \t":
-            section = key if s.rstrip().endswith(":") else None
+        m = re.fullmatch(r"(  )?([\w-]+):\s*(.*)", line)
+        if not m:
+            raise ValueError(f"config.yaml:{number}: expected a top-level key or two-space scalar entry")
+        indent, key, raw = m.groups()
+        if raw.startswith('"'):
+            val, end = json.JSONDecoder().raw_decode(raw)
+            if raw[end:].strip() and not raw[end:].lstrip().startswith("#"):
+                raise ValueError(f"config.yaml:{number}: unexpected text after quoted value")
+        elif raw.startswith("'"):
+            quoted = re.fullmatch(r"'((?:''|[^'])*)'\s*(?:#.*)?", raw)
+            if not quoted:
+                raise ValueError(f"config.yaml:{number}: invalid single-quoted value")
+            val = quoted.group(1).replace("''", "'")
+        else:
+            val = re.split(r"\s+#", raw, maxsplit=1)[0].rstrip() if not raw.startswith("#") else ""
+            if val.startswith(("|", ">", "[", "{", "&", "*", "!")):
+                raise ValueError(f"config.yaml:{number}: use a quoted scalar; YAML collections/blocks are unsupported")
+        target = out if not indent else out.get(section)
+        if not isinstance(target, dict) or key in target:
+            raise ValueError(f"config.yaml:{number}: duplicate key or entry outside a section")
+        if not indent:
+            section = key if not val and not raw.startswith(('"', "'")) else None
             if section:
-                out[section] = {}
+                target[key] = {}
             else:
-                out[key] = val
-        elif section:
-            out[section][key] = val
+                target[key] = val
+        else:
+            target[key] = val
+    for key in ("architecture", "git", "commands"):
+        if key in out and not isinstance(out[key], dict):
+            raise ValueError(f"config.yaml: {key} must be a section")
+    version = out.get("schema_version", "")
+    if not isinstance(version, str) or (version and (not version.isdigit() or int(version) > SCHEMA)):
+        raise ValueError(f"config.yaml: unsupported schema_version {version!r}")
     return out
 
 
@@ -247,8 +254,8 @@ def brain_exists(root):
     return b.is_dir() and any((b / n).exists() for n in ("config.yaml", "current.md", "current"))
 
 
-def parse_task(path):
-    text = read(path)
+def parse_task(path, text=None):
+    text = read(path) if text is None else text
     if text is None:
         return None
     sec = sections(text)
@@ -419,14 +426,24 @@ def task_ids_in(body):
 
 
 def closed_ids(root, sha, body):
-    """Completion needs verification and task absence in that commit, not just today's worktree."""
+    """Verified deletion or committed DONE+Evidence, never just absence in today's worktree."""
     if is_wip(body) or not set(trailer_values(body, "PB-Verification")) & {"local", "domain", "global"}:
         return set()
     paths = git_paths(root, "ls-tree", "-r", "--name-only", sha, "--", f"{BRAIN_DIR}/tasks")
     if paths is None:
         return set()
-    present = {norm_id("PB", m.group(1)) for p in paths if (m := TASK_FILE_RE.match(Path(p).name))}
-    return set(task_ids_in(body)) - present
+    ids = set(task_ids_in(body))
+    present, recorded = set(), set()
+    for p in paths:
+        m = TASK_FILE_RE.match(Path(p).name)
+        if m:
+            tid = norm_id("PB", m.group(1))
+            present.add(tid)
+            if tid in ids:
+                task = parse_task(Path(p), git(root, "show", f"{sha}:{p}") or "")
+                if task["status"] == "DONE" and task["has_evidence"]:
+                    recorded.add(tid)
+    return (ids - present) | recorded
 
 
 def recent_closed(root, open_ids, n=3):
@@ -461,6 +478,8 @@ def legacy_kind(root):
     """'v0' (only PROJECT_BRAIN.md), 'v<N>' (.project-brain schema < 4), or None."""
     if brain_exists(root):
         v = str(parse_config(root).get("schema_version", "")).strip()
+        if (bp(root) / "migration-backup" / LEGACY_FILE).exists() and (not v.isdigit() or int(v) < SCHEMA):
+            return "v0"  # Retry an interrupted single-file migration before config was finalized.
         return None if v.isdigit() and int(v) >= SCHEMA else f"v{v or '?'}"
     return "v0" if (Path(root) / LEGACY_FILE).exists() else None
 
@@ -601,7 +620,7 @@ def cmd_boot(root):
         return 0
     has_git = git(root, "rev-parse", "--is-inside-work-tree") == "true"
     all_tasks = list_tasks(root)
-    tasks = [t for t in all_tasks if t["status"] != "DONE"]
+    tasks = [t for t in all_tasks if t["status"] != "DONE" or not t["has_evidence"]]
     open_ids = {t["id"] for t in tasks}
     cfg = parse_config(root)
     notes, state = [], None
@@ -619,6 +638,9 @@ def cmd_boot(root):
         notes.append(f"several IN_PROGRESS: {', '.join(t['id'] for t in ip)}: keep one, set the rest READY")
     if kept:
         notes.append(f"finished task files still present: {', '.join(kept)}: retain until evidence is committed (or while Git is unavailable)")
+    unproven = [t["id"] for t in tasks if t["status"] == "DONE"]
+    if unproven:
+        notes.append(f"DONE without Evidence: {', '.join(unproven)}: verify or reopen; these tasks remain unfinished")
     if legacy:
         state = "LEGACY"
         notes.append(f"schema {legacy[1:]}: run `migrate`")
@@ -759,14 +781,14 @@ def cmd_boot(root):
         "CONFLICTED": "Finish the Git operation first (REFERENCE: Conflicts). Start no task.",
         "DIRTY": "Classify each listed path: mine/user/generated/unknown. Never reset/clean/stash/checkout unknown work. Continue only on non-overlapping files.",
         "INTERRUPTED": f"Resume {active['id'] if active else ''}: check `git diff --stat` matches the task's Resume notes, then continue at the first open acceptance item.",
-        "ADVANCED": "Reconcile only the STALE/UNMAPPED files above, update Current, commit with PB-Current-Checkpoint for those domains. Then handle the user's message.",
+        "ADVANCED": "Route the user's request first. For authorized implementation, inspect relevant STALE/UNMAPPED files and reconcile Current before checkpointing.",
     }.get(state)
     if not nxt:
         if focus:
-            nxt = (f"Takeover check (SKILL.md section 2), then the user's message (section 3). 'continue' or empty: start "
+            nxt = (f"Route the user's request before tests or writes (SKILL.md sections 2-3). If authorized, run the takeover check. 'continue': start "
                    f"{focus['id']} and keep working the queue.")
         elif promote:
-            nxt = f"Refine and promote {promote[0]} to READY, then start it."
+            nxt = f"Route the user's request first; within its authorized scope, refine {promote[0]} to READY and start it."
         elif tasks and all(t["status"] == "BLOCKED" for t in tasks):
             nxt = "Every open task is BLOCKED: report blockers to the user and stop."
         elif tasks:
@@ -816,7 +838,8 @@ def cmd_map(root):
 def write_new(path, content, created):
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8", newline="\n")
+        with path.open("x", encoding="utf-8", newline="\n") as f:
+            f.write(content)
         created.append(path)
 
 
@@ -829,7 +852,8 @@ def ensure_pointers(root, write):
             continue
         if text is None:
             if write:
-                path.write_text(POINTER, encoding="utf-8", newline="\n")
+                with path.open("x", encoding="utf-8", newline="\n") as f:
+                    f.write(POINTER)
             done.append((name, "created"))
         elif POINTER_MARK not in text:
             if write:
@@ -840,18 +864,26 @@ def ensure_pointers(root, write):
 
 
 def config_text(root, old=None):
-    """schema-4 config.yaml, keeping known values from an older config."""
+    """Schema-4 config preserving every supported scalar, including empty/custom commands."""
     old = old or {}
-    cmds = dict(detect_commands(root))
-    cmds.update({k: v for k, v in old.get("commands", {}).items() if v})
-    git_old = old.get("git", {})
-    text = CONFIG_TMPL.format(**{k: json.dumps(cmds.get(k, "")) for k in ("test", "lint", "build")})
-    for key, val in (("mode: single", f"mode: {old.get('architecture', {}).get('mode', 'single')}"),
-                     ("history_mode: unknown", f"history_mode: {git_old.get('history_mode', 'unknown')}"),
-                     ("commit: auto", f"commit: {git_old.get('commit', 'auto')}"),
-                     ("push: manual", f"push: {git_old.get('push', git_old.get('push_policy', 'manual'))}")):
-        text = text.replace(key, val, 1)
-    return text
+    cfg = {"schema_version": str(SCHEMA),
+           "architecture": {"mode": "single"},
+           "git": {"history_mode": "unknown", "commit": "auto", "push": old.get("git", {}).get("push_policy", "manual")},
+           "commands": {"test": "", "lint": "", "build": "", **detect_commands(root)}}
+    for key, val in old.items():
+        if key in cfg and isinstance(cfg[key], dict):
+            cfg[key].update(val)
+        elif key != "schema_version":
+            cfg[key] = val
+    lines = [f"schema_version: {SCHEMA}"]
+    for key, val in cfg.items():
+        if key == "schema_version":
+            continue
+        if isinstance(val, dict):
+            lines += [f"\n{key}:"] + [f"  {k}: {json.dumps(v, ensure_ascii=False)}" for k, v in val.items()]
+        else:
+            lines.append(f"{key}: {json.dumps(val, ensure_ascii=False)}")
+    return "\n".join(lines) + "\n"
 
 
 def cmd_init(root):
@@ -881,6 +913,8 @@ def cmd_new(root, title, depends, risk, priority=None, tier=None):
     tdir = bp(root) / "tasks"
     tdir.mkdir(exist_ok=True)
     nums = [int(TASK_FILE_RE.match(f.name).group(1)) for f in tdir.iterdir() if TASK_FILE_RE.match(f.name)]
+    legacy = read(bp(root) / "migration-backup" / LEGACY_FILE) or ""
+    nums += [int(n) for n in re.findall(r"^- \[[ xX~!\-]\]\s+T(\d+)", legacy, re.M)]
     every, _ = history_task_ids(root)
     nums += [int(i[3:]) for i in every]
     tid = norm_id("PB", max(nums, default=0) + 1)
@@ -888,9 +922,9 @@ def cmd_new(root, title, depends, risk, priority=None, tier=None):
     status = "PLANNED"  # A scaffold is never an executable spec.
     risk = risk or "MEDIUM"
     path = tdir / f"{tid}.md"
-    path.write_text(TASK_TMPL.format(id=tid, title=title, status=status, risk=risk,
-                                     priority=priority or "P2", tier=tier or "M",
-                                     deps=", ".join(deps) or "-"), encoding="utf-8", newline="\n")
+    with path.open("x", encoding="utf-8", newline="\n") as f:
+        f.write(TASK_TMPL.format(id=tid, title=title, status=status, risk=risk,
+                                priority=priority or "P2", tier=tier or "M", deps=", ".join(deps) or "-"))
     print(f"CREATED {Path(os.path.relpath(path, root)).as_posix()} ({status})")
     print("NEXT: Write it for a weaker model (SKILL.md section 5): Objective in the user's words, Areas, Domains, numbered "
           "Steps with exact paths, Acceptance checkboxes, Verify commands. Incomplete -> Status: PLANNED.")
@@ -947,8 +981,8 @@ def cmd_validate(root):
     for f in [f for f, _ in cur] + [b / "target.md"]:
         if any(p in (read(f) or "") for p in PLACEHOLDERS):
             warns.append(f"{f.name}: unfilled template placeholders")
-    if not (b / "target.md").exists() and not (b / "target").is_dir():
-        warns.append("no target architecture")
+    if not (b / "target.md").exists():
+        warns.append("target.md missing (global Goal and Status are required, including in domain mode)")
     elif (b / "target.md").exists() and target_status(root) == "UNSET":
         warns.append("target.md has no `Status: DRAFT|CONFIRMED` line")
     legacy = legacy_kind(root)
@@ -962,7 +996,7 @@ def cmd_validate(root):
             warns.append(f"{name}: {n} lines > {BUDGETS[key]}")
 
     all_tasks = list_tasks(root)
-    tasks = [t for t in all_tasks if t["status"] != "DONE"]
+    tasks = [t for t in all_tasks if t["status"] != "DONE" or not t["has_evidence"]]
     ids = {t["id"] for t in tasks}
     every, completed = history_task_ids(root) if has_git else (set(), set())
     completed |= {t['id'] for t in all_tasks if t['status'] == 'DONE' and t['has_evidence']}
@@ -982,7 +1016,7 @@ def cmd_validate(root):
                 if ADR_FILE_RE.match(f.name)}
     for t in tasks:
         tid = t["id"]
-        if t["status"] not in STATUS_VALUES:
+        if t["status"] not in STATUS_VALUES and t["status"] != "DONE":
             fails.append(f"{tid}: no valid status (first word must be {'|'.join(STATUS_VALUES)})")
         elif t["status_note"]:
             warns.append(f"{tid}: notes on the Status line; move them to Blocked:/Notes/Resume")
@@ -994,6 +1028,8 @@ def cmd_validate(root):
             warns.append(f"{tid}: Priority must be P1|P2|P3")
         if t["tier_raw"] and t["tier"] not in TIER_VALUES:
             warns.append(f"{tid}: Tier must be L|M|H")
+        if t["risk"] not in RISK_VALUES:
+            warns.append(f"{tid}: Risk must be LOW|MEDIUM|HIGH")
         if t["status"] in ("READY", "IN_PROGRESS"):
             missing = [n for n, ok in (("Steps", t["has_steps"]), ("Acceptance checkboxes", t["checkboxes"]),
                                        ("a backticked Verify command", t["verify_cmd"])) if not ok]
@@ -1082,4 +1118,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (ValueError, OSError) as exc:
+        print(f"FAIL {exc}", file=sys.stderr)
+        sys.exit(2)
