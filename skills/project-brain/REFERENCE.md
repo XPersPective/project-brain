@@ -17,6 +17,8 @@ Brain introduced into a repo with uncommitted work:
 Brain exists but no `PB-Current-Checkpoint` trailer (legacy Brain, hand-written docs, squash stripped it).
 `brain.py` falls back to the last commit touching Current. Spot-check the domains your task needs, then
 checkpoint them at your next commit. Never rewrite old commits to add trailers.
+Per-domain trailers must use normalized Current names; a checkpoint for one domain cannot clear another.
+An `all` checkpoint also reconciles unmapped paths. WIP checkpoints are ignored.
 
 ## History modes
 
@@ -110,9 +112,11 @@ intentional, listed in the diff review, and verified.
 
 ## No Git
 
-Brain still holds Current, Target, Constraints, Tasks, Decisions — but no checkpoints, no history queries,
-no commit-based completion. Say so in the report. Never `git init` unasked; once Git exists, do genesis's
-commit step.
+Brain still holds Current, Target, Constraints, Tasks, Decisions, but has no Git history. Keep completed
+tasks as `Status: DONE` with a nonempty `## Evidence`; do not delete them. This preserves IDs, completion
+and dependencies. The same retention rule applies when commits are forbidden or waiting for approval.
+Say so in the report. Never `git init` unasked; once Git/authorization exists, commit retained evidence
+before task cleanup. A recorded result still needs the normal takeover verification before relying on it.
 
 ## Corrupt Brain
 
@@ -133,6 +137,9 @@ Session died (crash, timeout, context exhaustion). Possible leftovers:
 | clean tree at a checkpoint | normal boot |
 | `PB-WIP` commit | resume from its task's Resume notes; re-verify what exists |
 | dirty, task IN_PROGRESS | boot says INTERRUPTED/DIRTY; compare `git diff` with Resume notes |
+| task DONE with Evidence | if committed, cleanup may join the next authorized commit; otherwise retain it until the verified work commit succeeds |
+| deleted task with no completion evidence | deletion is not completion; inspect the diff and recover your task spec from Git before resuming |
+| partial legacy migration | rerun `migrate --apply`; original inputs remain in migration-backup and schema is finalized last |
 | half-written file | check syntax; if broken, restore that one file from `git show HEAD:<path>` only if it is yours |
 | `.git/index.lock` | no git process running (check) → delete the lock |
 | merge/rebase markers | see Conflicts |

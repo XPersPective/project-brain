@@ -10,7 +10,7 @@ Stable policy only — never HEAD, active task, timestamps, model, or test resul
 ```yaml
 schema_version: 4
 architecture:
-  mode: single          # single: current.md/target.md | domains: current/<d>.md, target/<d>.md
+  mode: single          # domains: current/<d>.md, optional target/<d>.md; target.md always holds Goal/Status
 git:
   history_mode: unknown # preserve | squash | rewrite-prone | unknown
   commit: auto          # auto | ask
@@ -21,8 +21,10 @@ commands:
   build: ""
 ```
 
-The parser supports exactly this shape: top-level keys, one level of `key: value`, quoted or bare values,
-`#` comments.
+The parser supports top-level scalars and sections with two-space `key: value` entries. Double quotes
+use JSON string escapes; single quotes escape an apostrophe as `''`; bare values support whitespace
+followed by `#` comments. Quoted `#` is literal. Lists, block scalars, deeper nesting, duplicate keys and
+future schema versions are rejected with exit 2; convert them explicitly rather than losing values.
 
 # current.md
 
@@ -56,6 +58,8 @@ Sources: `src/auth/**`, `tests/auth/**`
   since), UNKNOWN (not inspected). `ASSUMED` is not allowed — create a task to verify instead.
 - No SHAs in the file; the commit carrying `PB-Current-Checkpoint` is the checkpoint.
 - **Domain mode**: `current/<domain>.md`, file name = domain name, same sections minus `## Domains`.
+  Keep an optional current.md Map for shared context. Global target.md remains required; target/<domain>.md
+  files hold additional detail. Boot loads global intent even with an active task.
 
 # target.md
 
@@ -126,12 +130,12 @@ Domains: utils
 
 | Header | Values |
 |---|---|
-| `Status` | one word: PLANNED → READY → IN_PROGRESS → (done: file deleted); any → BLOCKED → READY |
+| `Status` | PLANNED → READY → IN_PROGRESS → DONE with Evidence → deleted after its checkpoint; any → BLOCKED → READY |
 | `Priority` | P1 user's current ask or blocker · P2 normal (default) · P3 later. FOCUS = best priority, then lowest ID |
 | `Tier` | L mechanical, fully specified · M normal engineering · H design, ambiguity, security, specs |
 | `Risk` | LOW / MEDIUM / HIGH (sets verification breadth) |
-| `Depends` | task IDs, `-` when none. Absent from `tasks/` = completed |
-| `Areas` | backticked globs; boot uses them to tell your dirty files from someone else's |
+| `Depends` | task IDs, `-` when none. Requires verified Git completion or retained DONE+Evidence; absence alone is insufficient |
+| `Areas` | backticked globs; boot detects overlap, not ownership; inspect actual edits before resuming |
 | `Domains` | Current domains this task may change; boot loads only those sections |
 | `Blocked` | only when BLOCKED: what is needed, from whom |
 
@@ -139,6 +143,10 @@ Domains: utils
 `- [ ]` checkboxes, `## Verify` with a backticked command, no vague words. Otherwise PLANNED.
 Optional `## Resume` (when stopping mid-task): `Next:`, `Failing:`, `Dirty:` lines. Boot prints `Next:`
 and the unchecked Acceptance items.
+`new` always creates PLANNED scaffolding. DONE requires a nonempty `## Evidence` with actual commands
+and results. Keep it until that content is committed, or indefinitely in No Git mode. Cleanup after
+the successful work commit is included in the next authorized commit; Git retains the full task spec.
+DONE without Evidence remains unfinished in the plan and cannot satisfy a dependency.
 
 # ADR — decisions/ADR-NNN.md
 
@@ -154,7 +162,7 @@ re-open or misread the decision.
 | `PB-Current-Checkpoint: auth,api` / `all` | Current for these domains was reconciled with the code through this commit | architecture changed; all tests pass |
 | `PB-Target-Checkpoint: auth` | Target reflects confirmed intent through this commit | target is implemented |
 | `PB-Verification: local/domain/global` | breadth of verification actually run | — |
-| `PB-Task: PB-014` / `PB-Tasks: PB-1,PB-2` | work on these tasks; completed once their files are gone (unless WIP) | — |
+| `PB-Task: PB-014` / `PB-Tasks: PB-1,PB-2` | task work; completion also needs Verification and either deletion or DONE+Evidence in that commit | task mention alone proves completion |
 | `PB-Agent: <model id>` | who did the work; boot's RECENT line uses it for the takeover check | — |
 | `PB-Plan-Audit: <scope>` / `final` | a plan audit ran; resets boot's audit counter | the plan is perfect |
 | `PB-WIP: true` | unverified work preserved for continuity | completion; never with Checkpoint/Verification |
@@ -163,18 +171,20 @@ re-open or misread the decision.
 | `PB-Milestone: <name>` | milestone completed (squash workflows) | — |
 
 The commit body carries `Evidence:` (commands and results). Architecture unchanged but reconciled → still add
-`PB-Current-Checkpoint`; do not fake a document edit. `boot`/`changed` treat every commit after the newest
-commit whose message mentions `PB-` or `[PB]` as external and map its files to domains through `Sources:`.
-Task IDs are permanent; SHAs are not (rebase/squash).
+`PB-Current-Checkpoint`; do not fake a document edit. `boot`/`changed` compare each domain against its newest
+non-WIP checkpoint, including `all`, using `Sources:`. Unmapped files use the last `all` checkpoint.
+Without checkpoints, the last commit editing Current is a legacy fallback. A PB mention or a checkpoint
+for another domain does not establish freshness. IDs are reserved by task files, reachable Git task paths
+and trailers, and the v0 migration backup; unreachable/shallow history cannot guarantee global uniqueness.
 
 # Validator (`brain.py validate`)
 
-FAIL: no Current file, unknown status, more than one IN_PROGRESS, dependency cycle, `mode: domains` without
+FAIL: unsupported configuration, no Current file, unknown status, duplicate task IDs, more than one IN_PROGRESS, dependency cycle, `mode: domains` without
 `current/`. WARN: legacy schema or `PROJECT_BRAIN.md`, missing config/target, target without `Status:`,
 unfilled template placeholders, READY/IN_PROGRESS that is not an executable spec, vague words, invalid
-Priority/Tier, notes on the Status line, kept DONE files, missing Acceptance/Verify, BLOCKED without
-`Blocked:`, IN_PROGRESS without Areas, READY with an open dependency, dependency neither open nor in Git
-history, title/file ID mismatch, missing ADR, tracked `.cache/` files, size budgets (current 200, target
+Priority/Tier/Risk, notes on the Status line, DONE without Evidence, missing Acceptance/Verify, BLOCKED without
+`Blocked:`, IN_PROGRESS without Areas, READY with an open dependency, dependency without completion
+evidence, title/file ID mismatch, missing ADR, tracked `.cache/` files, size budgets (current 200, target
 150, constraints 100, task 80 lines; 25 open tasks). It checks structure, not whether the text is true.
 
 # Cache
@@ -184,13 +194,16 @@ it must never lose intent, target, constraints, tasks, or rationale.
 
 # Migration (`brain.py migrate`)
 
-Preview by default; `--apply` writes; nothing is deleted. Lossless rule: a value that cannot fit a header
-line is also kept verbatim in Notes as `<Field> (migrated, original): ...`.
+Preview by default; `--apply` writes; nothing is deleted. Original inputs are copied to
+`.project-brain/migration-backup/` before updates; retries never overwrite those copies. Config is
+finalized last with a file replacement so interrupted migration remains retryable. Uninterpreted
+content stays in the backup for review; a converted field that cannot fit a header also stays in Notes.
 
 | Legacy | Becomes |
 |---|---|
-| config schema ≤3 (`push_policy`, `tasks`, `verification`) | schema 4; `history_mode`, push and commands kept |
-| target without `Status:` | `Status: CONFIRMED` (older targets were approved by definition); `## Objective` → `## Goal` |
+| config schema ≤3 (`push_policy`, `tasks`, `verification`) | schema 4; supported scalar fields, empty/custom commands and policy kept; original comments in backup |
+| target without `Status:` | `Status: DRAFT` (approval must be established); `## Objective` → `## Goal` |
+| task `Priority:` / `Tier:` | retained, including on interrupted migration retries |
 | `## Status` / inline `Status:` | `Status:` header; extra text → Notes (or `Blocked:`); missing → PLANNED + note; DONE → reported |
 | `## Dependencies`, `## Affected Areas` | `Depends:`, `Areas:` |
 | `Risk:` inside Verification | `Risk:` header (highest level named) |
@@ -201,7 +214,7 @@ line is also kept verbatim in Notes as `<Field> (migrated, original): ...`.
 | `PROJECT_BRAIN.md` §1 GOAL, §2 TARGET | target.md Goal / Target State; header `Goal status` → `Status` |
 | §3 CURRENT, §4 FILE MAP | current.md Domains / Map |
 | §5 open tasks `[ ]` `[~]` `[!]` | `PB-<same number>`; Where/Do → Steps, Done when → Acceptance + Verify, Needs → Depends, `[L/M/H]` → Tier, section → `Milestone:` note; open sub-tasks → parent Steps |
-| §5 closed `[x]` `[-]` | not migrated (Git keeps them) |
+| §5 closed `[x]` `[-]` | original retained in migration-backup/PROJECT_BRAIN.md; IDs remain reserved |
 | §6 DECISION LOG, §7 HANDOFF | `decisions/ADR-000.md`; handoff → Resume of the IN_PROGRESS task |
 | custom §0 / extra sections | constraints.md "(review)" sections |
 

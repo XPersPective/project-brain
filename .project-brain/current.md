@@ -18,7 +18,8 @@
 Status: VERIFIED
 Sources: `skills/project-brain/*.md`, `README.md`, `docs/design/**`
 - Current, target and unfinished tasks separated; Git trailers hold history.
-- Scope and completion recovery are under audit.
+- Scope follows the current request; read-only questions precede repairs/tests. DONE+Evidence is committed before cleanup.
+- `docs/design/06-audit.md` records the 2026-10-08 audit, regression evidence and empirical limitations.
 
 ### Runtime
 Status: VERIFIED
@@ -34,3 +35,4 @@ Sources: `plugin.json`, `.claude-plugin/**`, `.agents/plugins/**`, `gemini-exten
 
 ## Known Unknowns
 - Cross-vendor/small-model reliability and live marketplace installation are not established by this audit.
+- Claude manifest validation passes with five ignored directory-metadata warnings. Python 3.8 syntax checked; runtime tests use 3.11.15.

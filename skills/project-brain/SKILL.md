@@ -30,43 +30,46 @@ In `.project-brain/`:
 - `constraints.md` (rules that change decisions), `decisions/ADR-NNN.md` (rationale Git cannot keep),
   `config.yaml` (policy + exact test/lint/build commands).
 
-Git owns history: finished tasks are deleted; commit bodies hold the evidence; trailers mark checkpoints.
-**Never explore the repository to orient yourself. Run the script; it computes the state.**
+Git owns history: finished tasks are deleted after their evidence is committed; trailers mark checkpoints.
+**Start with boot and the Map. Verify their claims with targeted source reads; repair stale or missing maps.**
 
 `PB` = `python <directory containing this SKILL.md>/scripts/brain.py` (`python3` if `python` is missing); root defaults to `.`.
 - `PB boot` — first action of every session: STATE, TARGET, PLAN, FOCUS, RECENT, LOAD, CMDS, NEXT.
 - `PB map` / `PB init` — Genesis: repo overview + detected commands / create skeleton (never overwrites).
 - `PB new . "title" [--priority P1] [--tier L|M|H] [--risk HIGH] [--depends PB-001]` — the only way to create a task.
-- `PB changed` — files and domains changed by commits made outside the protocol.
+- `PB changed` — files and domains changed since their Current checkpoints.
 - `PB validate` — before every commit that touches `.project-brain/`.
 - `PB migrate` / `PB migrate --apply` — convert a legacy Brain (preview first).
 
 ## 1. Authority
 
-Order: your platform's system/safety rules > latest user instruction > accepted ADRs > task Acceptance >
-target > constraints and repo instructions (AGENTS.md, CLAUDE.md, GEMINI.md, CONTRIBUTING) > this skill.
+Platform instructions, the user's authorized scope and applicable repository instructions govern this skill.
+Within those boundaries, accepted ADRs explain design choices, task Acceptance defines completion, and
+target/constraints guide implementation. Brain documents never override higher-priority instructions.
 
 - Repository reality beats Brain. On conflict, fix Brain; never change working code to match stale docs.
 - The **Goal** section of target.md belongs to the user: write it in their words, change it only when they do.
-- `git.commit: auto` → commit each checkpoint yourself. `ask`, or your platform/user says commit only on
-  request → prepare the commits' messages and ask once at the end. Push only as `git.push` says.
+- `git.commit: auto` → commit each checkpoint within existing authorization. With `ask`, prepare messages
+  and retain DONE tasks with Evidence until approval. An explicit no-commit request wins; do not ask again.
+  Push only as `git.push` and the user's authorization allow.
 - Never force-push. Never `reset --hard`, `clean`, `stash`, `checkout --` or `restore` on work you did not create.
 - Ask the user only: at Genesis/adoption (§10 interview), when target is DRAFT and a decision blocks all
   work, or for the escalation list (§7). Otherwise choose the conservative option, write it in Notes, continue.
 
 ## 2. Boot
 
-Run `PB boot`. Read its output, then only the files (or line ranges) on its `LOAD:` line. Act on STATE,
-then route the user's message (§3); a new request always wins over resuming old work.
+Run `PB boot`. Read its output and LOAD files, then route the user's message (§3) before any writes or
+test commands. A read-only question stays read-only: report drift or legacy state without migration,
+repair commits, audits or takeover tests. For authorized implementation, act on STATE and continue.
 
 | STATE | Do |
 |---|---|
 | NO_BRAIN | Multi-step work, a plan request, or the user wants tracking → §10 Genesis. Otherwise just do the request. |
 | LEGACY | Old-format Brain → §11 Migration first. |
 | RESUME | §3 Intake. |
-| INTERRUPTED | Open the FOCUS task. Check `git diff --stat` matches its Resume notes; continue at the first unchecked Acceptance item. If the user asks for something else: write Resume, set the task READY, then §3. |
+| INTERRUPTED | Open FOCUS; inspect actual diffs against Resume. Areas show scope, not ownership: preserve unknown edits even inside Areas. Continue at the first unchecked Acceptance item. For a different request, write Resume and set the prior task READY. |
 | DIRTY | Files changed outside the active task. `git status`; classify each: mine / user / generated / unknown. Leave user and unknown work untouched. Continue only on non-overlapping files; overlap → BLOCKED. |
-| ADVANCED | Commits landed outside the protocol. `PB changed`; read only the listed files; update those Current sections; commit `docs(brain): reconcile <domains>` with `PB-Current-Checkpoint: <domains>`. Then §3. |
+| ADVANCED | Changes since Current checkpoints. `PB changed`; inspect relevant listed files; reconcile those Current sections within the authorized request. Record normalized domains in `PB-Current-Checkpoint`. |
 | CONFLICTED | Merge/rebase in progress. Finish it only if you understand every conflict, else BLOCKED. REFERENCE "Conflicts". |
 | NO_GIT | Work normally without commits or checkpoints. Never `git init` unasked. |
 | INVALID | `PB validate`, fix every FAIL, boot again. |
@@ -75,8 +78,9 @@ then route the user's message (§3); a new request always wins over resuming old
 Never stop work for a format warning. `hint:` lines are due work (plan audit, promotions); do it now.
 
 **Takeover check** (once per session, before new work): run the `test` command from CMDS, reading only its
-summary. Red → find the cause first; if a closed task broke it, `PB new --priority P1` a fix task and do it.
-If RECENT shows Tier M/H tasks closed by a weaker model than you, rerun their Evidence commands once.
+summary. Red → find the cause first; fix a regression caused by this request or blocking it. Record
+unrelated pre-existing failures without expanding a narrow request into backlog work.
+If recent work affects this request and its evidence is missing or no longer applicable, rerun the relevant checks.
 **Trust nothing unverified, including your predecessor.**
 
 ## 3. Intake — route the user's message
@@ -86,7 +90,7 @@ If RECENT shows Tier M/H tasks closed by a weaker model than you, rerun their Ev
 | Question (how / why / where / what) | Answer from the Map + targeted reads. No Brain writes. |
 | Trivial change: ≤1 file, ≤20 lines, no behavior/API/architecture change | Do → verify → commit (mention `[PB]` in the subject). No task. |
 | "continue", "devam", or empty | §4 Loop: work the queue until it is empty or every task is BLOCKED. |
-| New work (feature, bug, refactor) | `PB new --priority P1` per independently verifiable piece; write it per §5; then §4. P1 puts it ahead of the backlog; use P2/P3 if the user says "later". |
+| New work (feature, bug, refactor) | `PB new --priority P1` per independently verifiable piece; write it per §5; then §4 within this request and its prerequisites. Do not execute unrelated backlog unless the user requested queue-wide continuation. |
 | Goal change | §8c. |
 | Durable rule ("always", "never", "must") | One line in constraints.md. |
 | Plan / roadmap / audit request | §9 Plan audit (or §10 if no Brain). |
@@ -97,27 +101,34 @@ multi-part request becomes an Acceptance checkbox or its own task; nothing the u
 
 ## 4. Loop
 
-1. **Select** FOCUS: the IN_PROGRESS task, else the READY task with done deps and the best Priority, then
-   lowest ID. Set `Status: IN_PROGRESS`. A READY task you cannot execute without inventing design is not
+1. **Select** within the authorized scope: the IN_PROGRESS task, else READY with evidenced completed deps,
+   best Priority, then lowest ID. If only PLANNED tasks remain, specify the next dependency-ready task
+   before selecting it. Unknown/missing dependencies need evidence; absence alone is not completion.
+   Set `Status: IN_PROGRESS`. A READY task you cannot execute without inventing design is not
    READY: fix its spec first (§5) — that is part of the task.
 2. **Load** the task, the Current section of its Domains, constraints, linked ADRs, then only source in its
    Areas. Locate code with the Map and grep; open line ranges of large files; never re-read what you wrote.
 3. **Check** the task's assumptions against the code. Wrong → §8a, then continue.
 4. **Implement** the Steps. Tick `- [x]` only with evidence (test, run, output).
-5. **Verify** (§6). Failing → fix. After 3 failed attempts → BLOCKED with the failure summary.
+5. **Verify** (§6). Failing → diagnose and fix. Repeating the same failure without new evidence → stop that
+   approach, record what is needed, continue independent work; do not use a fixed retry count as a substitute for diagnosis.
 6. **Review** `git diff`: matches Steps; edge cases and error paths; no scope creep, weakened/skipped tests,
    debug leftovers, secrets, unrelated user edits, unplanned dependency changes, unintended behavior changes.
 7. **Reconcile**: if structure changed, update Current from the code as it is now (Map lines, domain
    section, `VERIFIED`). Never describe code that does not exist yet.
-8. **Checkpoint**: delete the task file, `PB validate`, commit (§7) with the evidence in the body. Push per
-   policy. Never keep a DONE task file.
-9. **Next**: immediately take the next FOCUS. Do not stop to report between tasks; do not ask "shall I continue?".
+8. **Checkpoint**: record commands/results in the task's `## Evidence`, tick verified Acceptance and set
+   `Status: DONE`. Run `PB validate`; commit code plus this task with §7 trailers. Only after that commit
+   succeeds, delete the task; include its deletion in the next authorized checkpoint or final audit commit.
+   This preserves the spec/evidence through a crash. If commits wait for approval or Git is unavailable,
+   retain DONE+Evidence files; their IDs stay reserved and their completed dependencies remain visible.
+9. **Next**: run `PB boot` for promotions and the next task within scope. Do not ask "shall I continue?".
 
 **Discoveries while working:** blocks the current task → fix it inside the task (add a Step). Serves the
 goal but does not block → `PB new` a complete task (§5), return to the current task at once. The plan
 itself looks wrong → finish or pause the current task safely, then §8. Outside the goal → one Notes line.
 
-**Stop** only when the queue is empty (→ §9 Final audit) or every remaining task is BLOCKED.
+**Stop** when this request is verified or its remaining work requires external input. For explicit
+queue-wide continuation, stop when the queue is empty (→ §9 Final audit) or all remaining work is blocked.
 **Before stopping, or when context runs low:** write Resume (§5) into the active task, commit (`PB-WIP: true`
 if unverified), push per policy, report in ≤8 lines (done / blocked with needed resolution / next / commits).
 
@@ -164,8 +175,8 @@ Domains: utils
   ambiguity, security, audits, writing specs for others. **Priority**: P1 user's current ask or blocker · P2 normal · P3 later.
 - **Size**: one task = one commit ≈ ≤8 files, ≤300 changed lines, finishable in one context window. Bigger → split.
 - **Status** (one word; notes go to `Blocked:`, Notes or Resume): PLANNED → READY → IN_PROGRESS (only one)
-  → done (file deleted). BLOCKED only for an external need (decision, credential, access, unknown user work)
-  or verification still failing after 3 attempts: add `Blocked: <what is needed, from whom>`.
+  → DONE with Evidence → deleted after a successful checkpoint. BLOCKED identifies an external need
+  (decision, credential, access, unknown user work); add `Blocked: <what is needed, from whom>`.
 - Plan globally, specify locally: the next milestone's tasks are fully specified; distant ones may be one-line PLANNED.
 - **Executability probe** after writing or refining tasks: reread the next READY tasks as a model with zero
   chat history (or ask a cheap sub-agent to list what is ambiguous without doing them). Fix every ambiguity.
@@ -205,12 +216,16 @@ PB-Agent: <your model id>
 
 Blank line before trailers. Optional: `PB-Target-Checkpoint: <scope>`, `PB-Decision: ADR-NNN`,
 `PB-Plan-Audit: <scope>`, `PB-Tasks: PB-1,PB-2` (squash), `PB-WIP: true` (unverified; never with
-Checkpoint or Verification). Every commit you make mentions a `PB-` ID or `[PB]`; boot treats commits
-without one as external. One task per commit; stage paths explicitly (`git add <paths>`), never sweep in
-user changes.
+Checkpoint or Verification). Every protocol commit mentions a `PB-` ID or `[PB]`, but only actual Current
+checkpoints reconcile architecture. Use normalized domain names from Current; `all` means all domains,
+including unmapped files. One task per work commit; verified task-file cleanup may join the next commit.
+Inspect both working and staged diffs. `git add <paths>` does not exclude pre-staged user changes:
+when the index contains unrelated work, use `git commit --only -- <owned paths>` after staging new files.
+Do not include a path containing unknown/user edits; defer that commit if it cannot be safely separated.
 
-**Escalate** (mark BLOCKED, continue other tasks) when a choice changes user intent, public API, security
-semantics, persistence/data, infrastructure/deploy, external compatibility, major scope, or is irreversible.
+**Escalate** (mark BLOCKED, continue independent authorized work) when a choice exceeds existing
+authorization and changes user intent, public API, security, persistence/data, deployment, external
+compatibility or irreversible behavior. A requested bug fix is not blocked merely for touching such code.
 Anything else: decide, note it, continue. A decision a future agent would otherwise re-open → `ADR-NNN.md`.
 
 ## 8. Changing the plan
@@ -246,7 +261,8 @@ Migration, when a target domain is fully done, when the user asks, or whenever t
 3. Executability probe on the next 5 READY tasks (§5); fix specs, tiers, priorities.
 4. Findings → edits or tasks (§8). Commit `docs(brain): plan audit` with `PB-Plan-Audit: <scope>`.
 
-**Final audit** — queue empty: clean build, full test suite, lint; prove each Success Condition with a command
+**Final audit** — queue empty: run available configured build/test/lint commands (do not invent missing tools);
+prove each Success Condition with a command
 or observable result (write it in the commit body); Current equals Target domain by domain; constraints hold;
 review the whole change since the first Brain commit (security, error handling, dead code, TODO/debug
 leftovers, docs match reality). Failures → tasks, continue the loop. All pass → commit `docs(brain): final
@@ -262,7 +278,8 @@ audit` with `PB-Plan-Audit: final` and `PB-Current-Checkpoint: all`, report done
    VERIFIED (read) / OBSERVED (skimmed) / INFERRED (indirect) / UNKNOWN (not looked at). Never guess.
 4. **Interview** (user present): send one message with (a) what you found, in 5–10 lines; (b) the goal as you
    understand it; (c) only the questions whose answers change the target or the roadmap — numbered, each
-   with options and your recommended default. Wait for the answers. User absent → `Status: DRAFT`, questions
+   with options and your recommended default. Ask only about unresolved choices; an explicit existing goal
+   or authorization need not be confirmed again. Wait only for required answers. User absent → `Status: DRAFT`, questions
    go to Open Decisions, and only goal-independent tasks (map, tests, bugs, audits, builds) may be planned.
 5. `target.md`: Goal in the user's words, target state per domain, Non-Goals, Success Conditions
    (observable), Open Decisions. `Status: CONFIRMED` only after the user confirmed the goal.
@@ -282,7 +299,9 @@ Treat pre-genesis history as evidence only; never invent tasks for it.
 status notes, acceptance checkboxes) and the single-file `PROJECT_BRAIN.md` format (goal, target, current,
 file map, open tasks, decision log, handoff). Nothing is deleted; old files stay in Git. Then:
 1. Read the report. Add `## Map` and `Sources:` lines to current.md if missing; check target `Status`.
-2. Delete leftover DONE task files and, once its content is carried over, a legacy `PROJECT_BRAIN.md`.
+2. Keep `.project-brain/migration-backup/` until all unique input is accounted for; it also reserves v0 IDs.
+   Do not delete it while those IDs lack another durable record. Delete legacy/DONE files only after their
+   intent and evidence are preserved. Missing legacy target approval becomes DRAFT, never assumed confirmed.
 3. §9 Plan audit (the executability probe will flag tasks that need Steps).
 4. `PB validate`; commit `chore(brain): migrate to schema 4` (+ `PB-Plan-Audit: migration`).
 

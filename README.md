@@ -1,8 +1,9 @@
 # Project Brain
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Gemini or
-another, a frontier model or a small cheap one — continues a project exactly where the previous session
-stopped, from the repository alone. No chat history needed, no re-scanning the codebase.
+another — can recover a project's recorded goal, architecture and task plan from the repository.
+The protocol is designed for different model sizes; reliable execution still depends on the agent
+following it and verifying the evidence. No chat history is required for the recorded state.
 
 ```text
 session 1 (strong model)          session 2 (token limit hit)        session 3 (small model)
@@ -35,12 +36,12 @@ protocol:
 ```
 
 Git owns history: commit trailers mark checkpoints, commit bodies carry the evidence. A stdlib Python
-script does everything mechanical, so the model spends no tokens on it:
+script computes the mechanical state; the agent still reviews its output and verifies code:
 
 ```text
 $ python skills/project-brain/scripts/brain.py boot
 STATE: RESUME
-git: main @ 4f1c2aa | last PB commit 4f1c2aa (= HEAD) | dirty 0 (+0 brain)
+git: main @ 4f1c2aa | current baseline 4f1c2aa (= HEAD) | dirty 0 (+0 brain)
 TARGET: CONFIRMED
 PLAN: 3 open, 12 done
    PB-013 READY       P1 L Add Turkish date parser
@@ -48,9 +49,9 @@ PLAN: 3 open, 12 done
    PB-015 BLOCKED     P2 H Store upload  [needs store credentials from the user]
 FOCUS PB-013 (READY, P1, tier L, risk LOW): 2/2 acceptance open
 RECENT: PB-012 by claude-haiku-5-5 (4f1c2aa); PB-011 by codex-agent (9ab01de)
-LOAD: .project-brain/tasks/PB-013.md .project-brain/current.md (lines 3-40, 88-120) .project-brain/constraints.md
+LOAD: .project-brain/tasks/PB-013.md .project-brain/current.md (lines 3-40, 88-120) .project-brain/target.md .project-brain/constraints.md
 CMDS: test=python -m pytest -q | lint=ruff check .
-NEXT: Takeover check, then the user's message. 'continue' or empty: start PB-013 and keep working the queue.
+NEXT: Route the user's request before tests or writes. If authorized, run the takeover check; 'continue' starts the queue.
 ```
 
 ## Install
@@ -81,11 +82,13 @@ read <path-to>/skills/project-brain/SKILL.md and follow it (first step: its boot
 |---|---|
 | "set up project brain" / `/project-brain` | Genesis: maps the repo once, asks you the questions that shape the target, writes target + roadmap |
 | "continue" / "devam et" | Works the task queue until it is empty or everything left is blocked; commits each verified step |
-| a new request mid-way | Adds it as a P1 task ahead of the backlog, so the next agent sees it too |
+| a new request mid-way | Records it as a P1 task and completes that request plus prerequisites; unrelated backlog waits |
 | "audit the plan" | Traceability, code spot-checks, executability probe of the next tasks |
 
 Already using Project Brain 1.x (`.project-brain/` schema ≤3) or a single-file `PROJECT_BRAIN.md`?
-`python <skill>/scripts/brain.py migrate` shows a preview; `migrate --apply` converts losslessly. Nothing is deleted.
+`python <skill>/scripts/brain.py migrate` shows a preview; `migrate --apply` converts it and preserves
+original inputs in `.project-brain/migration-backup/` for review. Nothing is deleted; unrecognized content
+may need manual reconciliation. Missing target approval becomes DRAFT.
 
 ## Helper script
 
@@ -94,7 +97,7 @@ brain.py boot     [root]   state, target, plan, focus, recent work, files to loa
 brain.py map      [root]   compact repo overview + detected test/lint/build commands
 brain.py init     [root]   create .project-brain/ skeleton + AGENTS.md pointer (never overwrites)
 brain.py new root "title" [--priority P1] [--tier L] [--risk HIGH] [--depends PB-001]
-brain.py changed  [root]   files and domains changed by commits made outside the protocol
+brain.py changed  [root]   files and domains changed since their Current checkpoints
 brain.py validate [root]   structure, executable-spec checks, size budgets
 brain.py migrate  [root] [--apply]   convert a legacy Brain
 ```
@@ -107,10 +110,13 @@ Exit codes: 0 ok, 1 warnings, 2 errors, 3 no Project Brain.
   bundled Python scripts. The agent itself runs your project's own test/lint/build commands from `config.yaml`.
 - Reads files inside the current repository. Writes only `.project-brain/` and a short pointer block in the
   project's `AGENTS.md` (plus an existing `CLAUDE.md` / `GEMINI.md`), and only when you run `init` or
-  `migrate --apply`.
+  `new` or `migrate --apply`.
 - No network access, no telemetry, no credentials. It never stores secrets and tells agents not to.
 - Commits and pushes happen only through the agent, following `git.commit` / `git.push` in `config.yaml`
   and your platform's own permission rules.
+
+Completed tasks keep their Evidence until committed. With no Git or deferred commits, DONE files stay
+in place so IDs and dependencies remain recoverable. A missing task by itself is not proof of completion.
 
 ## Repository layout
 

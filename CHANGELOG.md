@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Reconcile source drift against actual per-domain checkpoints; PB mentions no longer hide changes.
+- Require completion evidence before satisfying dependencies; retain DONE+Evidence until committed.
+- Reserve task IDs from Git paths and legacy backups; new task scaffolds start PLANNED.
+- Load global target and domain context reliably during handoff.
+- Preserve quoted/custom commands and supported config fields; reject unsupported config explicitly.
+- Back up migration input, retain task priority/tier, infer no target approval and finalize schema last.
+- Fix Python 3.8/3.9-incompatible file writes; add interrupted migration and recovery regressions.
+- Keep narrow and read-only requests within scope; protect pre-staged user changes at checkpoints.
+- Document the architectural audit and unmeasured cross-model/platform limitations.
+
 ## 2.0.1 — 2026-10-08
 
 Packaging only, no protocol change: logo and icon (`assets/`), privacy policy, directory listing

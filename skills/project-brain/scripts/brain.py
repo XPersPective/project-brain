@@ -612,7 +612,7 @@ def cmd_boot(root):
     if legacy == "v0":
         print("STATE: LEGACY")
         print(f"  ! {LEGACY_FILE} (single-file Brain) found")
-        print("NEXT: `migrate` (preview), then `migrate --apply` (SKILL.md Migration).")
+        print("NEXT: Route the user's request first; questions stay read-only. For authorized migration: `migrate` (preview), then `migrate --apply` (SKILL.md Migration).")
         return 0
     if not brain_exists(root):
         print("STATE: NO_BRAIN")
@@ -776,7 +776,7 @@ def cmd_boot(root):
     print(f"MODE: commit={git_cfg.get('commit', 'auto')} push={git_cfg.get('push', git_cfg.get('push_policy', 'manual'))}")
 
     nxt = {
-        "LEGACY": "`migrate` (preview), then `migrate --apply` (SKILL.md Migration). Then Plan audit.",
+        "LEGACY": "Route the user's request first; questions stay read-only. For authorized migration: `migrate` (preview), then `migrate --apply` and Plan audit.",
         "INVALID": "Run `validate`, fix the FAIL lines, then boot again (REFERENCE: Corrupt Brain).",
         "CONFLICTED": "Finish the Git operation first (REFERENCE: Conflicts). Start no task.",
         "DIRTY": "Classify each listed path: mine/user/generated/unknown. Never reset/clean/stash/checkout unknown work. Continue only on non-overlapping files.",
