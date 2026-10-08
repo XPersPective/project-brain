@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "project-brain",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Git-native project memory and planning protocol: any coding agent, strong or weak, continues a project exactly where the last one stopped.",
   "author": {
     "name": "XPersPective",
@@ -10,5 +10,27 @@
   "homepage": "https://github.com/XPersPective/project-brain",
   "repository": "https://github.com/XPersPective/project-brain",
   "license": "MIT",
-  "keywords": ["memory", "planning", "handoff", "resume", "architecture", "roadmap", "git", "agents"]
+  "keywords": ["memory", "planning", "handoff", "resume", "architecture", "roadmap", "git", "agents"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Project Brain",
+        "shortDescription": "Continue any project across sessions, models and vendors from the repo alone",
+        "longDescription": "Project Brain keeps a project's state in the repository: verified current architecture with a file map, the user's confirmed goal and target, and a prioritized task plan written so even a small model with no chat history can execute it. A local Python script computes the session state, next task and the exact files to load, so agents resume without re-scanning the codebase. Agents verify what they inherit, repair the plan only with evidence, and commit every verified step so the next session or another agent can take over.",
+        "developerName": "XPersPective",
+        "category": "Productivity",
+        "websiteURL": "https://github.com/XPersPective/project-brain",
+        "privacyPolicyURL": "https://github.com/XPersPective/project-brain/blob/master/PRIVACY.md",
+        "termsOfServiceURL": "https://github.com/XPersPective/project-brain/blob/master/LICENSE",
+        "defaultPrompt": [
+          "Set up Project Brain for this repository",
+          "Continue where the last session stopped",
+          "Audit the project plan"
+        ],
+        "brandColor": "#111827",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/logo.png"
+      }
+    }
+  }
 }

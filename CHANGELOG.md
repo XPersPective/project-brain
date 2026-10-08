@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.1 — 2026-10-08
+
+Packaging only, no protocol change: logo and icon (`assets/`), privacy policy, directory listing
+fields for Anthropic's directory and the OpenAI plugin directory, "What it runs" section in the README.
+
 ## 2.0.0 — 2026-10-08
 
 First public release.
