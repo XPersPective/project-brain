@@ -24,7 +24,8 @@ Bu denetimde yeniden üretilebilen uygulama hataları ve yürütme talimatların
   Sonuçlar ana ajan tarafından dosya, Git geçmişi ve test çalıştırmasıyla bağımsız doğrulandı.
   İkinci deneyde legacy PROJECT_BRAIN.md bulunan depoda yalnız soru soruldu; model doğru fonksiyonu
   açıkladı, migration başlatmadı, dosya yazmadı ve test çalıştırmadı.
-- Kaynak düzeltmeleri yerel depoda yapıldı. Canlı kurulum kopyaları ve marketplace yayınları güncellenmedi.
+- Kaynak düzeltmeleri GitHub'a push edildi; 2.1.0 kamuya açık release olarak yayımlandı. Skill Manager
+  merkezi kopyası ve 41 yönetilen ajan hedefinin altı kaynak dosyası birebir doğrulanarak güncellendi.
 
 ## Bulgular ve düzeltmeler
 
@@ -77,12 +78,23 @@ Kontroller gerçek geçici Git depolarıyla ve migration yazma hatası enjeksiyo
 
 Claude uyarıları geçmişte dizin listelemesi için bilerek eklenmiş metadata'dan geliyor. Bu alanları sırf
 yerel yükleyici kullanmıyor diye kaldırmak taşınabilir paketleme amacına aykırı olurdu; korundu.
-Paketin canlı ortamda kurulduğu veya Gemini/Codex marketplace tarafından kabul edildiği iddia edilmiyor.
+Kamuya açık GitHub deposundan Codex ve Claude Code'un yerel marketplace komutlarıyla ayrı profillere
+kurulum yapıldı; ikisi de 2.1.0 bildirdi. `skills` CLI ile ayrı projeye kurulum da geçti.
+Bu kurulum testleri sağlayıcıların resmî katalog onayı anlamına gelmez; Gemini çalışma zamanı sınanmadı.
+
+## Yayın ve kurulum kanıtı
+
+- [2.1.0 GitHub release](https://github.com/XPersPective/project-brain/releases/tag/v2.1.0): herkese açık,
+  taslak olmayan yayın; ZIP ve SHA256SUMS indirilebilir.
+- ZIP 95.848 bayt; kimlik doğrulaması olmadan indirilen dosyanın SHA256 değeri
+  `745ead03e7b59186a4a3ddf78c43c293d874f0912e931711f2e198fd6e1338fd`; yerel paketle aynı.
+- Skill Manager mevcut yönetilen kaynağı güncelledi; yeni paralel global kopya oluşturulmadı.
+  41 hedef için içerik doğrulaması yapıldı; 41 ayrı ajan çalışma zamanı testi yapıldığı iddia edilmiyor.
 
 ## Kalan sınırlar ve ölçülmesi gerekenler
 
 1. **Model davranışı:** GPT-6-Luna dar bug fix + commit yasağı + ilgisiz backlog senaryosunu geçti.
-   Bu tek kontrollü deneydir; farklı üreticiler, karmaşık mimari işler ve uzun kesinti zincirleri için
+   İki kontrollü senaryo sınandı; farklı üreticiler, karmaşık mimari işler ve uzun kesinti zincirleri için
    genellenemez. Sonraki ölçüm farklı modellerle aynı görevlerin ve devir senaryolarının tekrarlanmasıdır.
 2. **Git geçmişi:** Shallow clone, squash sırasında trailer kaybı veya erişilemeyen geçmiş için sınırsız ID
    benzersizliği/kanıt garantisi yok. Araç eksik kanıtı tamamlanma saymaz; REFERENCE uzlaştırma yolunu anlatır.

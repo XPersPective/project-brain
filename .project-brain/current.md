@@ -1,7 +1,7 @@
 # Current Architecture
 
 ## Runtime
-- Python CLI, stdlib only; read-only Git subprocess queries. Advertises Python 3.8+; baseline tested on 3.11.15.
+- Python CLI, stdlib only; read-only Git subprocess queries. Full self-check suite passed on Python 3.8.20 and 3.11.15.
 - Skill instructions run through the host coding agent; no server or network service.
 
 ## Map
@@ -29,9 +29,12 @@ Sources: `skills/project-brain/scripts/**`
 - New tasks start PLANNED; domain LOAD includes Current and target context. Configuration round-trips quoted commands; migration keeps original input and finalizes schema last.
 
 ### Packaging
-Status: OBSERVED
+Status: VERIFIED
 Sources: `plugin.json`, `.claude-plugin/**`, `.agents/plugins/**`, `gemini-extension.json`, `assets/**`, `PRIVACY.md`, `CHANGELOG.md`
 - Version 2.1.0 in manifests, skill metadata and runtime.
+- Public GitHub v2.1.0 release includes ZIP and SHA256SUMS; unauthenticated download matches local artifact.
+- Public-repo installation verified in isolated Codex and Claude Code profiles and with the skills CLI.
+- Skill Manager central library and 41 managed installed-agent targets match the six released skill source files.
 
 ## Known Unknowns
 - GPT-6-Luna passed isolated narrow-fix/no-commit and legacy read-only scenarios; cross-vendor/general reliability remains unmeasured.
