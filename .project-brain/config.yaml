@@ -1,0 +1,14 @@
+schema_version: 4
+
+architecture:
+  mode: single          # single: current.md/target.md | domains: current/<d>.md, target/<d>.md
+
+git:
+  history_mode: unknown # preserve | squash | rewrite-prone | unknown
+  commit: auto          # auto: commit each checkpoint | ask: prepare the commit, ask the user
+  push: manual          # every-task | milestone | session-end | manual
+
+commands:               # exact commands; boot prints them so nobody rediscovers them
+  test: "python skills/project-brain/scripts/test_brain.py"
+  lint: ""
+  build: ""
