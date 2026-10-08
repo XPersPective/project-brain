@@ -101,6 +101,17 @@ brain.py migrate  [root] [--apply]   convert a legacy Brain
 
 Exit codes: 0 ok, 1 warnings, 2 errors, 3 no Project Brain.
 
+## What it runs, reads and writes
+
+- Runs only local commands: `git` (read-only queries such as `log`, `status`, `diff`, `ls-files`) and the
+  bundled Python scripts. The agent itself runs your project's own test/lint/build commands from `config.yaml`.
+- Reads files inside the current repository. Writes only `.project-brain/` and a short pointer block in the
+  project's `AGENTS.md` (plus an existing `CLAUDE.md` / `GEMINI.md`), and only when you run `init` or
+  `migrate --apply`.
+- No network access, no telemetry, no credentials. It never stores secrets and tells agents not to.
+- Commits and pushes happen only through the agent, following `git.commit` / `git.push` in `config.yaml`
+  and your platform's own permission rules.
+
 ## Repository layout
 
 ```text
