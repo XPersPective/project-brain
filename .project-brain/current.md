@@ -35,6 +35,7 @@ Sources: `plugin.json`, `.claude-plugin/**`, `.agents/plugins/**`, `gemini-exten
 - Public GitHub v2.1.0 release includes ZIP and SHA256SUMS; unauthenticated download matches local artifact.
 - Public-repo installation verified in isolated Codex and Claude Code profiles and with the skills CLI.
 - Skill Manager central library and 41 managed installed-agent targets match the six released skill source files.
+- Claude official submission recorded on 2026-10-09; v2.1.0 is queued for provider security scan/review, not live. OpenAI submission awaits login human verification.
 
 ## Known Unknowns
 - GPT-6-Luna passed isolated narrow-fix/no-commit and legacy read-only scenarios; cross-vendor/general reliability remains unmeasured.

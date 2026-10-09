@@ -90,6 +90,8 @@ Bu kurulum testleri sağlayıcıların resmî katalog onayı anlamına gelmez; G
   `745ead03e7b59186a4a3ddf78c43c293d874f0912e931711f2e198fd6e1338fd`; yerel paketle aynı.
 - Skill Manager mevcut yönetilen kaynağı güncelledi; yeni paralel global kopya oluşturulmadı.
   41 hedef için içerik doğrulaması yapıldı; 41 ayrı ajan çalışma zamanı testi yapıldığı iddia edilmiyor.
+- 2026-10-09: Claude resmî katalog başvurusu gönderildi; 2.1.0 algılandı. Güvenlik taraması ve Anthropic
+  incelemesi bekleniyor; henüz canlı katalog yayını yok. OpenAI girişi insan doğrulama adımında bekliyor.
 
 ## Kalan sınırlar ve ölçülmesi gerekenler
 
