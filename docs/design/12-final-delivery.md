@@ -59,12 +59,22 @@ their approved jobs. CLI process containment is not a filesystem/network sandbox
 
 ## Final repository cleanup
 
-Once implementation acceptance and checkpointing finish, remove only this repository's
-temporary `.project-brain/` and self-boot pointer, preserving source, tests, this delivery
-record, requirements, architecture decisions and Git history. Historical PB-006 directory
+After implementation acceptance and checkpointing, this repository's temporary
+`.project-brain/`, self-boot pointer and exact cache-ignore line were removed. Source,
+tests, this delivery record, requirements, architecture decisions and Git history remain. Historical PB-006 directory
 submission was outside scope and is not resumed; its provider-wait record stays in Git.
 The distributed skill still creates/uses `.project-brain/` in consumer projects normally.
 
 Final checks after removal: full test entry point, version/manifests `3.1.0`, `boot` gives
 NO_BRAIN on this source repository, no stale self-boot instructions, clean worktree and
 remote branch HEAD matches local HEAD. The ordered overview records the final ticks.
+
+## Observed final removal
+
+Accepted implementation checkpoints: `25e0b93` (PB009), `474b312` (PB010); final pre-removal handoff: `a4e84df`. ADR001/003 remain in `docs/design/decisions/`.
+
+Archive: `D:\repositories\.project-brain-archives\project-brain-final-20261018T052047.zip`
+
+SHA-256: `e47c6cf5fcea7af9cd99b5a9a48cdf4fe2fa0990798d4568025b5daeb64a55f5` (38 entries, every member hash and ZIP CRC verified). The exact tracking tree contained no links/reparse points and was removed only after verification. Original AGENTS/ignore files are included. Independent review approved the removal plan.
+
+Post-removal verification on 2026-10-18: full `test_brain.py` entry point exited 0, including pool, routing, adoption, migration/recovery, protocol and process verification checks. All 13 Python scripts parsed with Python 3.8 grammar. All three distribution manifests and the CLI report 3.1.0 (project schema 4). Source-repository boot returned NO_BRAIN with approval required; no tracker directory, self-boot marker or own cache-ignore line remains. `git diff --check` passed. Final Git commit/push and remote equality are checked at delivery; use the overview commands to recheck the current branch.
