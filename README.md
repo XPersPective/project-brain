@@ -1,5 +1,7 @@
 # Project Brain
 
+Current release: **3.2.1** — [release notes](https://github.com/XPersPective/project-brain/releases/tag/v3.2.1).
+
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
 The protocol is designed for different model sizes; reliable execution still depends on the agent

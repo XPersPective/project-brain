@@ -2,7 +2,7 @@
 name: project-brain
 description: >-
   Git-native project memory, architecture, quality enforcement, and multi-agent
-  CLI orchestration protocol (v3.2) that lets coding agents (Claude, Codex,
+  CLI orchestration protocol (v3.2.1) that lets coding agents (Claude, Codex,
   OpenCode, Antigravity, OmniRoute, Qwen, ZCode, or others) plan, delegate, verify,
   review, and resume software projects from recorded repository state. Enforces
   Frontend Design System & UI Triad verification, Backend Clean Architecture &
@@ -18,7 +18,7 @@ metadata:
   author: XPersPective
 ---
 
-# Project Brain 3.2
+# Project Brain 3.2.1
 
 **One plan, many agents, verified handoffs.** Any session can end at any moment (token limit, crash, model switch). Another agent can continue from the repository alone. That works because:
 1. **State lives in files and commits**, never only in chat;

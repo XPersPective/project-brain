@@ -1,4 +1,4 @@
-# Project Brain 3.2 — Session Pool, CLI Discovery and Delegation
+# Project Brain 3.2.1 — Session Pool, CLI Discovery and Delegation
 
 Load this file when measuring task complexity, scanning installed CLI coding agents, managing subscription token quotas, or delegating `Tier L` / `Tier M` tasks to CLI worker sub-agents.
 

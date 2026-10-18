@@ -27,7 +27,7 @@
       "interface": {
         "displayName": "Project Brain",
         "shortDescription": "Plan, delegate, verify, review, and resume projects with quota-aware CLI workers",
-        "longDescription": "Project Brain 3.2 keeps a project’s state in the repository: verified architecture, user-owned goal, Design System & Clean Architecture ADRs, and prioritized executable tasks. A stdlib Python runtime scores task complexity (Tier L/M/H), discovers installed CLI coding agents (Codex, Claude, OpenCode, Antigravity, OmniRoute, Qwen, ZCode), auto-starts local OmniRoute gateway when needed, reads live subscription quotas with 10%/25% reserve floors, delegates Tier L/M tasks to low/medium-effort workers inside ProcessTree, and binds checks, UI Triad evidence, and independent reviews to source/contract digests.",
+        "longDescription": "Project Brain 3.2.1 keeps a project’s state in the repository: verified architecture, user-owned goal, Design System & Clean Architecture ADRs, and prioritized executable tasks. A stdlib Python runtime scores task complexity (Tier L/M/H), discovers installed CLI coding agents (Codex, Claude, OpenCode, Antigravity, OmniRoute, Qwen, ZCode), auto-starts local OmniRoute gateway when needed, reads live subscription quotas with 10%/25% reserve floors, delegates Tier L/M tasks to low/medium-effort workers inside ProcessTree, and binds checks, UI Triad evidence, and independent reviews to source/contract digests.",
         "developerName": "XPersPective",
         "category": "Productivity",
         "websiteURL": "https://github.com/XPersPective/project-brain",
