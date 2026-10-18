@@ -27,7 +27,7 @@ Son commit/remote durumu `git log -1`, `git status --short` ve `git ls-remote --
 - [x] Her eski dosya için hedef veya açık atılma gerekçesi olan iz doğrulanıyor. Dış arşiv doğrulanmadan silinmiyor; kaynak/hedef değişimi, kod/asset/özel dosya, link ve ilgisiz AGENTS kuralının kaldırılması reddediliyor.
 - [x] `legacy --prepare/--verify/--cleanup` durumu/jurnali, kısmi arşiv hatası, temizlik sırasında kesinti, tekrar çalıştırma ve sonraki boot'ta eski planın geri gelmemesi test edildi.
 - [x] Sürüm 3.1.0, proje şeması4 ve makine oturum şeması1 olarak kaynak/manifests tutarlı; kullanıcı projelerinin eski şema geçişi korunuyor.
-- [ ] Son kaynak-bağlı kabul kayıtları ve tam regresyon/bağımsız inceleme checkpoint'i tamamlanacak.
+- [x] Son kaynak-bağlı kabul kayıtları, tam regresyon ve bağımsız inceleme checkpoint'i tamamlandı (25e0b93, 474b312).
 - [ ] Bütün işler bittikten sonra yalnız BU deponun geçici `.project-brain/` geliştirme planı ve self-boot pointer'ı kaldırılacak; ürün kaynakları/testleri/normal belgeler korunacak.
 - [ ] Temizlikten sonra son test, NO_BRAIN kaynak-repo boot kontrolü, commit/push ve uzak HEAD eşleşmesi doğrulanacak.
 
