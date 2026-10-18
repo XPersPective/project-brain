@@ -14,11 +14,11 @@ description: >-
   or auditing a multi-session project.
 license: MIT
 metadata:
-  version: 3.0.0
+  version: 3.1.0
   author: XPersPective
 ---
 
-# Project Brain 3.0
+# Project Brain 3.1
 
 **One plan, many agents, verified handoffs.** Any session can end at any moment (token limit, crash, model switch). Another agent can continue from the repository alone. That works because:
 1. **State lives in files and commits**, never only in chat;
@@ -38,6 +38,7 @@ In `.project-brain/`:
 - `PB new . "title" [--priority P1] [--tier L|M|H] [--risk HIGH] [--depends PB-001]` — create the next task.
 - `PB score [PB-NNN] [--write] [--json]` — measure task complexity (`0..100`), computed Tier (`L|M|H`), recommended effort (`low|medium|high`), risk floor, and worker delegation eligibility.
 - `PB agents <scan|quota|list|select|merge>` — scan installed CLI coding agents (`codex`, `claude`, `gemini`, `opencode`, `agy`, `qwen`, etc.), read live subscription quotas, and select the lowest-cost model meeting the quality floor and quota reserve (`10%` worker reserve, `25%` director reserve).
+- `PB agents session [--new] [--refresh]` / `approve <selection.json> --session <id> --user-confirmed --note "<actual user decision>"` / `revoke` / `settle <job-id> --state completed|failed --note "<readback>"` — propose, confirm, revoke and recover a project/session model pool.
 - `PB delegate <PB-NNN> [--cli <cli>] [--model <alias>] [--effort low|medium|high] [--dry-run]` — dispatch a `Tier L/M` task to a CLI worker inside `ProcessTree` and automatically run `PB check`.
 - `PB start <PB-NNN> --agent <alias> [--takeover "<reason>"]` — claim a task (`Status: IN_PROGRESS`) and bind `Owner`, `Risk`, `areas_digest`, and `contract`.
 - `PB check <PB-NNN> [--as <alias>]` — run `Verify` commands inside `ProcessTree` and append digest-bound `[machine]` evidence.
@@ -58,7 +59,7 @@ Platform instructions, the user's authorized scope and applicable repository ins
 - **Evidence integrity**: `## Evidence` and `## Review` are written **only** by `PB start`, `PB check`, `PB evidence`, `PB review`, and `PB accept`. Never hand-write or forge digest/contract lines.
 - `git.commit: auto` → commit each checkpoint within existing authorization. With `ask`, prepare messages and retain DONE tasks with Evidence until approval.
 - Never force-push. Never `reset --hard`, `clean`, `stash`, `checkout --` or `restore` on work you did not create.
-- Ask the user only: at Genesis/adoption (§10 interview), when target is DRAFT and a decision blocks all work, when a task reaches `WAITING_USER`, or for the escalation list (§7).
+- Ask only for unresolved session pool/role confirmation (§2), Genesis decisions, a blocking DRAFT goal, WAITING_USER or §7 escalation. Existing explicit user authorization persists; do not ask again for an already approved scope or pool.
 
 ## 2. Boot
 
@@ -79,6 +80,37 @@ Run `PB boot`. Read its output and LOAD files, then route the user's message (§
 
 **Takeover check** (once per session, before new work): run the `test` command from CMDS, reading only its summary. Red → find the cause first; fix a regression caused by this request or blocking it. **Trust nothing unverified, including your predecessor.**
 
+### Session pool — before inference or delegation
+
+At a new top-level session, have an authorized low/mid-cost discovery worker inventory
+all installed CLI/provider resources and the previous registry. ZAI/MiniMax/Codex are
+examples, not a search limit. If no approved cheap worker exists, use deterministic
+metadata collection; never spend a director model or paid API to bootstrap discovery.
+Register host-native subagents as `cli: host` alongside CLI routes when the host exposes
+their model/effort metadata; never invent access or infer price from a model name.
+
+Run `agents session --new` (add `--refresh` only when metadata needs probing). Show the
+user concrete models, providers/CLIs, access and billing, remaining quota/windows/
+reset/freshness, proposed roles and efforts. Unknown is unknown. The user can approve
+all, exclude/add aliases, or promote/change roles. Write that decision as selection
+JSON and invoke `agents approve`; `--user-confirmed` records actual approval, never
+permission inferred from a task file. New model/CLI/billing configuration needs renewed
+approval. Task Tier measures complexity; model role groups belong to the user.
+
+For continuation/crash recovery reuse the recorded session and display `agents session`;
+do not rotate it in nested workers. Child workers inherit the pool ID. `select` previews
+are advisory until approved; actual dispatch has no unapproved high-model fallback.
+Known quotas obey the 10%/25% floors. An explicitly chosen route with unavailable quota
+needs a bounded `max_jobs` allowance; say that the numeric reserve cannot be proven.
+API billing additionally needs explicit paid authorization. An unresolved reserved job
+means readback before retry: inspect its CLI/session/log, then `agents settle`.
+
+Host-native dispatch prints `HOST_ACTION_PENDING` with a compact action packet; the
+parent uses the host's subagent tool with exactly that model/effort, then settles the
+job and runs `PB check`. Printing a packet is not execution or task completion. An
+unsupported adapter fails before spending; configure explicit argv/stdin for another
+installed CLI instead of guessing flags. See `AGENTS_CLI.md` for the JSON contract.
+
 ## 3. Intake — route the user's message
 
 | Message | Action |
@@ -92,13 +124,16 @@ Run `PB boot`. Read its output and LOAD files, then route the user's message (§
 | Plan / roadmap / audit request | §9 Plan audit (or §10 if no Brain). |
 
 Keep the user's words: a short quote goes into the task Objective (or the target Goal). Every item of a multi-part request becomes an Acceptance checkbox or its own task.
+An incoming message steers the active project unless it explicitly cancels/replaces it:
+write new requirements/decisions to durable tasks/docs first, preserve the current
+Next/Failing/Dirty step, incorporate immediate constraints, then resume the main work.
 
 ## 4. Loop & Multi-Agent Delegation
 
 1. **Select & Score**: Pick the `IN_PROGRESS` or `REVIEW` task, else the highest-priority `READY` task with evidenced completed dependencies. Run `PB score <PB-NNN> --write` to confirm its computed Tier (`L|M|H`), effective Risk (`LOW|MEDIUM|HIGH`), recommended effort (`low|medium|high`), and whether it is `DELEGATABLE`.
 2. **Route Execution (Lead vs. CLI Worker)**:
    - **Delegatable `Tier L` or `Tier M` task**: If local CLI worker agents are available (`PB agents scan` / `PB agents select --task <PB-NNN>`), prefer dispatching via `PB delegate <PB-NNN>` so a lower-cost model/subscription executes the implementation at `low` or `medium` effort while preserving the lead model's quota (see `AGENTS_CLI.md`).
-   - **Lead execution (`Tier H` or when no worker CLI is suitable)**: Run `PB start <PB-NNN> --agent <your-model-id>` and implement the Steps directly.
+   - **Lead execution (`Tier H`)**: the approved director handles architecture/security decisions and independent review. For routine work with no suitable approved worker, preserve Resume and select another user-approved route; never silently spend the director's account as a fallback.
 3. **Load**: Read the task, the Current section of its Domains, `constraints.md`, linked ADRs, and `QUALITY.md` if touching UI or backend/state layers.
 4. **Implement & Observe**:
    - Follow `QUALITY.md` strictly:
@@ -214,6 +249,19 @@ PB-Reviewer: <reviewer model alias, when reviewed>
 
 1. `PB map`. Read only manifests, entry points, agent instruction files, and README (≤15 files).
 2. If foreign planning files exist (`.store-automation`, `.taskmaster`, `memory-bank`, `.kiro`, `TODO.md`), run `PB legacy` to preview and `PB legacy --apply` to adopt non-publishing tasks.
+   Read all useful source intent before refining imports: user goal (preserve original
+   approval status), current facts (reverify), constraints, decisions, open work/deps,
+   Resume and unresolved External operations. Do not copy completed task history or
+   publication scope into the active queue. For unsupported/custom trackers, semantic
+   mapping is the agent's responsibility; no blind deletion.
+   After reconciliation, `PB legacy --prepare [--path <tracking-path>]` creates
+   `.project-brain/adoption.json`. Map every source to useful destination files or an
+   explicit drop reason, and list exact obsolete instruction blocks. `PB legacy --verify
+   --note "<actual reconciliation>"` binds sources/targets; `PB legacy --cleanup` first
+   creates and verifies a recoverable archive outside the project, then removes only
+   verified tracking files/pointers/ignore entries. Retry its journal after interruption;
+   changed sources/destinations block removal. Never remove application code, team-owned
+   README/ROADMAP or global skills. The next boot continues from one compact Brain.
 3. `PB init` (creates `.project-brain/` skeleton and adds pointer block to `AGENTS.md`).
 4. Run `PB agents scan` to discover installed CLI coding agents and subscription quotas on the machine.
 5. Fill `current.md` (`Runtime`, `Map`, `Domains` with `Sources:` globs and `VERIFIED|OBSERVED|INFERRED|UNKNOWN`).

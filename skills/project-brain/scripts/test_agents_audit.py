@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import brain as B
 import runtime_agents as A
+import runtime_pool as P
 
 
 def quiet(fn, *args, **kwargs):
@@ -94,7 +95,11 @@ def main():
         assert rc == 2 and "eligible registered" in text, text
         rc, text = quiet(A.delegate_task, B, root, "PB-001", model_override="worker", dry_run=True, reg_path=registry)
         assert rc == 0 and "DELEGATE_PLAN" in text, text
-        # Unknown and old quota must stop before any worker process can start.
+        # Explicit role approval alone does not allow unbounded unknown/stale quota.
+        proposal = P.propose(B, root, registry)
+        P.approve(B, root, {"models": {"worker": {"roles": ["worker"], "efforts": ["low", "medium", "high"],
+                                                "billing": "subscription"}}}, proposal["session_id"], registry,
+                  confirmed=True, note="User chose this temporary test worker, without an unknown-quota allowance")
         with patch.object(B, "cmd_start", side_effect=AssertionError("must not start")):
             for pool in ({}, {"remaining_pct": 80, "updated_at": "2020-01-01T00:00:00Z"}):
                 loaded["pools"]["local"] = pool
@@ -107,9 +112,13 @@ def main():
         rc, text = quiet(A.delegate_task, B, root, "PB-001", model_override="worker", dry_run=True, reg_path=registry)
         assert rc == 2 and "owned by somebody" in text, text
         task_file.write_text(task_text, encoding="utf-8")
-        loaded["pools"]["local"] = {"plan_type": "free"}
+        loaded["pools"]["local"] = {"plan_type": "local"}
         loaded["cli_agents"] = {"claude": {"binary": sys.executable}}
         A.save(loaded, registry)
+        proposal = P.propose(B, root, registry, new=True)
+        P.approve(B, root, {"models": {"worker": {"roles": ["worker"], "efforts": ["low", "medium", "high"],
+                                                "billing": "local", "max_jobs": 2}}},
+                  proposal["session_id"], registry, confirmed=True, note="User permits two harmless local test workers")
         child = (
             "import sys\n"
             f"sys.path.insert(0, {str(Path(A.__file__).parent)!r})\n"
@@ -170,6 +179,32 @@ def main():
         assert any('"dependencies": [' in p.read_text(encoding="utf-8") for p in sources)
         rc, text = quiet(A.cmd_legacy, B, root, apply=True)
         assert rc == 0 and "created 0" in text, text
+
+    # Import interrupted after scaffold creation resumes without losing the original spec.
+    with tempfile.TemporaryDirectory(prefix="pb-import-retry-") as folder:
+        root = Path(folder)
+        old = root / ".store-automation/tasks/SA-001.md"
+        old.parent.mkdir(parents=True)
+        original = "# SA-001 — Shared title\nStatus: READY\n\n## Objective\nFirst source intent.\n"
+        old.write_text(original, encoding="utf-8")
+        create = B.cmd_new
+        def interrupt(*args, **kwargs):
+            create(*args, **kwargs)
+            raise OSError("crash after task scaffold")
+        with patch.object(B, "cmd_new", side_effect=interrupt):
+            try:
+                quiet(A.cmd_legacy, B, root, apply=True)
+            except OSError:
+                pass
+            else:
+                raise AssertionError("scaffold interruption was not injected")
+        quiet(A.cmd_legacy, B, root, apply=True)
+        tasks = B.list_tasks(root)
+        assert len(tasks) == 1 and "preserved original" in tasks[0]["objective"]
+        assert original in [p.read_text(encoding="utf-8") for p in (root / ".project-brain/migration-backup/imported").glob("*")]
+        old.with_name("SA-002.md").write_text(original.replace("First source intent", "Different source intent"), encoding="utf-8")
+        quiet(A.cmd_legacy, B, root, apply=True)
+        assert len(B.list_tasks(root)) == 2, "matching titles must not discard different source intent"
     print("OK: agent routing, bounded probe, delegation guards, lossless scoped adoption")
 
 

@@ -144,6 +144,21 @@ Session died (crash, timeout, context exhaustion). Possible leftovers:
 | `.git/index.lock` | no git process running (check) → delete the lock |
 | merge/rebase markers | see Conflicts |
 
+For model jobs, `agents session` shows persisted reservations. Never create a new
+session to erase `reserved`/`response_unknown`: read the CLI/native-host result and
+`agents settle` with the actual readback. The pool must still match project/session
+and execution configuration before another job is reserved.
+
+For foreign-plan cleanup, `.project-brain/adoption.json` records PREPARED → VERIFIED →
+ARCHIVED → CLEANING → CLEANED. Before VERIFIED the host reconciles each source into
+compact Brain documents/tasks/ADRs or records a justified drop. Before any unlink,
+cleanup checks a complete out-of-project ZIP archive and source/destination hashes.
+Retry CLEANING against that archive; never reconstruct missing originals as success
+without it. Unexpected new/changed files stop cleanup. Exact reviewed instruction
+blocks and matching ignore entries are removed; unrelated instructions stay.
+Human-owned README/ROADMAP are never automatic cleanup targets. An explicit custom
+tracking path still cannot contain application code or private/infrastructure paths.
+
 ## Migrations
 
 Persistent-state changes are HIGH risk. Check: up and down migration, rollback plan, old/new app

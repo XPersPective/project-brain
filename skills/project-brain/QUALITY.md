@@ -91,3 +91,29 @@ Reviewers (`PB review`) must emit `- finding QUALITY: <defect>` whenever a UI im
 - Database/schema changes verify forward migration and a safe rollback or backward-compatibility recovery path against non-empty data. Never fabricate a destructive `down` merely to tick a box.
 - List/collection endpoints must bound page size and eliminate N+1 query patterns.
 - External side effects must be tracked in `## External` (`prepared -> sent -> confirmed | failed | response_unknown`) so interrupted sessions perform readback before retrying.
+
+## 3. Shared task protocol and scenario matrix
+
+Before a worker starts, the director specifies the product journey, existing decisions,
+exact ownership/data/error contract, applicable states, affected callers and observable
+acceptance. Reuse standard/native patterns before adding code. The approved session
+pool selects a model and supported effort for that bounded job; no expensive fallback.
+
+| Scenario | Required observation where applicable |
+| --- | --- |
+| First journey | UI action → real service/storage → readback; no mock presented as real acceptance |
+| Loading/empty/failure | Visible state, meaningful copy, input preserved, retry/back/cancel works |
+| Permission/authorization | Allowed actor/resource succeeds; denied actor cannot read/mutate |
+| Double submit/concurrent retry | Exactly one effect or a documented conflict; pending UI remains usable |
+| Lost response after commit | Readback resolves uncertainty before resend; persistence is not duplicated |
+| Storage/network failure and restart | Data preserved, bounded retries/timeouts, recoverable state visible |
+| Migration/schema evolution | Nonempty old data survives forward change and rollback/compatibility path |
+| Visual/accessibility | Named compact/wide renders, long locale/text, keyboard/focus and platform targets |
+| Agent interruption | Source/spec digests checked, Resume matches actual files, reserved jobs settled |
+| Model/quota change | Excluded/changed route cannot launch; explicit approval and reserve checks hold |
+
+Independent review checks each tick against its own current evidence and reports
+BLOCKER/MAJOR/QUALITY gaps. Source review never substitutes for rendered or interaction
+proof. When a capability is absent, record its concrete blocker rather than claiming
+the scenario passed. This is an engineering protocol, not an AWS/cloud service or a
+guarantee made from a checklist alone.

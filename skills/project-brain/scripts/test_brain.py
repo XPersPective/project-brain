@@ -582,3 +582,9 @@ if __name__ == "__main__":
     protocol_audit()
     verify_audit()
     agents_audit()
+    from test_pool import main as pool_checks
+    from test_routing import main as routing_checks
+    pool_checks()
+    routing_checks()
+    from test_adopt import main as adoption_checks
+    adoption_checks()

@@ -3,6 +3,7 @@ cost-aware model routing, CLI worker delegation, and foreign planning adoption. 
 
 from datetime import datetime, timezone
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -19,8 +20,8 @@ import runtime_verify as V
 
 DEFAULT_REGISTRY = Path.home() / ".project-brain" / "agents.json"
 STORE_AUTOMATION_MODELS = Path.home() / ".store-automation" / "models.json"
-ROLES = ("lead", "worker", "reviewer")
-EFFORTS = ("low", "medium", "high", "xhigh")
+ROLES = ("lead", "worker", "reviewer", "discovery")
+EFFORTS = ("low", "medium", "high", "xhigh", "default")
 
 # Minimum quality score required by (tier, risk)
 QUALITY_FLOOR = {
@@ -90,6 +91,9 @@ CLI_SPECS = (
     ("mcode", ("mcode",), "MCode CLI"),
     ("kimi", ("kimi",), "Moonshot Kimi CLI"),
     ("omniroute", ("omniroute",), "OmniRoute router CLI"),
+    ("hermes", ("hermes",), "Hermes CLI"),
+    ("lmstudio", ("lmstudio", "lms"), "LM Studio CLI"),
+    ("ollama", ("ollama",), "Ollama CLI"),
 )
 
 
@@ -509,14 +513,14 @@ def probe_codex_info(exe_path):
                     models.append(item["slug"])
         except ValueError:
             pass
-    if not models:
-        models = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.1-codex-mini"]
+    if not models and default_model:
+        models = [default_model]
     rc, out, err = _run_probe([exe_path, "login", "status"], timeout=5)
     status = (out + err).lower()
     logged_in = rc == 0 and "logged in" in status and "chatgpt" in status
     return {
         "authenticated": logged_in,
-        "default_model": default_model or "gpt-5.3-codex",
+        "default_model": default_model,
         "default_effort": default_effort,
         "models": models,
     }
@@ -623,54 +627,28 @@ def scan_agents(path=None, probe_quota=True, persist=True):
                 if q:
                     pool.update(q)
                     entry["quota"] = q
-            for m_id, cost, tiers, roles, efforts in (
-                ("gpt-5.1-codex-mini", 0.25, ["L", "M"], ["worker"], ["low", "medium", "high"]),
-                ("gpt-5.2-codex", 1.0, ["L", "M", "H"], ["worker", "reviewer"], ["low", "medium", "high", "xhigh"]),
-                ("gpt-5.3-codex", 1.2, ["L", "M", "H"], ["lead", "worker", "reviewer"], ["low", "medium", "high", "xhigh"]),
-                ("gpt-5.4", 1.8, ["M", "H"], ["lead", "worker", "reviewer"], ["low", "medium", "high", "xhigh"]),
-            ):
+            for m_id in entry["models"]:
                 data["models"].setdefault(f"codex/{m_id}", {
                     "cli": "codex",
                     "model_id": m_id,
                     "pool": "codex",
                     "benchmark_key": norm_key(m_id),
-                    "cost_weight": cost,
-                    "tiers": tiers,
-                    "roles": roles,
-                    "efforts": efforts,
-                    "available": entry["authenticated"] and m_id in entry["models"],
+                    "cost_weight": 1.0,
+                    "tiers": [],
+                    "roles": [],
+                    "efforts": ["low", "medium", "high", "xhigh"],
+                    # Cached model names and login state do not establish model entitlement.
+                    "available": False,
                 })
         elif cli_id == "opencode":
             oc_models = probe_opencode_models(exe)
-            entry["models"] = oc_models[:30]
-            data["pools"].setdefault("opencode-free", {"remaining_pct": None, "reserve_pct": 0.0, "plan_type": "unknown"})
+            entry["models"] = oc_models
+            data["pools"].setdefault("opencode-catalog", {"remaining_pct": None, "reserve_pct": 10.0, "plan_type": "unknown"})
             for om in oc_models:
-                if om.startswith("opencode/"):
-                    short = om.split("/", 1)[1]
-                    data["models"].setdefault(om, {
-                        "cli": "opencode",
-                        "model_id": om,
-                        "pool": "opencode-free",
-                        "benchmark_key": norm_key(short),
-                        "cost_weight": 0.05,
-                        "tiers": ["L", "M"],
-                        "roles": ["worker"],
-                        "efforts": ["low", "medium", "high"],
-                        "available": True,
-                    })
-                elif om.startswith("openai/") and ("codex" in om or "gpt-5" in om):
-                    short = om.split("/", 1)[1]
-                    data["models"].setdefault(f"opencode:{om}", {
-                        "cli": "opencode",
-                        "model_id": om,
-                        "pool": "codex",
-                        "benchmark_key": norm_key(short),
-                        "cost_weight": 0.35 if "mini" in short or "nano" in short else 1.1,
-                        "tiers": ["L", "M"] if "mini" in short or "nano" in short else ["L", "M", "H"],
-                        "roles": ["worker"] if "mini" in short or "nano" in short else ["lead", "worker", "reviewer"],
-                        "efforts": ["low", "medium", "high"],
-                        "available": True,
-                    })
+                data["models"].setdefault(f"opencode:{om}", {
+                    "cli": "opencode", "model_id": om, "pool": "opencode-catalog",
+                    "roles": [], "tiers": [], "efforts": ["default"], "available": False,
+                })
         elif cli_id == "claude":
             cstat = probe_claude_status(exe)
             cstat["authenticated"] = bool(cstat.get("authenticated") and cstat.get("subscription_type") and cstat.get("auth_method") != "api_key")
@@ -680,81 +658,32 @@ def scan_agents(path=None, probe_quota=True, persist=True):
                 "reserve_pct": WORKER_RESERVE_PCT,
                 "plan_type": cstat.get("subscription_type") or "subscription",
             })
-            for m_id, cost, tiers, roles in (
-                ("claude-sonnet-4-6", 1.4, ["L", "M", "H"], ["lead", "worker", "reviewer"]),
-                ("claude-opus-4-6", 3.0, ["H"], ["lead", "reviewer"]),
-            ):
-                data["models"].setdefault(f"claude/{m_id}", {
-                    "cli": "claude",
-                    "model_id": m_id,
-                    "pool": "claude",
-                    "benchmark_key": norm_key(m_id),
-                    "cost_weight": cost,
-                    "tiers": tiers,
-                    "roles": roles,
-                    "efforts": ["low", "medium", "high"],
-                    "available": entry["authenticated"],
-                })
         elif cli_id == "gemini":
-            gem_dir = Path.home() / ".gemini"
             entry["authenticated"] = False  # Local credential files do not prove usable subscription access.
             data["pools"].setdefault("gemini", {"remaining_pct": None, "reserve_pct": WORKER_RESERVE_PCT})
-            for m_id, cost, tiers, roles in (
-                ("gemini-2.5-flash", 0.2, ["L", "M"], ["worker"]),
-                ("gemini-2.5-pro", 1.2, ["M", "H"], ["lead", "worker", "reviewer"]),
-            ):
-                data["models"].setdefault(f"gemini/{m_id}", {
-                    "cli": "gemini",
-                    "model_id": m_id,
-                    "pool": "gemini",
-                    "benchmark_key": norm_key(m_id),
-                    "cost_weight": cost,
-                    "tiers": tiers,
-                    "roles": roles,
-                    "efforts": ["low", "medium", "high"],
-                    "available": entry["authenticated"],
-                })
         elif cli_id == "qwen":
-            qwen_dir = Path.home() / ".qwen"
             entry["authenticated"] = False
             data["pools"].setdefault("qwen", {"remaining_pct": None, "reserve_pct": WORKER_RESERVE_PCT})
-            data["models"].setdefault("qwen/qwen3-coder-plus", {
-                "cli": "qwen",
-                "model_id": "qwen3-coder-plus",
-                "pool": "qwen",
-                "benchmark_key": "qwen3-coder-plus",
-                "cost_weight": 0.4,
-                "tiers": ["L", "M"],
-                "roles": ["worker"],
-                "efforts": ["low", "medium", "high"],
-                "available": entry["authenticated"],
-            })
         elif cli_id == "agy":
             data["pools"].setdefault("agy", {"remaining_pct": None, "reserve_pct": DIRECTOR_RESERVE_PCT})
-            for m_id, cost, tiers, roles in (
-                ("claude-opus-4-6", 3.0, ["H"], ["lead", "reviewer"]),
-                ("claude-sonnet-4-6", 1.5, ["M", "H"], ["lead", "worker", "reviewer"]),
-                ("gemini-3.1-pro", 1.4, ["M", "H"], ["lead", "worker", "reviewer"]),
-            ):
-                data["models"].setdefault(f"agy/{m_id}", {
-                    "cli": "agy",
-                    "model_id": m_id,
-                    "pool": "agy",
-                    "benchmark_key": norm_key(m_id),
-                    "cost_weight": cost,
-                    "tiers": tiers,
-                    "roles": roles,
-                    "efforts": ["low", "medium", "high"],
-                    "available": False,
-                })
+        if cli_id in ("mcode", "kimi", "hermes") and not any(
+                isinstance(spec, dict) and spec.get("cli") == cli_id for spec in data["models"].values()):
+            data["pools"].setdefault(cli_id, {"remaining_pct": None, "reserve_pct": WORKER_RESERVE_PCT})
+            data["models"].setdefault(f"{cli_id}/default", {
+                "cli": cli_id, "model_id": "default", "pool": cli_id,
+                "roles": [], "tiers": [], "efforts": ["default"], "available": False,
+            })
         discovered[cli_id] = entry
-    for spec in data["models"].values():
-        if isinstance(spec, dict) and spec.get("cli"):
-            entry = discovered.get(spec["cli"])
-            spec["available"] = bool(entry and entry.get("authenticated") and (
-                spec.get("cli") != "codex" or spec.get("model_id") in entry.get("models", [])
-            ))
-    data["cli_agents"] = discovered
+    for cli_id, entry in discovered.items():
+        existing = (data.get("cli_agents") or {}).get(cli_id)
+        if existing and isinstance(existing, dict):
+            # Preserve explicitly configured adapter and other local CLI metadata.
+            entry = {**existing, **entry}
+            for key in ("binary", "worker_argv"):
+                if existing.get(key) is not None:
+                    entry[key] = existing[key]
+            discovered[cli_id] = entry
+    data["cli_agents"] = {**(data.get("cli_agents") or {}), **discovered}
     if persist:
         save(data, path)
     return data
@@ -791,7 +720,8 @@ def _benchmark_for(data, alias, spec):
 
 
 def _quality(bm):
-    vals = [bm[k] for k in ("coding", "quality", "intelligence") if isinstance(bm.get(k), (int, float))]
+    vals = [bm[k] for k in ("coding", "quality", "intelligence")
+            if type(bm.get(k)) in (int, float)]
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
@@ -799,7 +729,10 @@ def _pool_status(data, spec, role, tier):
     pool_name = spec.get("pool")
     pool = (data.get("pools") or {}).get(pool_name or "") or {}
     rem = pool.get("remaining_pct")
-    reserve = float(pool.get("reserve_pct", WORKER_RESERVE_PCT))
+    raw_reserve = pool.get("reserve_pct", WORKER_RESERVE_PCT)
+    if type(raw_reserve) not in (int, float):
+        return False, None, "invalid quota reserve"
+    reserve = float(raw_reserve)
     if not math.isfinite(reserve) or not 0 <= reserve <= 100:
         return False, None, "invalid quota reserve"
     if rem is not None and (type(rem) not in (int, float) or not math.isfinite(rem) or not 0 <= rem <= 100):
@@ -843,21 +776,34 @@ def candidates(data, role="worker", tier="M", risk="MEDIUM", exclude="", cli_fil
         tiers = [t.upper() for t in (spec.get("tiers") or ("L", "M", "H"))]
         if role not in roles or tier not in tiers:
             continue
-        p_ok, rem_pct, _ = _pool_status(data, spec, role, tier)
-        if not p_ok:
+        p_ok, rem_pct, pool_reason = _pool_status(data, spec, role, tier)
+        if not p_ok and not spec.get("user_approved"):
+            continue
+        if not p_ok and spec.get("user_approved") and ("invalid" in pool_reason or pool_reason.startswith("pool ")):
             continue
         bm = _benchmark_for(data, alias, spec)
         q = _quality(bm)
-        effective_q = q if q is not None else (float(spec["quality"]) if isinstance(spec.get("quality"), (int, float)) else None)
-        if effective_q is None or not math.isfinite(effective_q):
+        effective_q = q if q is not None else (float(spec["quality"]) if type(spec.get("quality")) in (int, float) else None)
+        if effective_q is not None and not math.isfinite(effective_q):
+            if spec.get("user_approved"):
+                effective_q = None
+            else:
+                continue
+        if effective_q is None and not spec.get("user_approved"):
             continue
-        if effective_q < floor:
+        if effective_q is not None and effective_q < floor and not spec.get("user_approved"):
             continue
-        cost = float(spec.get("cost_weight", 1.0))
+        try:
+            cost = float(spec.get("cost_weight", 1.0))
+        except (TypeError, ValueError):
+            cost = 1.0
+        if not math.isfinite(cost):
+            cost = 1.0
+        quality_sort = effective_q if effective_q is not None else 0.0
         if tier in ("L", "M") and role == "worker":
-            sort_key = (cost, -(rem_pct if rem_pct is not None else 50.0), -effective_q, alias)
+            sort_key = (cost, -(rem_pct if rem_pct is not None else 50.0), -quality_sort, alias)
         else:
-            sort_key = (-effective_q, cost, -(rem_pct if rem_pct is not None else 50.0), alias)
+            sort_key = (-quality_sort, cost, -(rem_pct if rem_pct is not None else 50.0), alias)
         row = {
             "alias": alias,
             "cli": spec.get("cli", ""),
@@ -878,12 +824,21 @@ def candidates(data, role="worker", tier="M", risk="MEDIUM", exclude="", cli_fil
     return [r for _, r in primary_rows] + [r for _, r in fallback_rows]
 
 
-def gate(B, task, alias, action, path=None):
+def gate(B, task, alias, action, path=None, root=None):
     """Validate that `alias` is permitted for `action` (start/review/accept) on `task`."""
     p = registry_path(path)
     if not alias or not p.exists():
         return
     data = load(p)
+    selected = None
+    if root is not None:
+        import runtime_pool as P
+        session = P.load_session(root, p)
+        if session and session.get("status") == "APPROVED":
+            data, session = P.approved_data(B, root, data, p)
+            selected = session["selection"].get("models", {}).get(alias)
+            if selected is None:
+                raise ValueError(f"{alias}: not selected in the approved model pool")
     models = data.get("models") or {}
     if not models:
         return
@@ -901,6 +856,13 @@ def gate(B, task, alias, action, path=None):
     if not spec.get("available", True):
         raise ValueError(f"{alias}: marked unavailable in model registry")
     roles = [r.lower() for r in (spec.get("roles") or ROLES)]
+    if selected:
+        needed_roles = ({"lead"} if action == "start" and score_task(B, None, task)["effective_tier"] == "H"
+                        else {"worker", "lead"} if action == "start"
+                        else {"reviewer", "lead"} if action == "review"
+                        else {"worker", "lead", "reviewer"})
+        if not (set(selected["roles"]) & needed_roles):
+            raise ValueError(f"{alias}: role is outside the approved pool selection for {action}")
     scored = score_task(B, None, task) if task else None
     tier = scored["effective_tier"] if scored else "M"
     tier = tier if tier in B.TIER_VALUES else "M"
@@ -913,12 +875,12 @@ def gate(B, task, alias, action, path=None):
         if tier not in tiers and "lead" not in roles:
             raise ValueError(f"{alias}: tier {tier} not allowed (tiers: {', '.join(tiers)})")
         p_ok, _, reason = _pool_status(data, spec, "worker" if tier != "H" else "lead", tier)
-        if not p_ok:
+        if not p_ok and (not spec.get("user_approved") or "invalid" in reason):
             raise ValueError(f"{alias}: {reason}")
         quality = _quality(_benchmark_for(data, alias, spec))
         if quality is None:
             quality = spec.get("quality")
-        if not isinstance(quality, (int, float)) or not math.isfinite(quality) or quality < QUALITY_FLOOR[(tier, risk)]:
+        if not spec.get("user_approved") and (not isinstance(quality, (int, float)) or not math.isfinite(quality) or quality < QUALITY_FLOOR[(tier, risk)]):
             raise ValueError(f"{alias}: quality below tier={tier} risk={risk} floor")
     elif action == "review":
         if "reviewer" not in roles and "lead" not in roles:
@@ -929,7 +891,7 @@ def gate(B, task, alias, action, path=None):
         quality = _quality(_benchmark_for(data, alias, spec))
         if quality is None:
             quality = spec.get("quality")
-        if not isinstance(quality, (int, float)) or not math.isfinite(quality) or quality < QUALITY_FLOOR[(tier, risk)]:
+        if not spec.get("user_approved") and (not isinstance(quality, (int, float)) or not math.isfinite(quality) or quality < QUALITY_FLOOR[(tier, risk)]):
             raise ValueError(f"{alias}: reviewer quality below tier={tier} risk={risk} floor")
         if task:
             impl = V.implementers(B, task)
@@ -942,7 +904,7 @@ def gate(B, task, alias, action, path=None):
                     bm_imp = _quality(_benchmark_for(data, imp, imp_spec))
                     if bm_imp is None:
                         bm_imp = imp_spec.get("quality")
-                    if bm_rev is not None and bm_imp is not None and bm_rev < bm_imp:
+                    if not spec.get("user_approved") and bm_rev is not None and bm_imp is not None and bm_rev < bm_imp:
                         raise ValueError(f"reviewer {alias} (quality {bm_rev}) is weaker than implementer {imp} (quality {bm_imp})")
 
 
@@ -973,60 +935,93 @@ def build_worker_prompt(B, root, task, score_info):
     return "\n".join(rules)
 
 
-def _worker_command(cli_name, binary, root, model_id, effort, prompt):
+def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config=None, prompt_file=""):
     """Construct the exact non-interactive CLI command + optional stdin payload."""
     root_str = str(Path(root).resolve())
+    if cli_name == "mcode" and effort != "default" and re.search(r"(?:^|[-_])m3(?:$|[.-])", model_id, re.I):
+        raise ValueError("MiniMax-M3 does not support a worker effort setting")
+    if cli_name in ("opencode", "agy") and prompt_file:
+        prompt = f"Read the task instructions from {prompt_file} and execute them."
+    template = (cli_config or {}).get("generic_worker_argv", (cli_config or {}).get("worker_argv"))
+    if template is not None:
+        prompt_stdin = cli_config.get("prompt_stdin")
+        if prompt_stdin is not None and type(prompt_stdin) is not bool:
+            raise ValueError(f"invalid prompt_stdin adapter setting for {cli_name}")
+        if not isinstance(template, list) or not template or any(not isinstance(item, str) for item in template):
+            raise ValueError(f"invalid worker_argv adapter for {cli_name}")
+        allowed = {"binary", "root", "model", "effort", "prompt", "prompt_file"}
+        values = {"binary": binary, "root": root_str, "model": model_id,
+                  "effort": effort, "prompt": prompt, "prompt_file": prompt_file}
+        argv = []
+        for raw in template:
+            names = re.findall(r"\{([^{}]+)\}", raw)
+            if any(name not in allowed for name in names):
+                raise ValueError(f"unknown worker_argv placeholder for {cli_name}")
+            value = raw
+            for name in names:
+                value = value.replace("{" + name + "}", str(values[name]))
+            if "{" in value or "}" in value:
+                raise ValueError(f"invalid worker_argv placeholder for {cli_name}")
+            argv.append(value)
+        if not argv[0]:
+            raise ValueError(f"worker_argv binary is empty for {cli_name}")
+        return argv, prompt if prompt_stdin is True else None
     if cli_name == "codex":
-        argv = [
-            binary, "exec",
-            "-m", model_id,
-            "-c", f"model_reasoning_effort='{effort}'",
-            "--cd", root_str,
-            "--sandbox", "workspace-write",
-            "-c", "approval_policy='never'",
-            "-",
-        ]
+        argv = [binary, "exec"]
+        if model_id != "default":
+            argv += ["-m", model_id]
+        if effort != "default":
+            argv += ["-c", f"model_reasoning_effort='{effort}'"]
+        argv += ["--cd", root_str, "--sandbox", "workspace-write",
+                 "-c", "approval_policy='never'", "-"]
         return argv, prompt
     if cli_name == "opencode":
-        argv = [
-            binary, "run", "--pure",
-            "-m", model_id,
-            "--variant", effort,
-            "--dir", root_str,
-            prompt,
-        ]
-        return argv, None
+        argv = [binary, "run", "--pure"]
+        if model_id != "default":
+            argv += ["-m", model_id]
+        if effort != "default":
+            argv += ["--variant", effort]
+        return argv + ["--dir", root_str, prompt], None
     if cli_name == "claude":
-        argv = [
-            binary, "-p",
-            "--model", model_id,
-            "--effort", effort,
-            "--permission-mode", "acceptEdits",
-        ]
-        return argv, prompt
+        argv = [binary, "-p"]
+        if model_id != "default":
+            argv += ["--model", model_id]
+        if effort != "default":
+            argv += ["--effort", effort]
+        return argv + ["--permission-mode", "acceptEdits"], prompt
     if cli_name == "gemini":
-        argv = [
-            binary, "-p", "Execute the task provided on stdin.",
-            "-m", model_id,
-            "--approval-mode", "auto_edit",
-        ]
-        return argv, prompt
+        argv = [binary, "-p", "Execute the task provided on stdin."]
+        if model_id != "default":
+            argv += ["-m", model_id]
+        return argv + ["--approval-mode", "auto_edit"], prompt
     if cli_name == "agy":
-        argv = [
-            binary,
-            "--model", model_id,
-            "--effort", effort,
-            "--mode", "auto",
-            "--print", prompt,
-        ]
-        return argv, None
+        argv = [binary]
+        if model_id != "default":
+            argv += ["--model", model_id]
+        if effort != "default":
+            argv += ["--effort", effort]
+        return argv + ["--mode", "auto", "--print", prompt], None
     if cli_name == "qwen":
-        argv = [
-            binary, "-p", "Execute the task provided on stdin.",
-            "-m", model_id,
-        ]
+        argv = [binary, "-p", "Execute the task provided on stdin."]
+        if model_id != "default":
+            argv += ["-m", model_id]
+        return argv, prompt
+    if cli_name == "mcode":
+        argv = [binary, "exec", "--input", "-", "--cwd", root_str,
+                "--prompt-mode", "coding", "--permission", "full", "--mode", "lightweight"]
+        if model_id != "default":
+            argv += ["--model", model_id]
+        if effort != "default":
+            if model_id == "default":
+                raise ValueError("MCode default model effort support is unknown; select effort=default")
+            argv += ["--effort", effort]
         return argv, prompt
     raise ValueError(f"unsupported worker CLI: {cli_name}")
+
+
+def _check_batch_args(argv):
+    if argv and Path(argv[0]).suffix.lower() in (".cmd", ".bat") and any(V.BATCH_META.search(arg) for arg in argv):
+        raise ValueError("Unsafe Windows batch arguments; use a native executable or a CLI accepting the prompt on stdin")
 
 
 def delegate_task(B, root, tid, cli_filter="", model_override="", effort_override="",
@@ -1062,8 +1057,22 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
         return 2
 
     data = load(reg_path)
-    if not data.get("cli_agents") and not data.get("models"):
-        data = scan_agents(reg_path, probe_quota=not dry_run, persist=not dry_run)
+    dispatch_config = data
+    approved_session = None
+    if dry_run:
+        import runtime_pool as P
+        pool_session = P.load_session(root, reg_path)
+        if pool_session and pool_session.get("status") == "APPROVED":
+            data, approved_session = P.approved_data(B, root, data, reg_path)
+        elif not data.get("cli_agents") and not data.get("models"):
+            data = scan_agents(reg_path, probe_quota=False, persist=False)
+    else:
+        import runtime_pool as P
+        try:
+            data, approved_session = P.approved_data(B, root, data, reg_path)
+        except ValueError as exc:
+            print(f"FAIL {task['id']}: {exc}; approve a model pool before dispatch")
+            return 2
 
     eligible = candidates(data, role="worker", tier=sinfo["effective_tier"], risk=sinfo["effective_risk"], cli_filter=cli_filter)
 
@@ -1092,15 +1101,50 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
     cli_name = chosen["cli"]
     cli_entry = (data.get("cli_agents") or {}).get(cli_name) or {}
     binary = cli_entry.get("binary") or which_cli((cli_name,))
-    if not binary and not dry_run:
+    if cli_name != "host" and not binary and not dry_run:
         print(f"FAIL {task['id']}: CLI binary for `{cli_name}` not found on system")
         return 2
     binary = binary or cli_name
 
     prompt = build_worker_prompt(B, root, task, sinfo)
-    argv, stdin_text = _worker_command(cli_name, binary, root, chosen["model_id"], chosen["effort"], prompt)
-    if Path(binary).suffix.lower() in (".cmd", ".bat") and any(V.BATCH_META.search(a) for a in argv[1:]):
-        raise ValueError("Unsafe Windows batch arguments; use a native executable or a CLI accepting the prompt on stdin")
+    if cli_name == "host":
+        if dry_run:
+            print(f"DELEGATE_PLAN {task['id']}: native host handoff preview")
+            if not approved_session:
+                print("PREVIEW ONLY: model pool approval required before dispatch")
+            return 0
+        import runtime_pool as P
+        job_id = P.reserve(B, root, dispatch_config, chosen["alias"], chosen["effort"], reg_path,
+                           expected_session_id=approved_session["session_id"])
+        try:
+            rc = B.cmd_start(root, task["id"], agent=chosen["alias"], agents_path=reg_path)
+        except ValueError as exc:
+            P.finish(B, root, job_id, exit_code=2, registry=reg_path)
+            print(f"FAIL {task['id']}: {exc}")
+            return 2
+        if rc != 0:
+            P.finish(B, root, job_id, exit_code=rc, registry=reg_path)
+            return rc
+        action = {"alias": chosen["alias"], "model_id": chosen["model_id"],
+                  "effort": chosen["effort"], "task_id": task["id"],
+                  "prompt": prompt[:20000], "job_id": job_id,
+                  "session_id": approved_session["session_id"],
+                  "root": str(Path(root).resolve()),
+                  "registry": str(registry_path(reg_path).resolve()),
+                  "environment": {"PB_SESSION_ID": approved_session["session_id"]}}
+        print("HOST_ACTION_PENDING " + json.dumps(action, ensure_ascii=False))
+        return 0
+
+    if chosen["model_id"] == "default" and not (cli_entry.get("generic_worker_argv") or cli_entry.get("worker_argv")):
+        print(f"FAIL {task['id']}: default provider route is unverified; select an explicit model ID or configure an adapter")
+        return 2
+
+    prompt_file = ""
+    if os.name == "nt" and cli_name in ("opencode", "agy") and Path(binary).suffix.lower() in (".cmd", ".bat"):
+        prompt_file = f".project-brain/.cache/runs/{task['id']}-worker-prompt.txt"
+    argv, stdin_text = _worker_command(cli_name, binary, root, chosen["model_id"], chosen["effort"], prompt,
+                                       cli_entry, prompt_file)
+    _check_batch_args(argv)
 
     if dry_run:
         rem = f"{chosen['remaining_pct']}%" if chosen.get("remaining_pct") is not None else "unmetered"
@@ -1108,34 +1152,30 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
             f"DELEGATE_PLAN {task['id']}: cli={cli_name} model={chosen['model_id']} effort={chosen['effort']} "
             f"tier={sinfo['effective_tier']} score={sinfo['score']}/100 pool_remaining={rem}"
         )
+        if not approved_session:
+            print("PREVIEW ONLY: model pool approval required before dispatch")
         print(f"  cmd: {subprocess.list2cmdline(argv)}")
         return 0
 
-    pool = data["pools"].setdefault(chosen["pool"], {})
-    if cli_name == "codex":
-        if not probe_codex_info(binary).get("authenticated"):
-            print(f"FAIL {task['id']}: verified Codex subscription login required; API billing fallback is disabled")
-            return 2
-        quota = probe_codex_quota(binary)
-        if not quota:
-            print(f"FAIL {task['id']}: current subscription quota could not be verified")
-            return 2
-        pool.update(quota)
-        allowed, _, reason = _pool_status(data, data["models"][chosen["alias"]], "worker", sinfo["effective_tier"])
-        if not allowed:
-            print(f"FAIL {task['id']}: {reason}")
-            return 2
-    if pool.get("plan_type") != "free":
-        try:
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(pool.get("updated_at", "").replace("Z", "+00:00"))).total_seconds()
-        except (ValueError, TypeError):
-            age = float("inf")
-        remaining = pool.get("remaining_pct")
-        if not isinstance(remaining, (int, float)) or not math.isfinite(remaining) or not 0 <= age <= 300:
-            print(f"FAIL {task['id']}: pool quota is unknown or stale; refresh `agents quota` before dispatch")
-            return 2
-    rc = B.cmd_start(root, task["id"], agent=chosen["alias"], agents_path=reg_path)
+    if prompt_file:
+        prompt_path = V.public_path(root, prompt_file)
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        B.write_atomic(prompt_path, prompt)
+    import runtime_pool as P
+    try:
+        job_id = P.reserve(B, root, dispatch_config, chosen["alias"], chosen["effort"], reg_path,
+                           expected_session_id=approved_session["session_id"])
+    except ValueError as exc:
+        print(f"FAIL {task['id']}: {exc}")
+        return 2
+    try:
+        rc = B.cmd_start(root, task["id"], agent=chosen["alias"], agents_path=reg_path)
+    except ValueError as exc:
+        P.finish(B, root, job_id, exit_code=2, registry=reg_path)
+        print(f"FAIL {task['id']}: {exc}")
+        return 2
     if rc != 0:
+        P.finish(B, root, job_id, exit_code=rc, registry=reg_path)
         return rc
 
     rdir = V.public_path(root, ".project-brain/.cache/runs")
@@ -1156,10 +1196,13 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
         logf.flush()
         with V.ProcessTree() as tree:
             try:
+                child_env = {k: v for k, v in os.environ.items() if not V.SECRET_ENV.search(k)}
+                if approved_session:
+                    child_env["PB_SESSION_ID"] = approved_session["session_id"]
                 proc = tree.spawn(
                     run_cmd,
                     cwd=str(root),
-                    env={k: v for k, v in os.environ.items() if not V.SECRET_ENV.search(k)},
+                    env=child_env,
                     stdin=payload if stdin_text is not None else subprocess.DEVNULL,
                     stdout=logf,
                     stderr=subprocess.STDOUT,
@@ -1170,9 +1213,15 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
                 proc.wait(timeout=timeout)
                 rc = proc.returncode
             except subprocess.TimeoutExpired:
+                P.finish(B, root, job_id, exit_code=None, registry=reg_path)
                 logf.write(f"\nTIMEOUT after {timeout}s\n")
                 print(f"FAIL {task['id']}: worker `{chosen['alias']}` timed out after {timeout}s (log: {log_rel})")
                 return 2
+            except Exception:
+                P.finish(B, root, job_id, exit_code=None, registry=reg_path)
+                raise
+
+    P.finish(B, root, job_id, exit_code=rc, registry=reg_path)
 
     elapsed = time.monotonic() - t0
     print(f"WORKER_DONE {task['id']}: {chosen['alias']} (effort={chosen['effort']}) exit={rc} in {elapsed:.1f}s (log: {log_rel})")
@@ -1190,6 +1239,38 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
 def run_agents(B, args):
     p = registry_path(getattr(args, "registry", None))
     sub = args.agents_cmd
+    if sub in ("session", "approve", "revoke", "settle"):
+        import runtime_pool as P
+        root = Path(args.root).resolve()
+        inherited_session_id = os.environ.get("PB_SESSION_ID")
+        inherited_session = P.load_session(root, p) if inherited_session_id else None
+        if inherited_session_id and (not inherited_session or inherited_session.get("session_id") != inherited_session_id):
+            raise ValueError("worker session does not match the current project pool")
+        if inherited_session_id and sub in ("approve", "revoke", "settle"):
+            raise ValueError("delegated workers cannot change or settle the inherited model pool session")
+        if sub == "session":
+            if inherited_session_id:
+                if getattr(args, "new", False) or getattr(args, "refresh", False):
+                    raise ValueError("delegated workers cannot rotate or refresh the inherited model pool session")
+                session = inherited_session
+            else:
+                session = P.propose(B, root, p, new=getattr(args, "new", False),
+                                    refresh=getattr(args, "refresh", False))
+        elif sub == "approve":
+            selection_path = Path(args.file)
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
+            session = P.approve(B, root, selection, args.session_id, p,
+                                confirmed=getattr(args, "user_confirmed", False), note=args.note)
+        elif sub == "revoke":
+            session = P.revoke(B, root, p)
+        else:
+            session = P.settle(B, root, args.job_id, args.state, args.note, p)
+        if getattr(args, "json", False):
+            print(json.dumps(session, indent=2, ensure_ascii=False))
+        else:
+            for line in P.summary(B, root, p):
+                print(line)
+        return 0
     if sub == "scan":
         data = scan_agents(p, probe_quota=not getattr(args, "no_quota", False))
         if getattr(args, "json", False):
@@ -1270,13 +1351,19 @@ def run_agents(B, args):
             risk = risk or sinfo["effective_risk"]
         tier = tier if tier in B.TIER_VALUES else ("H" if role == "lead" else "M")
         risk = risk if risk in B.RISK_VALUES else "MEDIUM"
+        import runtime_pool as P
+        pool_session = P.load_session(Path(args.root).resolve(), p)
+        approved = bool(pool_session and pool_session.get("status") == "APPROVED")
+        if approved:
+            data, pool_session = P.approved_data(B, Path(args.root).resolve(), data, p)
         cands = candidates(data, role=role, tier=tier, risk=risk, exclude=getattr(args, "exclude", ""), cli_filter=getattr(args, "cli", ""))
         if not cands:
             print(f"NONE role={role} tier={tier} risk={risk}")
             return 2
         best = cands[0]
         if getattr(args, "json", False):
-            print(json.dumps({"selected": best, "fallbacks": cands[1:4]}, indent=2, ensure_ascii=False))
+            print(json.dumps({"selected": best, "fallbacks": cands[1:4],
+                              "approval_required": not approved}, indent=2, ensure_ascii=False))
             return 0
         q_txt = f"{best['quality']:.1f}" if best["quality"] is not None else "?"
         rem_txt = f"{best['remaining_pct']}%" if best["remaining_pct"] is not None else "unmetered"
@@ -1284,6 +1371,8 @@ def run_agents(B, args):
             f"SELECT {best['alias']} cli={best['cli']} model={best['model_id']} effort={best['effort']} "
             f"role={role} tier={tier} risk={risk} quality={q_txt} cost={best['cost_weight']} pool={rem_txt}"
         )
+        if not approved:
+            print("PREVIEW ONLY: model pool approval required before dispatch")
         if len(cands) > 1:
             print("FALLBACK " + ", ".join(f"{c['alias']}({c['effort']})" for c in cands[1:4]))
         return 0
@@ -1388,25 +1477,35 @@ def cmd_legacy(B, root, apply=False):
         return migrate.run(root, apply=True)
     if not B.brain_exists(root):
         B.cmd_init(root)
-    existing_titles = {t["title"].lower() for t in B.list_tasks(root)}
     created = 0
     for c in candidates_list:
-        if c["title"].lower() in existing_titles:
-            continue
         title = " ".join(str(c["title"]).split())
-        rc = B.cmd_new(root, title, depends="", risk="MEDIUM", priority="P2", tier="M")
-        if rc:
-            return rc
-        task = next(t for t in B.list_tasks(root) if t["title"] == title)
-        source_rel = f".project-brain/migration-backup/imported/{task['id']}-source.md"
+        raw = c.get("text") or c.get("objective") or title
+        source_id = hashlib.sha256((c["source"] + "\0" + raw).encode("utf-8")).hexdigest()[:16]
+        source_rel = f".project-brain/migration-backup/imported/{source_id}-source.md"
         # ponytail: conservative publication keywords can skip mixed tasks; manually split them before importing.
         source = V.public_path(root, source_rel)
         source.parent.mkdir(parents=True, exist_ok=True)
-        B.write_atomic(source, c.get("text") or c.get("objective") or title)
+        if not source.exists():
+            B.write_atomic(source, raw)
+        tasks = B.list_tasks(root)
+        if any(source_rel in t["objective"] for t in tasks):
+            continue
+        # Recover only an untouched scaffold left by a crash, never an existing user's spec.
+        partial = [t for t in tasks if t["title"] == title and t["status"] == "PLANNED"
+                   and t["text"].strip() == B.TASK_TMPL.format(id=t["id"], title=title, status="PLANNED",
+                        risk="MEDIUM", priority="P2", tier="M", deps="-").strip()]
+        if partial:
+            task = partial[0]
+        else:
+            before = {t["id"] for t in tasks}
+            rc = B.cmd_new(root, title, depends="", risk="MEDIUM", priority="P2", tier="M")
+            if rc:
+                return rc
+            task = next(t for t in B.list_tasks(root) if t["id"] not in before)
+            created += 1
         body = B.read(task["file"])
         objective = f"Imported from `{c['source']}`. Read the preserved original at `{source_rel}` before refining this task."
         B.write_atomic(task["file"], body.replace("<what and why, in the user's words>", objective, 1))
-        existing_titles.add(title.lower())
-        created += 1
     print(f"ADOPTED: created {created} PLANNED tasks in .project-brain/tasks/")
     return 0

@@ -208,9 +208,28 @@ evidence, title/file ID mismatch, missing ADR, tracked `.cache/` files, size bud
 - `.project-brain/.cache/` is gitignored and disposable (`runs/*.log` check/delegation logs, `writer.lock`). Deleting it must never lose intent, target, constraints, tasks, or rationale.
 - `~/.project-brain/agents.json` stores machine-local CLI agent paths, benchmark scores, and live subscription quota pools (`PB agents scan|quota|list|select|merge`).
 - The wire format remains schema 4 in v3.0.0; the earlier design's proposed schema 5 was not implemented. `WAITING_USER` is BLOCKED with a reason; `READBACK_FIRST` is a boot result, and failed reviews are handled through REVIEW/start, not extra persisted task statuses.
+- v3.1 also retains project schema 4. Machine-local `sessions/<project-hash>.json`
+  beside the registry uses its own schema 1: PROPOSED/APPROVED/REVOKED, project/session
+  ID, sanitized inventory, configuration digest, explicit selection/approval note and
+  reserved/running/response_unknown/completed/failed jobs. It never lives in config.yaml.
+  Known quota snapshots expire after 5 minutes; an approved max_jobs cap is required for
+  unknown/stale quota. Attempts remain counted after completion or readback settlement.
+  New proposals cannot discard unsettled jobs. `default` effort means no effort selector.
 - IDs and hashes provide freshness/integrity checks, not signatures or authenticated identities. A trusted agent must observe evidence, and actual user approval is needed for a user-owned waiver.
 
 # Migration (`brain.py migrate`)
+
+Foreign adoption uses `legacy --apply` for supported task extraction, followed by
+semantic reconciliation and `legacy --prepare [--path <tracker>]`. Its schema-1
+`adoption.json` has roots, per-file source hashes and targets/drop reasons, exact
+instruction removals, verification snapshots and archive/journal state. Destinations
+must be useful public files outside removed roots; Brain tasks/current/target/ADRs
+are allowed, cache/trace/legacy backups are not completion targets. `legacy --verify
+--note "<review>"` validates the plan and binds mappings. `legacy --cleanup
+[--archive-dir <outside-project>]` verifies the archive before deletion and supports
+crash retry. This explicit trace supports unfamiliar trackers without pretending the
+parser can semantically understand every vendor format. Unresolved external operations
+must survive in mapped targets and cannot simply be dropped.
 
 Preview by default; `--apply` writes; nothing is deleted. Original inputs are copied to
 `.project-brain/migration-backup/` before updates; retries never overwrite those copies. Config is

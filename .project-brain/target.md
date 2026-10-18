@@ -17,10 +17,10 @@ Status: CONFIRMED
 - Full backward compatibility with Project Brain schemas 0–4 (`migrate.py`) plus foreign state adoption (`legacy`: `.store-automation`, `.taskmaster`, `memory-bank`, `.kiro/specs`, `.factory`).
 
 ### Distribution
-- Version `3.0.0` (schema 4, backward-compatible) across `SKILL.md`, `brain.py`, `plugin.json`, `.claude-plugin/`, `.agents/plugins/`, `gemini-extension.json`, `README.md`, `CHANGELOG.md`.
+- Version `3.1.0` (project schema 4, machine session schema 1) across `SKILL.md`, `brain.py`, `plugin.json`, `.claude-plugin/`, `gemini-extension.json`, `README.md`, `CHANGELOG.md`.
 - Local agent installations and global rules updated so all installed agents use Project Brain 3.0.
 
-### Confirmed follow-ups (2026-10-18; not implemented by PB-008)
+### Confirmed follow-ups (2026-10-18; implemented after PB-008, verification in PB-009/PB-010)
 - PB-009: At session start, cheap-agent inventory and cached model/CLI/access/quota summary; user confirms model groups/roles and additions/exclusions before inference. No automatic high-model or paid fallback.
 - PB-010: Compact, verified transfer of useful foreign tracking state followed by recoverable removal of obsolete files/pointers; one plan on next boot.
 - PB-011: After all project work is complete, remove this skill repository's own .project-brain development state and self-boot pointers, preserving source/tests/durable requirements.

@@ -1,5 +1,5 @@
 {
   "name": "project-brain",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Git-native project memory, UI/Backend quality enforcement, task complexity scoring, CLI agent discovery, quota management, and sub-agent delegation."
 }

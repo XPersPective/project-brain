@@ -44,7 +44,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -987,6 +987,9 @@ def cmd_boot(root):
     if not brain_exists(root):
         foreign = A.detect_foreign(root)
         print("STATE: NO_BRAIN")
+        import runtime_pool as P
+        for line in P.summary(sys.modules[__name__], root):
+            print(line)
         for fname, fpaths in foreign:
             print(f"  ! foreign planning state detected: {fname} ({', '.join(fpaths)}) -> run `legacy` to preview adoption")
         print("NEXT: Substantial work -> SKILL.md Genesis (`map`, then `init`). Small request -> just do it.")
@@ -1084,6 +1087,9 @@ def cmd_boot(root):
         state = "READBACK_FIRST"
     print(f"STATE: {state}")
     print(gitline)
+    import runtime_pool as P
+    for line in P.summary(sys.modules[__name__], root):
+        print(line)
     for n in notes:
         print(f"  ! {n}")
     tstat = target_status(root)
@@ -1389,7 +1395,7 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
     with checkout_lock(root):
         task = find_task(root, task_id)
         actor = agent_id(agent, "--agent")
-        A.gate(sys.modules[__name__], task, actor, "start", agents_path)
+        A.gate(sys.modules[__name__], task, actor, "start", agents_path, root=root)
         all_tasks = list_tasks(root)
         pending = [t["id"] for t in all_tasks for e in t.get("external", [])
                    if e["state"] in ("sent", "response_unknown")]
@@ -1633,7 +1639,7 @@ def cmd_doctor(root):
 
 
 BOOLEAN_FLAGS = {
-    "--apply", "--write", "--json", "--dry-run", "--force", "--no-quota", "-h", "--help", "--version"
+    "--apply", "--write", "--json", "--dry-run", "--force", "--no-quota", "--new", "--refresh", "--user-confirmed", "--prepare", "--verify", "--cleanup", "-h", "--help", "--version"
 }
 
 
@@ -1705,6 +1711,13 @@ def main():
     p = sub.add_parser("legacy")
     p.add_argument("root", nargs="?", default=".")
     p.add_argument("--apply", action="store_true")
+    phase = p.add_mutually_exclusive_group()
+    phase.add_argument("--prepare", action="store_true")
+    phase.add_argument("--verify", action="store_true")
+    phase.add_argument("--cleanup", action="store_true")
+    p.add_argument("--path", action="append", default=[])
+    p.add_argument("--note", default="")
+    p.add_argument("--archive-dir", default=None)
 
     p = sub.add_parser("start")
     p.add_argument("pos1")
@@ -1761,6 +1774,23 @@ def main():
 
     p_ag = sub.add_parser("agents")
     ag_sub = p_ag.add_subparsers(dest="agents_cmd", required=True)
+    for pool_cmd in ("session", "approve", "revoke", "settle"):
+        sp = ag_sub.add_parser(pool_cmd)
+        if pool_cmd == "approve":
+            sp.add_argument("file")
+            sp.add_argument("--session", dest="session_id", required=True)
+            sp.add_argument("--user-confirmed", action="store_true")
+            sp.add_argument("--note", required=True)
+        if pool_cmd == "settle":
+            sp.add_argument("job_id")
+            sp.add_argument("--state", choices=("completed", "failed"), required=True)
+            sp.add_argument("--note", required=True)
+        if pool_cmd == "session":
+            sp.add_argument("--new", action="store_true")
+            sp.add_argument("--refresh", action="store_true")
+        sp.add_argument("root", nargs="?", default=".")
+        sp.add_argument("--json", action="store_true")
+        sp.add_argument("--registry", default=None)
     for ag_name in ("scan", "list", "quota"):
         sp = ag_sub.add_parser(ag_name)
         sp.add_argument("root", nargs="?", default=".")
@@ -1856,6 +1886,24 @@ def main():
         import migrate
         return migrate.run(root, a.apply)
     if a.cmd == "legacy":
+        if a.prepare or a.verify or a.cleanup:
+            import runtime_adopt as D
+            if a.apply:
+                raise ValueError("use import --apply separately before trace verification/cleanup")
+            with checkout_lock(root):
+                if a.prepare:
+                    result = D.prepare(B_mod, root, a.path)
+                elif a.verify:
+                    rc = cmd_validate(root)
+                    if rc != 0:
+                        raise ValueError("adoption verification requires a valid, reconciled Brain")
+                    result = D.verify(B_mod, root, a.note)
+                else:
+                    result = D.cleanup(B_mod, root, a.archive_dir)
+            print(f"ADOPTION: {result['state']} trace={D.trace_file(B_mod, root)}")
+            if result.get("archive"):
+                print("ARCHIVE: " + str(result["archive"]))
+            return 0
         return A.cmd_legacy(B_mod, root, apply=a.apply)
     return {
         "boot": cmd_boot,

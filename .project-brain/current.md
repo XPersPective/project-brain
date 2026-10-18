@@ -12,6 +12,8 @@
 - `skills/project-brain/scripts/brain.py` — v3.0 CLI entrypoint, task/config parsing, Git checkpoints, and command routing.
 - `skills/project-brain/scripts/runtime_verify.py` — `ProcessTree` containment, `public_path`, `digest`, `check`, `evidence`, `review`, `accept`.
 - `skills/project-brain/scripts/runtime_agents.py` — `score_task`, `scan_agents`, `probe_codex_quota`, `candidates`, `gate`, `delegate_task`, `cmd_legacy`.
+- `skills/project-brain/scripts/runtime_pool.py` — project/session proposal, configuration-bound user selection, bounded quota/job reservation, crash settlement and compact boot summary.
+- `skills/project-brain/scripts/runtime_adopt.py` — source/destination trace, out-of-project archive and resumable cleanup of obsolete tracking state (PB-010 in verification).
 - `skills/project-brain/scripts/migrate.py` — legacy Brain (`schema <= 3` and `PROJECT_BRAIN.md`) conversion.
 - `skills/project-brain/scripts/test_brain.py` — regression suite including `test_protocol_audit.py`, `test_verify_audit.py`, `test_agents_audit.py` for handoff, native locks, identity/review policy, deadlines, quota and adoption.
 - `docs/design/07-v3-master-prompt.md` — self-contained Master Prompt and architectural synthesis for Project Brain 3.0.
@@ -39,7 +41,7 @@ Sources: `skills/project-brain/scripts/**`
 ### Packaging
 Status: VERIFIED
 Sources: `plugin.json`, `.claude-plugin/**`, `.agents/plugins/**`, `gemini-extension.json`, `assets/**`, `PRIVACY.md`, `CHANGELOG.md`
-- Version `3.0.0` synchronized across `SKILL.md`, `brain.py`, `plugin.json`, `.claude-plugin/plugin.json`, `gemini-extension.json`, and `CHANGELOG.md`.
+- Version `3.1.0` synchronized across `SKILL.md`, `brain.py`, `plugin.json`, `.claude-plugin/plugin.json`, `gemini-extension.json`, and `CHANGELOG.md`; project schema stays 4, machine session schema 1.
 
 ## Known Unknowns
 - Full audit in PB-008; live model execution is not part of self-checks. CLI adapter/model availability depends on installed versions and explicit access. POSIX process groups require verification on a POSIX host; this session runs Windows.

@@ -78,6 +78,13 @@ read <path-to>/skills/project-brain/SKILL.md and follow it (first step: its boot
 
 ## Use
 
+At a new session, a low/mid-cost discovery worker (or local metadata tools when no
+worker is approved yet) prepares the model pool. Project Brain shows available
+CLI/native routes, access, billing and dated quota information. You approve or edit
+roles/models/efforts before jobs run; it does not fall back to the director's account.
+`agents session --new`, `agents approve`, `agents revoke` and `agents settle` expose
+that protocol. See [the session contract](skills/project-brain/AGENTS_CLI.md).
+
 | You say | The agent does |
 |---|---|
 | "set up project brain" / `/project-brain` | Genesis: maps the repo once, asks you the questions that shape the target, writes target + roadmap |
@@ -89,6 +96,13 @@ Already using Project Brain 1.x (`.project-brain/` schema ≤3) or a single-file
 `python <skill>/scripts/brain.py migrate` shows a preview; `migrate --apply` converts it and preserves
 original inputs in `.project-brain/migration-backup/` for review. Nothing is deleted; unrecognized content
 may need manual reconciliation. Missing target approval becomes DRAFT.
+
+For another tracking system, preview/import with `legacy`/`legacy --apply`, reconcile
+useful goals, constraints, decisions and open work into one compact Brain, then use
+`legacy --prepare`, `legacy --verify --note "<review>"`, `legacy --cleanup`. Every old
+file needs a reviewed destination or drop reason; cleanup verifies an outside-project
+archive and current source/destination hashes before removal. Source code and unrelated
+team docs are protected. Interrupted cleanup resumes its journal instead of reimporting.
 
 ## Helper script
 
@@ -123,9 +137,16 @@ Exit codes: 0 ok, 1 warnings / review or user feedback pending, 2 errors / block
 - Reads files inside the current repository. Writes `.project-brain/`, a short pointer block in the project's `AGENTS.md` (plus an existing `CLAUDE.md` / `GEMINI.md`), and the local agent registry `~/.project-brain/agents.json`.
 - Never reads or stores secret credential values.
 - Discovery is not access approval. Unknown or stale quota blocks worker dispatch;
-  model quality scores are routing estimates. Evidence hashes detect stale source/specs,
+  it needs an explicitly approved bounded job allowance to proceed. Model quality scores
+  are routing estimates. Evidence hashes detect stale source/specs,
   while actual visual, interaction and architecture quality requires independent review.
 - Store publishing, uploads, signing and release automation are outside this skill.
+
+Machine-local session files beside the agent registry bind user-selected roles and
+execution configuration. Changes require reapproval. Reservations survive a crashed
+CLI; inspect the actual result and settle the job before retrying. Native host handoff
+is an explicit action for the parent, not a claim that a model has run. Configured
+argv/stdin adapters allow additional installed CLIs without adding a dependency.
 - Commits and pushes happen only through the agent, following `git.commit` / `git.push` in `config.yaml` and your platform's own permission rules.
 
 Completed tasks keep their digest-bound Evidence and Review until committed. With no Git or deferred commits, DONE files stay in place so IDs and dependencies remain recoverable. A missing task by itself is not proof of completion.

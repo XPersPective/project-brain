@@ -7,7 +7,8 @@ Project Brain is an open-source skill (instructions plus local Python scripts) f
 - **No hosted service.** Project Brain has no server, analytics or telemetry of its own.
 - **Local state.** Scripts read repository files and Git metadata, write `.project-brain/`,
   instruction pointers, local verification/worker logs, and the machine registry
-  `~/.project-brain/agents.json` (CLI paths, model configuration, account/quota metadata).
+  `~/.project-brain/agents.json` (CLI paths, model configuration, account/quota metadata)
+  and adjacent project-scoped session records (user selections, approval note, job states).
   It does not intentionally read credential contents. Local task/log content may be sensitive;
   inspect it before sharing or committing it.
 - **Commands and providers.** `check` runs the configured Verify commands. `agents scan/quota`

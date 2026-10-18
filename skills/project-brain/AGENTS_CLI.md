@@ -1,6 +1,60 @@
-# Project Brain 3.0 — Complexity Scoring, CLI Agent Discovery, Quota Management & Sub-Agent Delegation
+# Project Brain 3.1 — Session Pool, CLI Discovery and Delegation
 
 Load this file when measuring task complexity, scanning installed CLI coding agents, managing subscription token quotas, or delegating `Tier L` / `Tier M` tasks to CLI worker sub-agents.
+
+## 0. Explicit session authority
+
+Models have no immutable H/M/L group: the user assigns director, worker, reviewer and
+discovery roles for the session. Task scores describe work complexity; seeded model
+ratings are advice. The lead designs architecture/specs and reviews; low/mid workers
+perform bounded implementation/inventory. No fallback spends the director's account.
+
+`agents session --new` creates a proposal from the machine registry; `--refresh` asks
+for bounded metadata probes. Have a cheap approved worker perform discovery; if none is
+available collect metadata deterministically without inference. Include host-native
+models when the platform supplies their IDs/efforts. Katalog does not prove access.
+
+Show the full proposal and let the user approve, add/remove or promote roles. Persist
+only the actual decision, e.g. this fictional selection (aliases must already exist):
+
+```json
+{
+  "models": {
+    "my-director": {"roles": ["lead", "reviewer"], "efforts": ["high"], "billing": "subscription", "max_jobs": 2},
+    "my-cli-worker": {"roles": ["worker", "discovery"], "efforts": ["low", "default"], "billing": "free", "max_jobs": 5},
+    "my-host-worker": {"roles": ["worker"], "efforts": ["low"], "billing": "subscription", "max_jobs": 3}
+  },
+  "exclude": ["expensive-route"]
+}
+```
+
+```text
+PB agents session --new --json
+PB agents approve selection.json --session <full-uuid> --user-confirmed --note "<actual user choice>"
+PB agents session
+PB agents revoke
+PB agents settle <job-uuid> --state completed --note "Read CLI output and verified actual result"
+```
+
+`default` means the CLI has no effort selector or the user accepts its native default;
+never send an unsupported `--effort` or silently substitute a higher effort. API billing
+requires `allow_paid: true` as part of actual user approval. Unknown/stale quota requires
+explicit `max_jobs`; the runtime counts attempts and refuses unbounded use. Known fresh
+quota still enforces reserve floors. New session/configuration invalidates approval;
+quota refresh alone does not. Never rotate away an unresolved reserved job: read back
+and settle it first. Sessions live beside the machine registry, outside source memory.
+
+Built-ins are conveniences. For another installed CLI configure `cli_agents.<id>.binary`,
+`worker_argv` (an argv array, no shell text), and `prompt_stdin`; supported placeholders
+are `{binary}`, `{root}`, `{model}`, `{effort}`, `{prompt}`, `{prompt_file}`. Put CLI/model
+metadata in `models` with a pool and supported efforts, then propose/approve. The exact
+installed CLI help is the authority for its flags. Providers behind a multi-provider CLI
+are separate billing routes. No credential content belongs in this registry/selection.
+
+For `cli: host`, delegate prints an explicit host action and reserves its job; the parent
+calls its native subagent tool with the approved model/effort, then settles and checks.
+The packet alone is not execution. Windows batch adapters receive a safe prompt-file
+pointer where needed; unsafe arguments are refused before reservation.
 
 ---
 
@@ -76,7 +130,7 @@ python "<path-to-brain.py>" agents select --role reviewer --tier H --risk HIGH -
 ### Subscription Quota Reserve Policy
 - **Worker Reserve Floor (`10%`)**: A pool at or below 10% is ineligible.
 - **Director Reserve Floor (`25%`)**: L/M workers cannot consume a pool at or below 25%, even when no alternative exists. Choose another eligible pool or stop dispatching.
-- **Unknown/stale quota**: Never treat it as 100% remaining. Actual delegation requires a fresh reading (5 minutes); an explicitly configured unmetered pool must still have authorized access. `select`/`--dry-run` are planning aids, not a reservation.
+- **Unknown/stale quota**: Never treat it as 100% remaining. Dispatch requires a fresh reading (5 minutes) or the user's explicit bounded `max_jobs` allowance for the approved route. A last-known value at/below reserve stays blocked until refreshed, even with an allowance. Known API billing cannot be relabeled free/local; paid authorization remains mandatory. `select`/`--dry-run` are planning aids, not a reservation.
 - Discovery, authentication, model availability, payment mode and quota are separate facts.
   An installed binary or API-key variable does not authorize paid usage. Do not read
   credential contents or switch to paid APIs automatically.

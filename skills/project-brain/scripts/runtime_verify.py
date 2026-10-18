@@ -599,7 +599,7 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None):
         ]
     if verdict not in ("PASS", "BLOCKED"):
         raise ValueError("Verdict must be PASS or BLOCKED")
-    runtime_agents.gate(B, task, reviewer, "review", agents_path)
+    runtime_agents.gate(B, task, reviewer, "review", agents_path, root=root)
     for f in findings:
         if any(ord(c) < 32 for c in f):
             raise ValueError("Finding must be one line without control characters")
@@ -649,7 +649,7 @@ def accept(B, root, task_id, actor="", agents_path=None):
     _actor(B, task, actor or task.get("owner", ""))
     import runtime_agents
 
-    runtime_agents.gate(B, task, actor or task.get("owner", ""), "accept", agents_path)
+    runtime_agents.gate(B, task, actor or task.get("owner", ""), "accept", agents_path, root=root)
     if not task.get("owner"):
         return 2, [f"FAIL {task['id']} has no Owner; `start` records who implemented it"]
     errors = B.task_errors(task)
@@ -723,7 +723,7 @@ def accept(B, root, task_id, actor="", agents_path=None):
             )
         else:
             try:
-                runtime_agents.gate(B, task, rev["reviewer"], "review", agents_path)
+                runtime_agents.gate(B, task, rev["reviewer"], "review", agents_path, root=root)
             except ValueError as error:
                 problems.append("reviewer policy: " + str(error))
             identity = runtime_agents.canonical_identity(rev["reviewer"], agents_path)

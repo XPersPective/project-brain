@@ -3,6 +3,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -76,6 +77,39 @@ def main():
         # Process death releases the native lock without deleting its inode.
         with B.checkout_lock(root, timeout=.1):
             pass
+
+    # Exercise the public CLI parser, approval gate and native handoff end to end.
+    with tempfile.TemporaryDirectory(prefix="pb-pool-cli-") as tmp:
+        root = Path(tmp)
+        with redirect_stdout(StringIO()):
+            B.cmd_init(root)
+        import runtime_agents as A
+        registry = root / "agents.json"
+        A.save({"models": {"host-worker": {"cli": "host", "model_id": "fake-native", "pool": "local",
+                                           "roles": ["worker"], "efforts": ["low"]}},
+                "pools": {"local": {}}, "cli_agents": {}}, registry)
+        env = dict(os.environ, PB_AGENTS_REGISTRY=str(registry))
+        def cli(*args):
+            return subprocess.run([sys.executable, B.__file__, *args], cwd=root, env=env,
+                                  text=True, encoding="utf-8", capture_output=True, timeout=15)
+        proposed = cli("agents", "session", "--new", "--json")
+        assert proposed.returncode == 0, proposed.stderr
+        session = json.loads(proposed.stdout)
+        selection = root / "selection.json"
+        selection.write_text(json.dumps({"models": {"host-worker": {"roles": ["worker"], "efforts": ["low"],
+                                                                    "billing": "local", "max_jobs": 1}}}), encoding="utf-8")
+        args = ("agents", "approve", str(selection), "--session", session["session_id"], "--note", "User selected this test host worker")
+        denied = cli(*args)
+        assert denied.returncode == 2 and "confirmed" in denied.stderr, denied.stdout + denied.stderr
+        approved = cli(*args, "--user-confirmed")
+        assert approved.returncode == 0 and "APPROVED" in approved.stdout, approved.stdout + approved.stderr
+        boot = cli("boot")
+        assert "MODEL_POOL: APPROVED" in boot.stdout, boot.stdout + boot.stderr
+        revoked = cli("agents", "revoke")
+        assert revoked.returncode == 0 and "REVOKED" in revoked.stdout
+        # Repeating session display does not silently approve a revoked pool.
+        display = cli("agents", "session", "--json")
+        assert json.loads(display.stdout)["status"] == "REVOKED", display.stdout
     print("OK: protocol audit checks passed")
 
 

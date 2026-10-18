@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.1.0 — 2026-10-18
+
+- Explicit project/session model proposals, user-controlled roles/efforts/billing and configuration-bound approval before actual delegation.
+- Bounded allowances for explicitly approved unknown-quota routes; reserve floors, persisted job reservations and readback/settlement after interrupted work.
+- Native-host handoff and configured argv/stdin adapters alongside installed CLI routes; low-cost metadata discovery without assumed provider access.
+- Recoverable, trace-verified foreign-plan cleanup and final removal of this repository's own development plan (consumer skill sources remain).
+
 ## 3.0.0 audit corrections — 2026-10-18
 
 - Close model-override, task-status and same-model-review bypasses; enforce current risk floors and HIGH full-suite checks.
