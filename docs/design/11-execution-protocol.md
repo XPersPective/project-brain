@@ -1,10 +1,7 @@
 # Completion protocol — session pools, execution and clean adoption
 
-Confirmed 2026-10-18. Continue PB-009 → PB-010 → final review/version → PB-011.
-The user authorizes implementation, tests, native subagents and source push without
-further permission. This session excludes Codex/Claude CLI inference and Antigravity
-jobs; OpenCode free routes, managed MiniMax/ZAI routes and native low/mid workers are
-authorized when their access/billing is established. No automatic paid API fallback.
+Current execution contract. Historical session permissions do not authorize new jobs;
+use the current user request and the approved model pool.
 
 ## Session state and authority
 
@@ -68,8 +65,6 @@ ancestors); document-format allowlists prevent selecting code/assets for cleanup
 Tests inject partial import, archive failure, instruction-rewrite interruption,
 source/destination drift and extra files, then assert preservation or safe retry.
 
-Finally test full runtime/scenarios, update consistent version/manifests and checklist,
-independently review, commit checkpoints, then remove this repository's temporary
-`.project-brain/` and self-pointer. Retain requirements, protocol, evidence summary,
-source/tests and Git history; never remove the distributed skill itself. Push and verify
-remote HEAD. No store publication, AWS service or new persistence dependency is added.
+For release, run the complete regression suite, keep version metadata consistent,
+commit and verify the pushed revision. This source repository has no active Brain
+plan; do not recreate its completed temporary tracker.

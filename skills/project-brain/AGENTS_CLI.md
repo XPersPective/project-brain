@@ -235,7 +235,7 @@ python "<path-to-brain.py>" agents select --role reviewer --tier H --risk HIGH -
 | `opencode` | `opencode` | `opencode --pure models` (free & subscription providers) | `opencode run --pure -m <provider/model> --variant <effort> --dir <root> "<prompt>"` |
 | `claude` | `claude` | `claude auth status` (auth metadata, not remaining quota) | `claude -p --model <model> --effort <effort> --permission-mode acceptEdits` (prompt on stdin) |
 | `agy` | `agy` | `agy --version` | `agy --model <model> --effort <effort> --mode auto --print "<prompt>"` |
-| `omniroute` | `omniroute` | Auto-starts `omniroute serve --daemon --no-open --no-tray` if `/api/health` is down; probes `omniroute api models get-api-models --output json` | `omniroute chat --stdin --no-history -m <model> [--reasoning-effort <effort>]` (prompt on stdin) |
+| `omniroute` | `omniroute` | Auto-starts `omniroute serve --daemon --no-open --no-tray` if `/api/health` is down; probes `omniroute api models get-api-models --output json` | Requires an explicitly configured coding-agent `worker_argv` adapter; `omniroute chat` has no repository tools and is excluded from automatic worker selection |
 | `qwen` | `qwen` | Access/quota require explicit registry data | `qwen -p "Execute the task provided on stdin." -m <model>` + stdin |
 
 ### Subscription Quota Reserve Policy

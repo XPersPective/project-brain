@@ -157,7 +157,7 @@ skills/project-brain/   the skill: SKILL.md, QUALITY.md, AGENTS_CLI.md, REFERENC
 .claude-plugin/         Claude Code plugin + marketplace manifests
 plugin.json             portable plugin manifest (Codex)
 .agents/plugins/        Codex marketplace
-docs/design/            design analysis, audit, and v3.0 master prompt
+docs/design/            current protocol, release verification, audit and architecture decisions
 ```
 
 ## Development

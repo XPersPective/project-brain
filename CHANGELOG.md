@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.2.1 — 2026-10-18
+
+- Preserve previously measured quota windows when a partial response omits, nulls or drops them, including Codex refresh and configured metadata commands.
+- Share one timeout budget across OmniRoute health checks, daemon startup and readiness polling.
+- Refuse built-in OmniRoute chat as a coding worker: it returns text without repository tools. Catalog discovery remains available; execution requires an explicit coding-agent adapter.
+- Expand adapter placeholders once so literal placeholder text inside prompts remains unchanged.
+
+- Remove superseded development plans and machine-specific audit notes; preserve runtime, tests, current protocol and architecture decisions.
+
 ## 3.2.0 — 2026-10-18
 
 - **OmniRoute Auto-Start, Full Catalog & Worker Dispatch (`runtime_agents.py`)**:

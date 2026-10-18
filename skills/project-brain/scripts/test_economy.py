@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import random
 import tempfile
+import subprocess
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import runtime_agents as A
@@ -43,6 +45,47 @@ def main():
         A._refresh_configured_quotas(data)
     assert data["pools"]["p"]["updated_at"] == old_stamp
     assert data["pools"]["p"]["quota_status"] == "invalid"
+    # A successful but incomplete response must not erase a known low window.
+    fresh_stamp = datetime.now(timezone.utc).isoformat()
+    for window in ({"weekly_7d_remaining_pct": None}, {"quota_windows": []},
+                   {"quota_windows": [{"name": "weekly", "remaining_pct": None}]},
+                   {"quota_windows": [{"name": "short", "remaining_pct": 80}]}):
+        old = {"remaining_pct": 5, "updated_at": old_stamp, "quota_argv": ["tool"]}
+        if "quota_windows" in window:
+            old["quota_windows"] = [{"name": "weekly", "remaining_pct": 5}]
+        else:
+            old["weekly_7d_remaining_pct"] = 5
+        snapshot = dict(window, remaining_pct=80, updated_at=fresh_stamp)
+        for codex in (False, True):
+            data = {"pools": {"codex": copy.deepcopy(old)}, "cli_agents": {"codex": {"binary": "tool"}}}
+            with patch.object(A, "load", return_value=data), patch.object(A, "save"), \
+                    patch.object(A, "probe_codex_quota", return_value=snapshot if codex else None), \
+                    patch.object(A, "_run_probe", return_value=(0, json.dumps(snapshot), "")):
+                A.refresh_quota()
+            assert data["pools"]["codex"]["quota_status"] == "invalid"
+            assert P._quota(data, {"pool": "codex"}) == (5.0, False)
+    pool = {"quota_windows": [{"name": "weekly", "remaining_pct": 5}]}
+    A._update_quota(pool, {"remaining_pct": 80, "updated_at": fresh_stamp,
+                          "quota_windows": [{"name": "weekly", "remaining_pct": 70}]})
+    assert pool["quota_status"] == "fresh" and P._quota({"pools": {"p": pool}}, {"pool": "p"}) == (70.0, True)
+
+    # One budget covers health checks, daemon launch, wait and polling.
+    clock = [0.0]
+    def elapse(seconds):
+        clock[0] += seconds
+    def unhealthy(timeout):
+        elapse(timeout)
+        return False
+    def waiting(timeout):
+        elapse(timeout)
+        raise subprocess.TimeoutExpired("fake daemon", timeout)
+    with patch.object(A.time, "monotonic", side_effect=lambda: clock[0]), \
+            patch.object(A.time, "sleep", side_effect=elapse), \
+            patch.object(A, "omniroute_server_up", side_effect=unhealthy), \
+            patch.object(A.Path, "is_file", return_value=True), \
+            patch.object(A.subprocess, "Popen", return_value=SimpleNamespace(wait=waiting)):
+        assert not A.ensure_omniroute_server("fake.exe", timeout=3)
+    assert clock[0] <= 3, clock
     registry = {"cli_agents": {"zcode": {"discovered_at": old_stamp, "available": True},
                                "gemini": {"discovered_at": old_stamp, "available": True}},
                 "models": {"z": {"cli": "zcode", "available": True},
@@ -103,9 +146,10 @@ def main():
     argv, stdin = A._worker_command("custom", "tool.exe", ".", "m", "default", prompt,
                                     {"worker_argv": ["{binary}", "{prompt}"]})
     assert argv == ["tool.exe", prompt] and stdin is None
-    argv, stdin = A._worker_command("omniroute", "omniroute", ".", "glm/glm-5.3-high", "medium", prompt)
-    assert argv == ["omniroute", "chat", "--stdin", "--no-history", "-m", "glm/glm-5.3-high", "--reasoning-effort", "medium"]
-    assert stdin == prompt
+    argv, _ = A._worker_command("custom", "tool.exe", ".", "chosen", "default", "Keep {model} literal",
+                                {"worker_argv": ["{binary}", "{prompt} / {model}"]})
+    assert argv[1] == "Keep {model} literal / chosen"
+    denied(A._worker_command, "omniroute", "omniroute", ".", "glm/glm-5.3-high", "medium", prompt)
     denied(A._worker_command, "qwen", "qwen", ".", "m", "high", prompt)
     denied(A._worker_command, "omniroute", "omniroute", ".", "m", "xhigh", prompt)
     denied(A._worker_command, "gemini", "gemini", ".", "m", "default", prompt)
@@ -121,6 +165,12 @@ def main():
     assert A.candidates(data, tier="L", risk="LOW")[0]["alias"] == "unknown"
     data["models"]["host"]["cost_weight"] = 0.5
     assert A.candidates(data, tier="M", risk="MEDIUM")[0]["alias"] == "host"
+    data["models"]["router"] = dict(base, cli="omniroute", cost_weight=0)
+    assert "router" not in [r["alias"] for r in A.candidates(data, tier="M", risk="MEDIUM")]
+    data["cli_agents"] = {"omniroute": {"worker_argv": ["coding-agent", "{model}"], "prompt_stdin": True}}
+    assert A.candidates(data, tier="M", risk="MEDIUM")[0]["alias"] == "router"
+    assert A._worker_command("omniroute", "router", ".", "m", "default", prompt,
+                             data["cli_agents"]["omniroute"]) == (["coding-agent", "m"], prompt)
 
     with tempfile.TemporaryDirectory(prefix="pb-economy-") as td:
         root = Path(td)

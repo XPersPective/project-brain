@@ -685,7 +685,7 @@ def omniroute_server_up(timeout=1.5):
     url = f"{omniroute_base_url()}/api/health"
     try:
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=max(0.2, float(timeout))) as resp:
+        with urllib.request.urlopen(req, timeout=max(0.001, float(timeout))) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
             return isinstance(status, int) and 200 <= status < 500
     except Exception:
@@ -694,9 +694,12 @@ def omniroute_server_up(timeout=1.5):
 
 def ensure_omniroute_server(exe_path, timeout=25.0):
     """Ensure the OmniRoute background server is running; start it in daemon mode if offline."""
-    if omniroute_server_up(timeout=min(1.5, max(0.2, float(timeout)))):
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    if time.monotonic() >= deadline:
+        return False
+    if omniroute_server_up(timeout=min(1.5, deadline - time.monotonic())):
         return True
-    if not exe_path or not isinstance(exe_path, str) or not Path(exe_path).is_file():
+    if time.monotonic() >= deadline or not exe_path or not isinstance(exe_path, str) or not Path(exe_path).is_file():
         return False
     cmd = [exe_path, "serve", "--daemon", "--no-open", "--no-tray"]
     try:
@@ -720,17 +723,16 @@ def ensure_omniroute_server(exe_path, timeout=25.0):
         else:
             proc = subprocess.Popen(run_cmd, start_new_session=True, **popen_kw)
         try:
-            proc.wait(timeout=min(5.0, max(1.0, float(timeout) * 0.4)))
+            proc.wait(timeout=max(0.001, min(5.0, deadline - time.monotonic())))
         except subprocess.TimeoutExpired:
             pass
     except (ValueError, OSError, subprocess.SubprocessError):
         return False
-    deadline = time.monotonic() + max(1.0, float(timeout))
     while time.monotonic() < deadline:
-        if omniroute_server_up(timeout=1.5):
+        if omniroute_server_up(timeout=min(1.5, deadline - time.monotonic())):
             return True
-        time.sleep(0.5)
-    return omniroute_server_up(timeout=1.5)
+        time.sleep(max(0.0, min(0.5, deadline - time.monotonic())))
+    return False
 
 
 def probe_catalog(argv, timeout=8):
@@ -889,7 +891,7 @@ def scan_agents(path=None, probe_quota=True, persist=True, deadline=90.0):
             if probe_quota and not spent():
                 q = probe_codex_quota(exe, timeout=remaining(8))
                 if q:
-                    pool.update(q)
+                    _update_quota(pool, q)
                     entry["quota"] = q
             for m_id in entry["models"]:
                 data["models"].setdefault(f"codex/{m_id}", {
@@ -997,6 +999,32 @@ def scan_agents(path=None, probe_quota=True, persist=True, deadline=90.0):
     return data
 
 
+def _update_quota(pool, snapshot):
+    """Replace quota only when every previously measured window is still measured."""
+    import runtime_pool as P
+
+    try:
+        _validate_registry({"pools": {"probe": snapshot}})
+        for key in ("primary_5h_remaining_pct", "weekly_7d_remaining_pct"):
+            if pool.get(key) is not None and snapshot.get(key) is None:
+                raise ValueError("quota response lost a previously observed window")
+        windows = snapshot.get("quota_windows", [])
+        names = [w.get("name") for w in windows]
+        if any(not isinstance(name, str) or not name.strip() for name in names) or len(names) != len(set(names)):
+            raise ValueError("quota windows require unique names")
+        for old in pool.get("quota_windows", []) or []:
+            if old.get("remaining_pct") is not None and not any(
+                    w.get("name") == old.get("name") and w.get("remaining_pct") is not None
+                    for w in windows):
+                raise ValueError("quota response lost a previously observed window")
+        if snapshot.get("remaining_pct") is None or not P._quota({"pools": {"probe": snapshot}}, {"pool": "probe"})[1]:
+            raise ValueError("quota percent and fresh timestamp required")
+    except (ValueError, TypeError):
+        pool["quota_status"] = "invalid"
+        return
+    pool.update(snapshot, quota_status="fresh")
+
+
 def _refresh_configured_quotas(data, stop_at=None):
     for pool in data.get("pools", {}).values():
         argv = pool.get("quota_argv")
@@ -1019,29 +1047,18 @@ def _refresh_configured_quotas(data, stop_at=None):
                 raise ValueError("quota response must be an object")
             kept = {k: snapshot[k] for k in ("remaining_pct", "updated_at", "resets_at",
                     "primary_5h_remaining_pct", "weekly_7d_remaining_pct", "quota_windows") if k in snapshot}
-            if any(pool.get(k) is not None and k not in kept for k in
-                   ("primary_5h_remaining_pct", "weekly_7d_remaining_pct", "quota_windows")):
-                raise ValueError("quota response omitted a previously observed window")
             if "quota_windows" in kept:
                 windows = kept["quota_windows"]
                 if not isinstance(windows, list) or any(not isinstance(w, dict) for w in windows):
                     raise ValueError("invalid quota windows")
                 kept["quota_windows"] = [{k: w[k] for k in ("name", "remaining_pct", "resets_at", "window_minutes")
                                           if k in w} for w in windows]
-            for key in ("remaining_pct", "primary_5h_remaining_pct", "weekly_7d_remaining_pct"):
-                value = kept.get(key)
-                if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 100):
-                    raise ValueError("invalid quota value")
-            if kept.get("remaining_pct") is None or not isinstance(kept.get("updated_at"), str):
-                raise ValueError("quota percent and timestamp required")
-            import runtime_pool as P
-            _, fresh = P._quota({"pools": {"probe": kept}}, {"pool": "probe"})
-            if not fresh:
-                raise ValueError("quota timestamp is stale or invalid")
         except (ValueError, TypeError):
             pool["quota_status"] = "invalid"
             continue
-        pool.update(kept, quota_status="fresh", quota_source="configured metadata CLI")
+        _update_quota(pool, kept)
+        if pool["quota_status"] == "fresh":
+            pool["quota_source"] = "configured metadata CLI"
 
 
 def refresh_quota(path=None):
@@ -1054,7 +1071,7 @@ def refresh_quota(path=None):
     if codex_info and codex_info.get("binary"):
         q = probe_codex_quota(codex_info["binary"])
         if q:
-            data["pools"].setdefault("codex", {}).update(q)
+            _update_quota(data["pools"].setdefault("codex", {}), q)
             codex_info["quota"] = q
     claude_info = agents.get("claude")
     if claude_info and claude_info.get("binary"):
@@ -1131,6 +1148,10 @@ def candidates(data, role="worker", tier="M", risk="MEDIUM", exclude="", cli_fil
         if not spec.get("available", True):
             continue
         if cli_filter and spec.get("cli") != cli_filter:
+            continue
+        cli_config = (data.get("cli_agents") or {}).get(spec.get("cli")) or {}
+        if role == "worker" and spec.get("cli") == "omniroute" and not (
+                cli_config.get("generic_worker_argv") or cli_config.get("worker_argv")):
             continue
         roles = [r.lower() for r in (spec.get("roles") or ROLES)]
         tiers = [t.upper() for t in (spec.get("tiers") or ("L", "M", "H"))]
@@ -1326,9 +1347,7 @@ def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config
             names = re.findall(r"\{([^{}]+)\}", raw)
             if any(name not in allowed for name in names) or re.search(r"[{}]", re.sub(r"\{[^{}]+\}", "", raw)):
                 raise ValueError(f"unknown worker_argv placeholder for {cli_name}")
-            value = raw
-            for name in names:
-                value = value.replace("{" + name + "}", str(values[name]))
+            value = re.sub(r"\{([^{}]+)\}", lambda match: values[match.group(1)], raw)
             if not value or "\x00" in value:
                 raise ValueError(f"empty or NUL worker argument for {cli_name}")
             argv.append(value)
@@ -1383,14 +1402,7 @@ def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config
             argv += ["--effort", effort]
         return argv, prompt
     if cli_name == "omniroute":
-        argv = [binary, "chat", "--stdin", "--no-history"]
-        if model_id != "default":
-            argv += ["-m", model_id]
-        if effort != "default":
-            if effort not in ("low", "medium", "high"):
-                raise ValueError("OmniRoute adapter requires effort in low|medium|high|default")
-            argv += ["--reasoning-effort", effort]
-        return argv, prompt
+        raise ValueError("OmniRoute chat has no repository tools; configure an explicit coding-agent worker_argv adapter")
     raise ValueError(f"unsupported worker CLI: {cli_name}")
 
 
