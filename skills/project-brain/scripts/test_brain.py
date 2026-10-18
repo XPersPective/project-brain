@@ -423,5 +423,162 @@ def persistence_checks():
     print("OK: configuration and interrupted migration checks passed")
 
 
+def v3_checks():
+    with tempfile.TemporaryDirectory(prefix="pb-v3-") as tmp:
+        root = Path(tmp)
+        reg_file = root / "agents_test.json"
+        git(root, "init", "-q", "-b", "main")
+        git(root, "config", "user.email", "t@t")
+        git(root, "config", "user.name", "t")
+        write(root, "src/ui/card.py", "TOKEN_BG = 'surface'\n")
+        write(root, "tests/test_card.py", "assert True\n")
+        commit(root, "init")
+        run(root, "init")
+        write(root, ".project-brain/current.md", "# Current\n\n## Map\n- `src/ui/card.py` — card\n\n## Domains\n\n### UI\nStatus: VERIFIED\nSources: `src/ui/**`, `tests/**`\n")
+        write(root, ".project-brain/target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nBuild polished UI.\n")
+
+        # 1. Task Complexity Scoring (`score`) & UI Triad detection
+        ui_task = (
+            "# PB-001 — Responsive card component\n"
+            "Status: READY\nPriority: P1\nTier: L\nRisk: LOW\nOwner:\nDepends: -\n"
+            "Areas: `src/ui/**`, `tests/**`\nDomains: ui\n\n"
+            "## Objective\nRender card with design tokens.\n\n"
+            "## Steps\n1. Update `src/ui/card.py`.\n2. Run tests in `tests/test_card.py`.\n\n"
+            "## Acceptance\n"
+            "- [ ] [machine] unit test passes\n"
+            "- [ ] [visual] card renders in narrow and wide viewports\n"
+            "- [ ] [interaction] click -> loading -> loaded state transition\n\n"
+            "## Verify\n- `python -c \"import pathlib; assert 'surface' in pathlib.Path('src/ui/card.py').read_text()\"`\n"
+        )
+        write(root, ".project-brain/tasks/PB-001.md", ui_task)
+        code, out = run(root, "score", "PB-001")
+        assert code == 0 and "missing Acceptance tags: [accessibility]" in out, out
+        code, val_out = run(root, "validate")
+        assert "missing Triad tag(s): [accessibility]" in val_out, val_out
+
+        # Add [accessibility] and run `score --write`
+        edit(root, ".project-brain/tasks/PB-001.md", "## Verify", "- [ ] [accessibility] 48x48dp touch target and focus ring\n\n## Verify")
+        code, out = run(root, "score", "PB-001", "--write")
+        assert code == 0 and "missing Acceptance tags" not in out, out
+        t1 = B.parse_task(root / ".project-brain/tasks/PB-001.md")
+        assert t1["risk"] == "MEDIUM", t1  # UI task escalates risk floor from LOW to MEDIUM
+
+        # 2. Agent Registry, Quota Reserve Floors (10% worker, 25% director), and Model Selection
+        reg_payload = {
+            "pools": {
+                "codex": {"remaining_pct": 20.0, "reserve_pct": 10.0},
+                "opencode-free": {"remaining_pct": 100.0, "reserve_pct": 0.0},
+                "exhausted-pool": {"remaining_pct": 8.0, "reserve_pct": 10.0},
+                "director-pool": {"remaining_pct": 90.0, "reserve_pct": 25.0},
+            },
+            "models": {
+                "exhausted/worker": {
+                    "cli": "codex", "model_id": "gpt-5.1-codex-mini", "pool": "exhausted-pool",
+                    "benchmark_key": "gpt-5.1-codex-mini", "cost_weight": 0.1,
+                    "tiers": ["L", "M"], "roles": ["worker"], "efforts": ["low", "medium"], "available": True,
+                },
+                "codex/gpt-5.2-codex": {
+                    "cli": "codex", "model_id": "gpt-5.2-codex", "pool": "codex",
+                    "benchmark_key": "gpt-5.2-codex", "cost_weight": 1.0,
+                    "tiers": ["L", "M", "H"], "roles": ["worker", "reviewer"], "efforts": ["low", "medium", "high"], "available": True,
+                },
+                "opencode/minimax-m2.5-free": {
+                    "cli": "opencode", "model_id": "opencode/minimax-m2.5-free", "pool": "opencode-free",
+                    "benchmark_key": "minimax-m2.5-free", "cost_weight": 0.05,
+                    "tiers": ["L", "M"], "roles": ["worker"], "efforts": ["low", "medium"], "available": True,
+                },
+                "claude/claude-opus-4-6": {
+                    "cli": "claude", "model_id": "claude-opus-4-6", "pool": "director-pool",
+                    "benchmark_key": "claude-opus-4-6", "cost_weight": 3.0,
+                    "tiers": ["H"], "roles": ["lead", "reviewer"], "efforts": ["high"], "available": True,
+                },
+            },
+        }
+        patch_file = root / "patch.json"
+        patch_file.write_text(json.dumps(reg_payload), encoding="utf-8")
+        code, out = run(root, "agents", "merge", str(patch_file), "--registry", str(reg_file))
+        assert code == 0 and "MERGED" in out, out
+
+        # Exhausted pools and the director reserve are excluded, never fallback workers.
+        code, out = run(root, "agents", "select", "--role", "worker", "--tier", "L", "--risk", "LOW", "--registry", str(reg_file))
+        assert code == 0 and "SELECT opencode/minimax-m2.5-free" in out and "effort=low" in out, out
+        assert "codex/gpt-5.2-codex" not in out, out
+
+        # Explicit override still needs an eligible pool, including in a dry-run.
+        reg_payload["pools"]["codex"]["remaining_pct"] = 90.0
+        patch_file.write_text(json.dumps(reg_payload), encoding="utf-8")
+        assert run(root, "agents", "merge", str(patch_file), "--registry", str(reg_file))[0] == 0
+
+        # Preview delegation (`delegate --dry-run`)
+        code, out = run(root, "delegate", "PB-001", "--model", "codex/gpt-5.2-codex", "--dry-run", "--registry", str(reg_file))
+        assert code == 0 and "DELEGATE_PLAN PB-001: cli=codex model=gpt-5.2-codex" in out, out
+
+        # 3. Full Verification Lifecycle: `start` -> `check` -> `evidence` -> `review` -> `accept`
+        code, out = run(root, "start", "PB-001", "--agent", "codex/gpt-5.2-codex", "--registry", str(reg_file))
+        assert code == 0 and "STARTED PB-001 owner=codex/gpt-5.2-codex" in out, out
+
+        code, out = run(root, "check", "PB-001", "--as", "codex/gpt-5.2-codex")
+        assert code == 0 and "PASS: 1 command(s)" in out, out
+
+        # Visual evidence without screenshot file is refused
+        code, out = run(root, "evidence", "PB-001", "--kind", "visual", "--note", "looks good", "--as", "codex/gpt-5.2-codex")
+        assert code == 2 and "Visual evidence needs the rendered result" in out, out
+
+        write(root, ".project-brain/evidence/PB-001/shot.png", "PNGDATA")
+        code, out = run(root, "evidence", "PB-001", "--kind", "visual", "--note", "rendered compact and wide", "--file", ".project-brain/evidence/PB-001/shot.png", "--as", "codex/gpt-5.2-codex")
+        assert code == 0 and "[visual] rendered compact and wide" in out, out
+
+        code, out = run(root, "evidence", "PB-001", "--kind", "interaction", "--note", "click -> loading -> loaded", "--as", "codex/gpt-5.2-codex")
+        assert code == 0, out
+        code, out = run(root, "evidence", "PB-001", "--kind", "accessibility", "--note", "48dp and focus ring verified", "--as", "codex/gpt-5.2-codex")
+        assert code == 0, out
+
+        # Tick all checkboxes
+        edit(root, ".project-brain/tasks/PB-001.md", "- [ ]", "- [x]")
+
+        # First `accept` on MEDIUM risk transitions to REVIEW_PENDING
+        code, out = run(root, "accept", "PB-001", "--as", "codex/gpt-5.2-codex", "--registry", str(reg_file))
+        assert code == 1 and "REVIEW_PENDING PB-001" in out, out
+        assert B.parse_task(root / ".project-brain/tasks/PB-001.md")["status"] == "REVIEW"
+
+        # Implementer cannot self-review
+        code, out = run(root, "review", "PB-001", "--reviewer", "codex/gpt-5.2-codex", "--verdict", "PASS", "--registry", str(reg_file))
+        assert code == 2 and "must not have implemented" in out, out
+
+        # Unwaived QUALITY finding blocks acceptance
+        code, out = run(root, "review", "PB-001", "--reviewer", "claude/claude-opus-4-6", "--verdict", "PASS", "--finding", "QUALITY: raw hex color used", "--registry", str(reg_file))
+        assert code == 0, out
+        code, out = run(root, "accept", "PB-001", "--as", "claude/claude-opus-4-6", "--registry", str(reg_file))
+        assert code == 2 and "unresolved finding QUALITY" in out, out
+
+        # Clean PASS review by stronger reviewer -> accept succeeds -> DONE!
+        code, out = run(root, "review", "PB-001", "--reviewer", "claude/claude-opus-4-6", "--verdict", "PASS", "--registry", str(reg_file))
+        assert code == 0, out
+        code, out = run(root, "accept", "PB-001", "--as", "claude/claude-opus-4-6", "--registry", str(reg_file))
+        assert code == 0 and "DONE PB-001" in out and "PB-Reviewer: claude/claude-opus-4-6" in out, out
+        assert B.parse_task(root / ".project-brain/tasks/PB-001.md")["status"] == "DONE"
+
+    # 4. Foreign planning state adoption (`legacy`) filters out store-publishing tasks
+    with tempfile.TemporaryDirectory(prefix="pb-legacy-") as tmp:
+        root = Path(tmp)
+        write(root, ".store-automation/tasks/SA-001.md", "# SA-001 — Implement offline SQLite repository\nStatus: READY\n")
+        write(root, ".store-automation/tasks/SA-002.md", "# SA-002 — Upload to Google Play Store via Fastlane supply\nStatus: READY\n")
+        code, out = run(root, "legacy")
+        assert code == 0 and "FOREIGN store-automation" in out and "CANDIDATES: 1 open tasks" in out, out
+        code, out = run(root, "legacy", "--apply")
+        assert code == 0 and "ADOPTED: created 1 PLANNED tasks" in out, out
+        tasks = B.list_tasks(root)
+        assert len(tasks) == 1 and "offline SQLite repository" in tasks[0]["title"], tasks
+
+    print("OK: v3 score, verification, review, quota, delegation, and legacy checks passed")
+
+
 if __name__ == "__main__":
     main()
+    v3_checks()
+    from test_protocol_audit import main as protocol_audit
+    from test_verify_audit import main as verify_audit
+    from test_agents_audit import main as agents_audit
+    protocol_audit()
+    verify_audit()
+    agents_audit()

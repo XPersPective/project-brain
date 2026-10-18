@@ -1,0 +1,30 @@
+# Local coding agent and model inventory
+
+As of the metadata-only inspection on 2026-10-18 (Europe/Istanbul; roughly 04:40), installed coding tools span several providers. This is a catalog and installation inventory; no model inference or provider test call was made. Access, billing and quota are separate facts.
+
+## Installed CLI and local tooling
+
+`PATH` plus Project Brain's `CLI_SPECS` (Codex, OpenCode, Claude, Gemini, Antigravity, Qwen, Aider, Kilo, MCode, Kimi, OmniRoute) and common local tools were checked. Version/help probes succeeded for Codex 0.163.0-alpha.10.2, OpenCode 1.18.35, Claude Code 2.1.299, Gemini CLI 0.63.0, Antigravity `agy` 1.4.0, Qwen Code 0.21.3, MCode 0.6.8, Kimi 2.1.1 and OmniRoute (version not established by this probe; registry said 3.8.50). Also present: Hermes agent and LM Studio CLI. Aider/Kilo aliases and Ollama were not found on PATH. LM Studio `lms ls` reported its daemon was not running, so no local model list was available. `omniroute --help` emitted a notice that it loaded its environment files; their contents were not read.
+
+## Metadata-supported model pools
+
+The cached machine registry at `~/.project-brain/agents.json` (updated 2026-10-17 11:48Z) and this checkout's `.project-brain/.cache/audit-agents.json` (updated 2026-10-18 01:36Z) have incompatible coverage and should not be merged as truth. The local registry marks nearly every CLI authenticated and several pools at 100%; these are not fresh verifications. The audit cache marks Codex authenticated, other CLIs unauthenticated, and records no fresh remaining quotas. Neither indicates paid API authorization.
+
+- **Codex subscription pool:** CLI metadata listed `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-reserve`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `codex-auto-review`. Cache version 0.163.0-alpha.10.2; auth observed true in audit cache. Remaining quota is unknown; the local registry's 25% 5-hour / 57% weekly values were last updated 2026-10-17 11:48Z and are stale. It also has an older imported snapshot from Oct 15, likewise stale.
+- **OpenCode multi-provider catalog:** a fresh `opencode --pure models` metadata listing returned 430 IDs: 10 `opencode/*`, 24 `openai/*`, 390 `openrouter/*`, and 6 `qwen-paytopay/*`. Examples include free catalog entries `opencode/big-pickle`, `opencode/deepseek-v4.1-flash-free`, `opencode/glm-5.3-flash-free`; OpenAI `openai/gpt-5.3-codex-spark`, `openai/gpt-5.4-mini`, `openai/gpt-6.1-sol`; OpenRouter routes for Claude, Gemini, DeepSeek, Qwen and others; and Qwen pay-to-play. This proves names are in the CLI catalog only, not account access, endpoint price, free usage, quota, or entitlement. Audit cache's 30-name list is truncated and stale; it currently has no confirmed OpenCode auth or quota.
+- **Claude:** model registry seeds `claude-sonnet-4-6` and `claude-opus-4-6`; audit cache has no authenticated subscription confirmation and blank subscription type. No quota metadata.
+- **Gemini:** registry seeds `gemini-2.5-flash` and `gemini-2.5-pro`; no account/model access or quota confirmed.
+- **Qwen:** registry seeds `qwen3-coder-plus`; the OpenCode catalog separately lists Qwen routes (including Qwen3 Coder variants and six pay-to-play IDs). No account access or quota confirmed.
+- **Antigravity:** registry seeds Claude Opus 4.6, Claude Sonnet 4.6 and Gemini 3.1 Pro routes; access and quota are unknown.
+- **MCode/MiniMax, Kimi, OmniRoute, Hermes:** installed CLI/router metadata only; no model pool or account entitlement was verified in this bounded pass. OmniRoute and Hermes may route to configured providers, but no provider list was queried.
+- **LM Studio:** CLI installed; local daemon absent, so available local models remain unknown.
+
+Registry entries with `remaining_pct: 100` for Claude, Gemini, Qwen or Antigravity are stale/unsubstantiated defaults, not quota. OpenCode's older `free_api` entry explicitly says quota and current endpoint prices are unverified. Treat every non-Codex quota as **unknown**, and Codex quota as **stale**. No billing type can be inferred from a model name, CLI install, or `authenticated` boolean alone.
+
+## Candidate routing for the user to confirm
+
+For each task, first set its quality/effort needs, then select among models the user approves for that provider and billing route. Candidate **director/architect** pool: Codex `gpt-6-astra` / `gpt-6.1-sol`, OpenCode's corresponding OpenAI routes, or Claude Opus/Sonnet routes if access and billing are confirmed. Candidate **worker** pool: Codex `gpt-5.6-luna` or other approved Codex route; OpenCode free catalog entries such as `big-pickle` or `deepseek-v4.1-flash-free`; Gemini Flash, Qwen Coder, MCode/MiniMax, Kimi or local Hermes/LM Studio only after confirming provider access and cost. Candidate **reviewer** pool: a different approved model identity from the implementer, chosen for the risk and quality bar; same-provider aliases/routes to the same underlying model do not establish independent review. These are options, not fixed high/low rankings or routing instructions. User confirmation is needed for each provider/model pool, role, effort, and subscription/API/free/local billing assumption before inference or delegation.
+
+## Probe scope and limits
+
+Read only: Project Brain discovery code and CLI specs; both JSON registries (only model/CLI/role/pool/quota/auth metadata); PATH lookup; `--help` for 10 discoverable CLIs (each subprocess bounded at 8s; total ~15s); `opencode --pure models` (2.16s, catalog metadata); and `lms ls` (0.52s, reported daemon unavailable). No credential contents, environment values, auth files, arbitrary disk search, provider inference, quota RPC, model download, configuration write, install, registry write, or delegation. Help/model-catalog output can disclose configured providers but cannot prove usable access, current price, subscription entitlement, remaining quota, or task quality. No subagent/agent role was activated by this inventory.

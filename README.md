@@ -46,7 +46,7 @@ TARGET: CONFIRMED
 PLAN: 3 open, 12 done
    PB-013 READY       P1 L Add Turkish date parser
    PB-014 PLANNED     P2 M Export to JSON  [deps PB-013]
-   PB-015 BLOCKED     P2 H Store upload  [needs store credentials from the user]
+   PB-015 BLOCKED     P2 H Verify service recovery  [needs test environment access]
 FOCUS PB-013 (READY, P1, tier L, risk LOW): 2/2 acceptance open
 RECENT: PB-012 by claude-haiku-5-5 (4f1c2aa); PB-011 by codex-agent (9ab01de)
 LOAD: .project-brain/tasks/PB-013.md .project-brain/current.md (lines 3-40, 88-120) .project-brain/target.md .project-brain/constraints.md
@@ -93,40 +93,52 @@ may need manual reconciliation. Missing target approval becomes DRAFT.
 ## Helper script
 
 ```text
-brain.py boot     [root]   state, target, plan, focus, recent work, files to load, next action
+brain.py boot     [root]   state, target, plan, focus (with complexity score & delegation hint), files to load, next action
 brain.py map      [root]   compact repo overview + detected test/lint/build commands
 brain.py init     [root]   create .project-brain/ skeleton + AGENTS.md pointer (never overwrites)
-brain.py new root "title" [--priority P1] [--tier L] [--risk HIGH] [--depends PB-001]
+brain.py new root "title" [--priority P1] [--tier L|M|H] [--risk LOW|MEDIUM|HIGH] [--depends PB-001]
+brain.py score    [task] [root] [--write] [--json]
+                           measure task complexity (0..100), Tier (L/M/H), effort (low/medium/high), and delegation readiness
+brain.py agents   <scan|quota|list|select|merge>
+                           discover installed CLI coding agents, read live subscription quotas, and select optimal models
+brain.py delegate <task> [root] [--cli <cli>] [--model <alias>] [--effort low|medium|high] [--dry-run]
+                           dispatch a Tier L/M task to a CLI worker inside ProcessTree + auto-run check
+brain.py start    <task> [root] [--agent <alias>] [--takeover "<reason>"]
+brain.py check    <task> [root] [--timeout <sec>] [--as <alias>]
+brain.py evidence <task> [root] --kind <kind> --note "<text>" [--criterion <id>] [--file <relpath>]
+brain.py review   <task> [root] --reviewer <alias> --verdict PASS|BLOCKED [--finding "SEVERITY: text"]
+brain.py accept   <task> [root] [--as <alias>]
 brain.py changed  [root]   files and domains changed since their Current checkpoints
-brain.py validate [root]   structure, executable-spec checks, size budgets
-brain.py migrate  [root] [--apply]   convert a legacy Brain
+brain.py validate [root]   structure, executable-spec checks, UI Triad checks, size budgets
+brain.py migrate  [root] [--apply]   convert a legacy Brain (schema <=3 or PROJECT_BRAIN.md)
+brain.py legacy   [root] [--apply]   detect and adopt foreign planning systems (.store-automation, .taskmaster, etc.)
+brain.py doctor   [root]   verify Python runtime, ProcessTree containment, Git, and CLI agent readiness
 ```
 
-Exit codes: 0 ok, 1 warnings, 2 errors, 3 no Project Brain.
+Exit codes: 0 ok, 1 warnings / review or user feedback pending, 2 errors / blocked, 3 no Project Brain.
 
 ## What it runs, reads and writes
 
-- Runs only local commands: `git` (read-only queries such as `log`, `status`, `diff`, `ls-files`) and the
-  bundled Python scripts. The agent itself runs your project's own test/lint/build commands from `config.yaml`.
-- Reads files inside the current repository. Writes only `.project-brain/` and a short pointer block in the
-  project's `AGENTS.md` (plus an existing `CLAUDE.md` / `GEMINI.md`), and only when you run `init` or
-  `new` or `migrate --apply`.
-- No network access, no telemetry, no credentials. It never stores secrets and tells agents not to.
-- Commits and pushes happen only through the agent, following `git.commit` / `git.push` in `config.yaml`
-  and your platform's own permission rules.
+- Runs local commands: `git` (read-only queries such as `log`, `status`, `diff`, `ls-files`), the bundled Python scripts, configured `Verify` commands inside an OS-contained `ProcessTree` (`brain.py check`), and local CLI coding agents when you run `brain.py agents scan` or `brain.py delegate`.
+- Reads files inside the current repository. Writes `.project-brain/`, a short pointer block in the project's `AGENTS.md` (plus an existing `CLAUDE.md` / `GEMINI.md`), and the local agent registry `~/.project-brain/agents.json`.
+- Never reads or stores secret credential values.
+- Discovery is not access approval. Unknown or stale quota blocks worker dispatch;
+  model quality scores are routing estimates. Evidence hashes detect stale source/specs,
+  while actual visual, interaction and architecture quality requires independent review.
+- Store publishing, uploads, signing and release automation are outside this skill.
+- Commits and pushes happen only through the agent, following `git.commit` / `git.push` in `config.yaml` and your platform's own permission rules.
 
-Completed tasks keep their Evidence until committed. With no Git or deferred commits, DONE files stay
-in place so IDs and dependencies remain recoverable. A missing task by itself is not proof of completion.
+Completed tasks keep their digest-bound Evidence and Review until committed. With no Git or deferred commits, DONE files stay in place so IDs and dependencies remain recoverable. A missing task by itself is not proof of completion.
 
 ## Repository layout
 
 ```text
-skills/project-brain/   the skill: SKILL.md, REFERENCE.md, SCHEMAS.md, scripts/
+skills/project-brain/   the skill: SKILL.md, QUALITY.md, AGENTS_CLI.md, REFERENCE.md, SCHEMAS.md, scripts/
 .claude-plugin/         Claude Code plugin + marketplace manifests
 plugin.json             portable plugin manifest (Codex)
 .agents/plugins/        Codex marketplace
 gemini-extension.json   Gemini CLI extension manifest
-docs/design/            design analysis and review notes (Turkish)
+docs/design/            design analysis, audit, and v3.0 master prompt
 ```
 
 ## Development

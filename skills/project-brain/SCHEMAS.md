@@ -102,6 +102,7 @@ Status: READY
 Priority: P2
 Tier: L
 Risk: LOW
+Owner:
 Depends: PB-011
 Areas: `src/utils/date.py`, `tests/test_date.py`
 Domains: utils
@@ -115,8 +116,8 @@ Domains: utils
 3. Add cases to `tests/test_date.py`: valid date, wrong separator, 31.02.2026.
 
 ## Acceptance
-- [ ] `parse_tr_date("16.09.2026") == date(2026, 9, 16)` (asserted by a test)
-- [ ] invalid inputs raise `ValueError` (test fails if they do not)
+- [ ] [machine] `parse_tr_date("16.09.2026") == date(2026, 9, 16)` (asserted by a test)
+- [ ] [machine] invalid inputs raise `ValueError` (test fails if they do not)
 
 ## Verify
 - `python -m pytest -q tests/test_date.py`
@@ -124,36 +125,50 @@ Domains: utils
 ## Escalate if
 - the import format turns out to carry times or time zones
 
+## Evidence
+
+## Review
+
 ## Notes
 - Milestone: import v2
 ```
 
 | Header | Values |
 |---|---|
-| `Status` | PLANNED → READY → IN_PROGRESS → DONE with Evidence → deleted after its checkpoint; any → BLOCKED → READY |
-| `Priority` | P1 user's current ask or blocker · P2 normal (default) · P3 later. FOCUS = best priority, then lowest ID |
-| `Tier` | L mechanical, fully specified · M normal engineering · H design, ambiguity, security, specs |
-| `Risk` | LOW / MEDIUM / HIGH (sets verification breadth) |
+| `Status` | `PLANNED → READY → IN_PROGRESS → REVIEW → DONE` with Evidence → deleted after its checkpoint; any → `BLOCKED → READY` |
+| `Priority` | `P1` user's current ask or blocker · `P2` normal (default) · `P3` later. FOCUS = best priority, then lowest ID |
+| `Tier` | `L` mechanical (`score <= 32`) · `M` normal engineering (`33..64`) · `H` architecture, security, UI foundation (`>= 65`) |
+| `Risk` | `LOW` / `MEDIUM` / `HIGH` (sets verification breadth and independent review requirement) |
+| `Owner` | model/agent alias set by `PB start` (e.g. `codex/gpt-5.2-codex`); implementers may never review their own task |
 | `Depends` | task IDs, `-` when none. Requires verified Git completion or retained DONE+Evidence; absence alone is insufficient |
-| `Areas` | backticked globs; boot detects overlap, not ownership; inspect actual edits before resuming |
+| `Areas` | backticked globs; `PB check`, `PB evidence`, `PB review`, and `PB accept` hash every public file matched by `Areas` |
 | `Domains` | Current domains this task may change; boot loads only those sections |
 | `Blocked` | only when BLOCKED: what is needed, from whom |
 
-**READY means executable spec**: `## Steps` (numbered, exact paths/symbols/commands), `## Acceptance` with
-`- [ ]` checkboxes, `## Verify` with a backticked command, no vague words. Otherwise PLANNED.
-Optional `## Resume` (when stopping mid-task): `Next:`, `Failing:`, `Dirty:` lines. Boot prints `Next:`
-and the unchecked Acceptance items.
-`new` always creates PLANNED scaffolding. DONE requires a nonempty `## Evidence` with actual commands
-and results. Keep it until that content is committed, or indefinitely in No Git mode. Cleanup after
-the successful work commit is included in the next authorized commit; Git retains the full task spec.
-DONE without Evidence remains unfinished in the plan and cannot satisfy a dependency.
+### Typed Acceptance Items (`KINDS`)
+Each Acceptance checkbox may specify an explicit kind tag `- [ ] [<kind>] <observable condition>` (untagged items default to `machine`; UI tasks still require the explicit Triad):
+- `machine` — proven by `PB check` running the backticked `Verify` commands (`exit=0` on current `digest` and `contract`).
+- `visual` — proven by `PB evidence --kind visual --criterion <id> --file <screenshot.png>` (real rendered viewport).
+- `interaction` — proven by `PB evidence --kind interaction --criterion <id> --note "step -> step -> result"` (or trace/recording file).
+- `accessibility` — proven by `PB evidence --kind accessibility --criterion <id> --note "..."` (keyboard, focus, platform touch targets, contrast; see QUALITY.md).
+- `security` / `integration` / `architecture` — proven by `PB evidence --kind <kind> --criterion <id> --note "..."`.
+- `user_feedback` — when all other items pass, `PB accept` sets `Status: BLOCKED` (`WAITING_USER`) with empty `Owner:` until the user confirms.
+
+### Tool-Written `## Evidence` & `## Review` Lines
+Never hand-write these sections; `brain.py` writes and verifies them against `areas_digest` (16-hex LF-normalized SHA-256 of `Areas`) and `contract` (16-hex SHA-256 of the task's spec):
+- `- start: IN_PROGRESS | owner=<alias> | risk=<RISK> | digest=<hex> | contract=<hex>`
+- `- [machine] check \`<cmd>\` | PASS|FAIL | exit=<rc> | <sec>s | by=<alias> | digest=<hex> | contract=<hex> | log=.cache/runs/<file>@<hash>`
+- `- [<kind>] <note> | criterion=<id> [| files=<path>@<hash>] | by=<alias> | digest=<hex> | contract=<hex>`
+- `- review by <reviewer> | PASS|BLOCKED | digest=<hex> | contract=<hex>`
+- `- finding BLOCKER|MAJOR|QUALITY|MINOR: <text> [| accepted: <reason> | owner: user|PB-NNN]`
+- `- accept: DONE | digest=<hex> | contract=<hex>`
 
 # ADR — decisions/ADR-NNN.md
 
 Sections: Status (Proposed | Accepted | Superseded | Rejected), Context, Decision, Rationale (explicit),
 Alternatives (serious ones only), Consequences, Related (tasks, domains, constraints). For a replan (§8b):
 problem, evidence, options, choice, impact on tasks. Write one only when a future agent would otherwise
-re-open or misread the decision.
+re-open or misread the decision (always write an ADR for the UI Design System & Token Foundation).
 
 # Commit trailers
 
@@ -163,7 +178,8 @@ re-open or misread the decision.
 | `PB-Target-Checkpoint: auth` | Target reflects confirmed intent through this commit | target is implemented |
 | `PB-Verification: local/domain/global` | breadth of verification actually run | — |
 | `PB-Task: PB-014` / `PB-Tasks: PB-1,PB-2` | task work; completion also needs Verification and either deletion or DONE+Evidence in that commit | task mention alone proves completion |
-| `PB-Agent: <model id>` | who did the work; boot's RECENT line uses it for the takeover check | — |
+| `PB-Agent: <model id>` | who implemented the task; boot's RECENT line uses it for the takeover check | — |
+| `PB-Reviewer: <model id>` | independent reviewer who passed `PB review` on MEDIUM/HIGH risk tasks | — |
 | `PB-Plan-Audit: <scope>` / `final` | a plan audit ran; resets boot's audit counter | the plan is perfect |
 | `PB-WIP: true` | unverified work preserved for continuity | completion; never with Checkpoint/Verification |
 | `PB-Genesis: true` | Brain baseline | — |
@@ -181,16 +197,18 @@ and trailers, and the v0 migration backup; unreachable/shallow history cannot gu
 
 FAIL: unsupported configuration, no Current file, unknown status, duplicate task IDs, more than one IN_PROGRESS, dependency cycle, `mode: domains` without
 `current/`. WARN: legacy schema or `PROJECT_BRAIN.md`, missing config/target, target without `Status:`,
-unfilled template placeholders, READY/IN_PROGRESS that is not an executable spec, vague words, invalid
-Priority/Tier/Risk, notes on the Status line, DONE without Evidence, missing Acceptance/Verify, BLOCKED without
-`Blocked:`, IN_PROGRESS without Areas, READY with an open dependency, dependency without completion
+unfilled template placeholders, READY/IN_PROGRESS/REVIEW that is not an executable spec, vague words, invalid
+Priority/Tier/Risk, unknown Acceptance kind tags, UI task missing `[visual]`/`[interaction]`/`[accessibility]`, notes on the Status line, DONE without Evidence, missing Acceptance/Verify, BLOCKED without
+`Blocked:`, IN_PROGRESS/REVIEW without Areas, READY with an open dependency, dependency without completion
 evidence, title/file ID mismatch, missing ADR, tracked `.cache/` files, size budgets (current 200, target
 150, constraints 100, task 80 lines; 25 open tasks). It checks structure, not whether the text is true.
 
-# Cache
+# Cache & Agent Registry
 
-`.project-brain/.cache/` is gitignored and disposable (repo maps, symbol indexes, scan results). Deleting
-it must never lose intent, target, constraints, tasks, or rationale.
+- `.project-brain/.cache/` is gitignored and disposable (`runs/*.log` check/delegation logs, `writer.lock`). Deleting it must never lose intent, target, constraints, tasks, or rationale.
+- `~/.project-brain/agents.json` stores machine-local CLI agent paths, benchmark scores, and live subscription quota pools (`PB agents scan|quota|list|select|merge`).
+- The wire format remains schema 4 in v3.0.0; the earlier design's proposed schema 5 was not implemented. `WAITING_USER` is BLOCKED with a reason; `READBACK_FIRST` is a boot result, and failed reviews are handled through REVIEW/start, not extra persisted task statuses.
+- IDs and hashes provide freshness/integrity checks, not signatures or authenticated identities. A trusted agent must observe evidence, and actual user approval is needed for a user-owned waiver.
 
 # Migration (`brain.py migrate`)
 

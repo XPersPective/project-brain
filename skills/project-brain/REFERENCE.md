@@ -157,6 +157,26 @@ Auth, authorization, sessions, crypto, secrets, permission/sandbox boundaries, d
 full verification, and escalate unless the user explicitly requested that change. Never write credentials
 into Brain files, tasks, trailers, ADRs, or notes.
 
+## ProcessTree containment
+
+`PB check` and `PB delegate` run child processes inside an OS-contained `ProcessTree` (Windows JobObject with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` / POSIX session + process group `killpg`). If `PB doctor` reports
+`CONTAINMENT: FAIL` or a check raises `ContainmentError`, do not trust partial check outputs: inspect running
+processes, kill any orphaned test servers, and rerun `PB check`.
+
+## Quota exhaustion & CLI worker failover
+
+When a subscription pool drops to `<= 25%` (`DIRECTOR_RESERVE_PCT`), L/M dispatch refuses that pool and shifts
+`Tier L` and `Tier M` worker tasks to secondary CLI pools (`opencode-free`, `gemini`, `claude`, `qwen`) while
+reserving the primary pool for `Tier H` architecture and `PB review`. At `<= 10%` (`WORKER_RESERVE_PCT`),
+the pool is marked exhausted. Unknown or stale quota blocks actual dispatch. Refresh supported rate limits before delegation; do not infer remaining capacity from CLI installation or login.
+
+## External readback (`READBACK_FIRST`)
+
+When a task records an external side effect in `## External` (`- <op> | sent | readback: <how>` or `response_unknown`; legacy colon syntax also works), any
+resuming session must inspect the external state first and update the line to `confirmed` or `failed` before
+retrying or running `PB accept`.
+
 ## Unknown situation
 
 1. Stop changing things. 2. Preserve coherent work (`PB-WIP` commit if needed). 3. Observe: `git status`,

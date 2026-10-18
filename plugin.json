@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "project-brain",
-  "version": "2.1.0",
-  "description": "Git-native project memory and planning: help coding agents resume from verified architecture, goals, task plans and evidence.",
+  "version": "3.0.0",
+  "description": "Git-native project memory, UI/Backend quality enforcement, task complexity scoring, CLI agent discovery, quota management, and sub-agent delegation.",
   "author": {
     "name": "XPersPective",
     "url": "https://github.com/XPersPective"
@@ -18,14 +18,16 @@
     "architecture",
     "roadmap",
     "git",
-    "agents"
+    "agents",
+    "delegation",
+    "quota"
   ],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "Project Brain",
-        "shortDescription": "Resume projects across sessions and agents with repository-based plans and evidence",
-        "longDescription": "Project Brain keeps a project’s state in the repository: verified architecture, the user’s goal, and a prioritized task plan designed for agents with no chat history. A local Python helper computes checkpoints, dependencies and the files to load. Agents verify inherited evidence, stay within the current request, and retain task evidence until a successful commit. Git is recommended; without Git, completed evidence stays in task files.",
+        "shortDescription": "Plan, delegate, verify, review, and resume projects with quota-aware CLI workers",
+        "longDescription": "Project Brain 3.0 keeps a project’s state in the repository: verified architecture, user-owned goal, Design System & Clean Architecture ADRs, and prioritized executable tasks. A stdlib Python runtime scores task complexity (Tier L/M/H), discovers installed CLI coding agents (Codex, Claude, Gemini, OpenCode, Antigravity, Qwen), reads live subscription quotas with 10%/25% reserve floors, delegates Tier L/M tasks to low/medium-effort workers inside ProcessTree, and binds checks, UI Triad evidence, and independent reviews to source/contract digests.",
         "developerName": "XPersPective",
         "category": "Productivity",
         "websiteURL": "https://github.com/XPersPective/project-brain",
@@ -34,7 +36,7 @@
         "defaultPrompt": [
           "Set up Project Brain for this repository",
           "Continue where the last session stopped",
-          "Audit the project plan"
+          "Scan CLI agents and delegate ready tasks"
         ],
         "brandColor": "#111827",
         "composerIcon": "./assets/icon.png",

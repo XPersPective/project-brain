@@ -1,8 +1,8 @@
 {
   "name": "project-brain",
   "displayName": "Project Brain",
-  "version": "2.1.0",
-  "description": "Git-native memory and planning for coding agents: verified architecture, user-owned goals, executable tasks, evidence-based recovery and legacy migration.",
+  "version": "3.0.0",
+  "description": "Git-native memory, UI/Backend quality enforcement, complexity scoring, CLI agent discovery, quota protection, and sub-agent delegation.",
   "author": {
     "name": "XPersPective",
     "url": "https://github.com/XPersPective"
@@ -19,7 +19,9 @@
     "roadmap",
     "git",
     "agents",
-    "context"
+    "context",
+    "delegation",
+    "quota"
   ],
   "icon": "./assets/logo.png",
   "documentationUrl": "https://github.com/XPersPective/project-brain#readme",
