@@ -182,7 +182,7 @@ processes, kill any orphaned test servers, and rerun `PB check`.
 ## Quota exhaustion & CLI worker failover
 
 When a subscription pool drops to `<= 25%` (`DIRECTOR_RESERVE_PCT`), L/M dispatch refuses that pool and shifts
-`Tier L` and `Tier M` worker tasks to secondary CLI pools (`opencode-free`, `gemini`, `claude`, `qwen`) while
+`Tier L` and `Tier M` worker tasks to secondary CLI pools (`opencode-free`, `omniroute`, `agy`, `claude`, `qwen`) while
 reserving the primary pool for `Tier H` architecture and `PB review`. At `<= 10%` (`WORKER_RESERVE_PCT`),
 the pool is marked exhausted. Unknown or stale quota blocks actual dispatch. Refresh supported rate limits before delegation; do not infer remaining capacity from CLI installation or login.
 

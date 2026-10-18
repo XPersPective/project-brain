@@ -374,19 +374,13 @@ def run(root, apply):
         verb = ("UPDATE" if path.exists() else "CREATE") if apply else ("would update" if path.exists() else "would create")
         print(f"{verb} {rel}: {why}")
         if apply:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("w", encoding="utf-8", newline="\n") as f:
-                f.write(text)
+            B.write_atomic(path, text)
     for name, action in B.ensure_pointers(root, write=apply):
         print(f"{'POINTER' if apply else 'would add pointer to'} {name} ({action})")
     for path, text, why in config:
         print(f"{'FINALIZE' if apply else 'would finalize'} {path.relative_to(root).as_posix()}: {why}")
         if apply:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_suffix(".yaml.tmp")
-            with temporary.open("w", encoding="utf-8", newline="\n") as f:
-                f.write(text)
-            temporary.replace(path)
+            B.write_atomic(path, text)
     for t in todo:
         print(f"TODO {t}")
     print("NEXT: " + ("`validate`, finish the TODO lines, Plan audit (SKILL.md section 9), commit "

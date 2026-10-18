@@ -55,6 +55,9 @@ def main():
         assert filtered["models"]["unrated"]["roles"] == ["discovery", "worker"]
         denied(P.authorize, B, root, A.load(reg), "unrated", "medium", reg)
         assert P.authorize(B, root, A.load(reg), "unrated", "default", reg, "discovery")["cli"] == "host"
+        missing_cli = A.load(reg)
+        missing_cli["cli_agents"]["host"]["discovery_status"] = "not_found"
+        denied(P.authorize, B, root, missing_cli, "unrated", "default", reg, "discovery")
         with patch.dict("os.environ", {"PB_SESSION_ID": "different-session"}):
             denied(P.approved_data, B, root, A.load(reg), reg)
         changed = A.load(reg)

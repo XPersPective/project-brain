@@ -1,6 +1,6 @@
 # Project Brain
 
-**Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Gemini or
+**Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
 The protocol is designed for different model sizes; reliable execution still depends on the agent
 following it and verifying the evidence. No chat history is required for the recorded state.
@@ -62,9 +62,8 @@ Requirements: Git and Python 3.8+ (stdlib only).
 |---|---|
 | Claude Code | `/plugin marketplace add XPersPective/project-brain` then `/plugin install project-brain@project-brain` |
 | Codex | `codex plugin marketplace add XPersPective/project-brain` then `codex plugin add project-brain@project-brain` |
-| Gemini CLI | `gemini extensions install https://github.com/XPersPective/project-brain` |
 | Any Agent Skills tool | `npx skills add XPersPective/project-brain` |
-| Manual | copy `skills/project-brain/` into your agent's skills directory (e.g. `~/.claude/skills/`, `~/.codex/skills/`, `~/.gemini/skills/`, `~/.agents/skills/`) |
+| Manual | copy `skills/project-brain/` into your agent's skills directory (e.g. `~/.claude/skills/`, `~/.codex/skills/`, `~/.gemini/config/skills/`, `~/.agents/skills/`) |
 
 When you set up a project, `brain.py init` adds a short block to the project's `AGENTS.md` (and to an
 existing `CLAUDE.md` / `GEMINI.md`), so every agent that opens the repository loads the skill. For agents
@@ -158,7 +157,6 @@ skills/project-brain/   the skill: SKILL.md, QUALITY.md, AGENTS_CLI.md, REFERENC
 .claude-plugin/         Claude Code plugin + marketplace manifests
 plugin.json             portable plugin manifest (Codex)
 .agents/plugins/        Codex marketplace
-gemini-extension.json   Gemini CLI extension manifest
 docs/design/            design analysis, audit, and v3.0 master prompt
 ```
 

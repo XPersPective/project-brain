@@ -2,23 +2,23 @@
 name: project-brain
 description: >-
   Git-native project memory, architecture, quality enforcement, and multi-agent
-  CLI orchestration protocol (v3.0) that lets coding agents (Claude, Codex,
-  Gemini, OpenCode, Antigravity, Qwen, or others) plan, delegate, verify, review,
-  and resume software projects from recorded repository state. Enforces Frontend
-  Design System & UI Triad verification, Backend Clean Architecture & explicit
-  state machines, digest-bound evidence, mechanical task complexity scoring,
-  system CLI agent discovery, subscription quota protection, and sub-agent
-  delegation. Excludes app-store publishing/distribution. Use when the repository
-  has .project-brain/ or PROJECT_BRAIN.md; when the user says continue, resume,
-  where were we, devam et, kaldığın yerden; or when starting, adopting, planning,
-  or auditing a multi-session project.
+  CLI orchestration protocol (v3.2) that lets coding agents (Claude, Codex,
+  OpenCode, Antigravity, OmniRoute, Qwen, ZCode, or others) plan, delegate, verify,
+  review, and resume software projects from recorded repository state. Enforces
+  Frontend Design System & UI Triad verification, Backend Clean Architecture &
+  explicit state machines, digest-bound evidence, mechanical task complexity
+  scoring, system CLI agent discovery, subscription quota protection, and
+  sub-agent delegation. Excludes app-store publishing/distribution. Use when the
+  repository has .project-brain/ or PROJECT_BRAIN.md; when the user says continue,
+  resume, where were we, devam et, kaldığın yerden; or when starting, adopting,
+  planning, or auditing a multi-session project.
 license: MIT
 metadata:
-  version: 3.1.0
+  version: 3.2.0
   author: XPersPective
 ---
 
-# Project Brain 3.1
+# Project Brain 3.2
 
 **One plan, many agents, verified handoffs.** Any session can end at any moment (token limit, crash, model switch). Another agent can continue from the repository alone. That works because:
 1. **State lives in files and commits**, never only in chat;
@@ -37,7 +37,7 @@ In `.project-brain/`:
 - `PB map` / `PB init` — Genesis: repo overview + detected commands / create skeleton (never overwrites).
 - `PB new . "title" [--priority P1] [--tier L|M|H] [--risk HIGH] [--depends PB-001]` — create the next task.
 - `PB score [PB-NNN] [--write] [--json]` — measure task complexity (`0..100`), computed Tier (`L|M|H`), recommended effort (`low|medium|high`), risk floor, and worker delegation eligibility.
-- `PB agents <scan|quota|list|select|merge>` — scan installed CLI coding agents (`codex`, `claude`, `gemini`, `opencode`, `agy`, `qwen`, etc.), read live subscription quotas, and select the lowest-cost model meeting the quality floor and quota reserve (`10%` worker reserve, `25%` director reserve).
+- `PB agents <scan|quota|list|select|merge>` — scan installed CLI coding agents (`codex`, `claude`, `opencode`, `agy`, `omniroute`, `qwen`, `zcode`, etc.), auto-start local OmniRoute gateway if offline, read live subscription quotas, and select the lowest-cost model meeting the quality floor and quota reserve (`10%` worker reserve, `25%` director reserve).
 - `PB agents session [--new] [--refresh]` / `approve <selection.json> --session <id> --user-confirmed --note "<actual user decision>"` / `revoke` / `settle <job-id> --state completed|failed --note "<readback>"` — propose, confirm, revoke and recover a project/session model pool.
 - `PB delegate <PB-NNN> [--cli <cli>] [--model <alias>] [--effort low|medium|high] [--dry-run]` — dispatch a `Tier L/M` task to a CLI worker inside `ProcessTree` and automatically run `PB check`.
 - `PB start <PB-NNN> --agent <alias> [--takeover "<reason>"]` — claim a task (`Status: IN_PROGRESS`) and bind `Owner`, `Risk`, `areas_digest`, and `contract`.
@@ -89,7 +89,9 @@ metadata collection; never spend a director model or paid API to bootstrap disco
 Register host-native subagents as `cli: host` alongside CLI routes when the host exposes
 their model/effort metadata; never invent access or infer price from a model name.
 
-Run `agents session --new` (add `--refresh` only when metadata needs probing). Show the
+Run `agents session --new`; it snapshots CLI/app presence without launching any CLI
+process. When live versions/login/quotas are needed, run the deadline-bounded
+`agents scan` (or `agents quota`) first, then repropose. Show the
 user concrete models, providers/CLIs, access and billing, remaining quota/windows/
 reset/freshness, proposed roles and efforts. Unknown is unknown. The user can approve
 all, exclude/add aliases, or promote/change roles. Write that decision as selection
@@ -129,6 +131,16 @@ write new requirements/decisions to durable tasks/docs first, preserve the curre
 Next/Failing/Dirty step, incorporate immediate constraints, then resume the main work.
 
 ## 4. Loop & Multi-Agent Delegation
+
+**Windows execution and token economy:** compare all eligible approved CLI/native
+routes objectively for routine discovery, tests and implementation; prefer external
+CLIs on equal cost instead of immediately spawning a native subagent. The director
+specifies the task and reviews actual results; it must not repeat a worker's whole
+exploration. Before any external route is known, use deterministic metadata collection
+or the smallest suitable authorized native discovery worker. Merge its results and
+the native routes into the same user-visible pool. Never weaken
+acceptance, lower the quality floor or silently spend a stronger account to save time.
+See `AGENTS_CLI.md` §1.1 for task budgets, model grouping and escalation.
 
 1. **Select & Score**: Pick the `IN_PROGRESS` or `REVIEW` task, else the highest-priority `READY` task with evidenced completed dependencies. Run `PB score <PB-NNN> --write` to confirm its computed Tier (`L|M|H`), effective Risk (`LOW|MEDIUM|HIGH`), recommended effort (`low|medium|high`), and whether it is `DELEGATABLE`.
 2. **Route Execution (Lead vs. CLI Worker)**:

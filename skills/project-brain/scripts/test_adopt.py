@@ -23,7 +23,8 @@ class Brain:
         content = content.replace("\r\n", "\n").replace("\r", "\n")
         if not content.endswith("\n"):
             content += "\n"
-        tmp.write_text(content, encoding="utf-8", newline="\n")
+        with tmp.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
         os.replace(str(tmp), str(path))
 
 

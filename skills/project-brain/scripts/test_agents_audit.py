@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import brain as B
@@ -46,6 +47,28 @@ def main():
             "alternate": {"model_id": "openai/gpt-5.2-codex", "available": False},
         }, "pools": {"local": {"remaining_pct": 20}}}
         A.save(data, registry)
+        # Invalid imports must not replace a working registry or lose its model pool.
+        original_registry = registry.read_bytes()
+        patch_file = root / "patch.json"
+        for invalid in ([], {"models": []}, {"pools": None}, {"cli_agents": {"bad": []}},
+                        {"benchmarks": {"models": []}}, {"models": {"bad": None}},
+                        {"schema_version": True}, {"schema_version": 2}):
+            patch_file.write_text(json.dumps(invalid), encoding="utf-8")
+            try:
+                quiet(A.run_agents, B, SimpleNamespace(registry=registry, agents_cmd="merge", file=patch_file))
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("malformed registry merge accepted")
+            assert registry.read_bytes() == original_registry
+            malformed = root / "malformed.json"
+            malformed.write_text(json.dumps(invalid), encoding="utf-8")
+            try:
+                A.load(malformed)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("malformed registry loaded")
         loaded = A.load(registry)
         assert not A.candidates(loaded, tier="L", risk="LOW")  # Director reserve cannot be fallback.
         loaded["pools"]["local"]["remaining_pct"] = 80

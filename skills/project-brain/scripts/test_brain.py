@@ -381,18 +381,20 @@ def persistence_checks():
         write(root, ".project-brain/target.md", "# Target\n## Objective\nUser goal\n")
         task = V3_TASK.replace("## Objective", "Priority: P1\nTier: H\n\n## Objective")
         write(root, ".project-brain/tasks/PB-004.md", task)
-        actual_open = Path.open
-        def fail_task(path, *args, **kwargs):
-            if path == root / ".project-brain/tasks/PB-004.md" and args and args[0] == "w":
+        actual_replace = B.os.replace
+        def fail_task(source, destination):
+            if Path(destination) == root / ".project-brain/tasks/PB-004.md":
                 raise OSError("simulated interrupted migration")
-            return actual_open(path, *args, **kwargs)
-        with patch.object(Path, "open", fail_task):
+            return actual_replace(source, destination)
+        with patch.object(B.os, "replace", fail_task):
             try:
                 migrate.run(root, True)
                 raise AssertionError("injected failure not reached")
             except OSError as exc:
                 assert "simulated" in str(exc)
         assert B.parse_config(root)["schema_version"] == "3"
+        assert (root / ".project-brain/tasks/PB-004.md").read_text(encoding="utf-8") == task
+        assert not list((root / ".project-brain/tasks").glob("*.tmp"))
         backup = root / ".project-brain/migration-backup"
         assert (backup / "config.yaml").read_text(encoding="utf-8") == original
         # Retry from preserved input, including a task whose prior write was truncated.
@@ -588,3 +590,7 @@ if __name__ == "__main__":
     routing_checks()
     from test_adopt import main as adoption_checks
     adoption_checks()
+    from test_economy import main as economy_checks
+    economy_checks()
+    from test_discovery import main as discovery_checks
+    discovery_checks()

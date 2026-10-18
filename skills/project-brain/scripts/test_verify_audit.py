@@ -14,6 +14,8 @@ import time
 
 import brain as B
 import runtime_verify as V
+import runtime_pool as P
+import runtime_adopt as A
 
 
 def command(*args):
@@ -106,19 +108,22 @@ Verify source and independent review.
         for log in runs.glob("*.log"):
             log.unlink()
         runs.rmdir()
-        try:
-            runs.symlink_to(external, target_is_directory=True)
-        except OSError:
-            if os.name != "nt":
-                raise
+        if os.name == "nt":
             subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(runs), str(external)], check=True, capture_output=True)
+        else:
+            runs.symlink_to(external, target_is_directory=True)
         try:
-            try:
-                V.prune_runs(B, root)
-            except ValueError:
-                pass
-            else:
-                raise AssertionError("linked run directory was accepted")
+            for operation in (
+                lambda: V.prune_runs(B, root),
+                lambda: P.session_file(root, runs / "agents.json"),
+                lambda: A._archive_path(root / "project", {"id": "test"}, runs),
+            ):
+                try:
+                    operation()
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("linked directory was accepted")
             assert victim.read_text(encoding="utf-8") == "unrelated data"
         finally:
             if runs.is_symlink():

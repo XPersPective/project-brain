@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.2.0 — 2026-10-18
+
+- **OmniRoute Auto-Start, Full Catalog & Worker Dispatch (`runtime_agents.py`)**:
+  - Automatically checks local OmniRoute server health (`/api/health`) and starts `omniroute serve --daemon --no-open --no-tray` outside `ProcessTree` when offline during `agents scan` or `delegate`.
+  - Queries `omniroute api models get-api-models --output json` (with `models --output json` fallback) to discover the complete un-truncated model catalog (`fullModel`, `model_id`, `id`) and registers `omniroute:<model>` routes with `low|medium|high|default` effort support.
+  - Adds first-class non-interactive `omniroute chat --stdin --no-history -m <model> [--reasoning-effort <effort>]` worker dispatch.
+- **Retire `gemini` CLI in favor of Antigravity (`agy`)**:
+  - Removes `gemini` CLI agent discovery and worker adapter (`agy` provides Google Antigravity / Gemini 3.1 Pro & Flash models), purges stale `gemini` entries from `~/.project-brain/agents.json`, and removes `gemini-extension.json`.
+- **Windows CLI Economy, Pool & Security Hardening (`runtime_discovery.py`, `runtime_pool.py`, `runtime_verify.py`, `runtime_adopt.py`)**:
+  - Zero-subprocess `snapshot_agents` for instant `agents session --new` proposals and deadline-bounded `agents scan` (`budget_exhausted` / `deferred`).
+  - Deduplicated Win32 + Windows Store app discovery (`installed_ai_apps`) and bundled ZCode CLI detection.
+  - Multi-window quota floor enforcement (`_quota` / `_inventory` / `_pool_status`), Windows junction reparse-tag protection (`is_link`), atomic `fsync` before replace, and strict registry schema validation (`_validate_registry`).
+
 ## 3.1.0 — 2026-10-18
 
 - Explicit project/session model proposals, user-controlled roles/efforts/billing and configuration-bound approval before actual delegation.

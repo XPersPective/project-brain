@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 
 import runtime_verify as V
 
@@ -80,10 +81,10 @@ BUILTIN_BENCHMARKS = {
 }
 
 CLI_SPECS = (
+    ("zcode", ("zcode",), "ZCode / Z.AI"),
     ("codex", ("codex",), "OpenAI Codex CLI"),
     ("opencode", ("opencode",), "OpenCode multi-provider CLI"),
     ("claude", ("claude",), "Anthropic Claude Code CLI"),
-    ("gemini", ("gemini",), "Google Gemini CLI"),
     ("agy", ("agy", "antigravity"), "Google Antigravity CLI"),
     ("qwen", ("qwen",), "Qwen Code CLI"),
     ("aider", ("aider",), "Aider AI pair programmer CLI"),
@@ -305,6 +306,32 @@ def cmd_score(B, root, tid=None, write=False, as_json=False):
 
 # ── System CLI Discovery & Live Quota Probing ─────────────────────────────
 
+def classify_apps(rows):
+    import runtime_discovery as D
+    return [app for app in D.inventory_apps(rows) if app["cli"]]
+
+
+def installed_ai_apps(timeout=8, skip_store=False):
+    import runtime_discovery as D
+    raw_rows = list(D.raw_windows_app_rows())
+    if os.name == "nt" and not skip_store:
+        shell = shutil.which("powershell.exe")
+        if shell:
+            rc, out, _ = _run_probe([shell, "-NoProfile", "-NonInteractive", "-Command",
+                "@(Get-AppxPackage | Select-Object @{n='DisplayName';e={$_.Name}}, "
+                "@{n='DisplayVersion';e={$_.Version.ToString()}}, InstallLocation) | ConvertTo-Json -Compress"], timeout=timeout)
+            if rc == 0:
+                try:
+                    rows = json.loads(out)
+                    if isinstance(rows, dict):
+                        rows = [rows]
+                    if isinstance(rows, list):
+                        raw_rows.extend(rows)
+                except ValueError:
+                    pass
+    return D.inventory_apps(raw_rows)
+
+
 def _extra_search_dirs():
     dirs = []
     home = Path.home()
@@ -342,23 +369,19 @@ def which_cli(names):
 
 
 def _run_probe(argv, timeout=8, stdin_text=None):
-    """Run a quick local CLI probe without shell expansion where possible."""
+    """Bound metadata subprocess lifetime and returned output; never run inference here."""
     try:
-        cmd = list(argv)
-        if os.name == "nt" and cmd[0].lower().endswith((".cmd", ".bat")):
-            cmd = ["cmd.exe", "/d", "/s", "/c", subprocess.list2cmdline(cmd)]
-        r = subprocess.run(
-            cmd,
-            input=stdin_text,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            stdin=subprocess.DEVNULL if stdin_text is None else None,
-        )
-        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
-    except (OSError, subprocess.SubprocessError) as exc:
+        _check_batch_args(argv)
+        with tempfile.TemporaryDirectory(prefix="pb-metadata-") as directory:
+            log = Path(directory) / "probe.log"
+            result = V.run_command(Path.cwd(), list(argv), log, timeout=timeout,
+                                   input_bytes=stdin_text.encode("utf-8") if stdin_text is not None else None)
+            if result["timed_out"]:
+                return 124, "", "metadata probe timed out"
+            if log.stat().st_size > 1024 * 1024:
+                return 1, "", "metadata response exceeds 1 MiB"
+            return result["exit_code"], log.read_text(encoding="utf-8", errors="replace").strip(), ""
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
         return 1, "", str(exc)
 
 
@@ -408,6 +431,8 @@ def probe_codex_quota(exe_path, timeout=8):
                         message = json.loads(line)
                     except ValueError:
                         continue
+                    if not isinstance(message, dict):
+                        continue
                     if message.get("id") == 1 and "result" in message:
                         proc.stdin.write(read_limits)
                         proc.stdin.flush()
@@ -425,10 +450,14 @@ def probe_codex_quota(exe_path, timeout=8):
             msg = json.loads(line)
         except ValueError:
             continue
-        if msg.get("id") == 2 and "result" in msg:
+        if isinstance(msg, dict) and msg.get("id") == 2 and isinstance(msg.get("result"), dict):
             rl = msg["result"].get("rateLimits") or {}
+            if not isinstance(rl, dict):
+                return None
             primary = rl.get("primary") or {}
             secondary = rl.get("secondary") or {}
+            if not isinstance(primary, dict) or not isinstance(secondary, dict):
+                return None
             p_used = primary.get("usedPercent")
             s_used = secondary.get("usedPercent")
             if any(x is not None and (type(x) not in (int, float) or not math.isfinite(x) or not 0 <= x <= 100)
@@ -440,13 +469,17 @@ def probe_codex_quota(exe_path, timeout=8):
             bottleneck_used = max(used_vals)
             rem_pct = round(max(0.0, 100.0 - bottleneck_used), 1)
             resets_ts = secondary.get("resetsAt") or primary.get("resetsAt")
-            resets_iso = (
-                datetime.fromtimestamp(int(resets_ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                if isinstance(resets_ts, (int, float))
-                else ""
-            )
+            try:
+                resets_iso = (datetime.fromtimestamp(resets_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                              if type(resets_ts) in (int, float) else "")
+            except (ValueError, OverflowError, OSError):
+                return None
             return {
                 "plan_type": rl.get("planType") or "subscription",
+                "quota_windows": [{"name": name, "remaining_pct": 100.0 - window["usedPercent"],
+                                   "window_minutes": window.get("windowDurationMins"), "resets_at": window.get("resetsAt")}
+                                  for name, window in (("primary", primary), ("secondary", secondary))
+                                  if window.get("usedPercent") is not None],
                 "primary_5h_remaining_pct": round(max(0.0, 100.0 - float(p_used)), 1) if isinstance(p_used, (int, float)) else None,
                 "weekly_7d_remaining_pct": round(max(0.0, 100.0 - float(s_used)), 1) if isinstance(s_used, (int, float)) else None,
                 "remaining_pct": rem_pct,
@@ -475,7 +508,7 @@ def probe_claude_status(exe_path, timeout=6):
         try:
             data = json.loads(text)
             return {
-                "authenticated": bool(data.get("loggedIn")),
+                "authenticated": rc == 0 and data.get("loggedIn") is True,
                 "auth_method": data.get("authMethod", ""),
                 "subscription_type": data.get("subscriptionType", ""),
             }
@@ -491,7 +524,7 @@ def _read_safe(path):
         return None
 
 
-def probe_codex_info(exe_path):
+def probe_codex_info(exe_path, timeout=5):
     home = Path.home() / ".codex"
     cfg_text = _read_safe(home / "config.toml")
     default_model = ""
@@ -515,7 +548,7 @@ def probe_codex_info(exe_path):
             pass
     if not models and default_model:
         models = [default_model]
-    rc, out, err = _run_probe([exe_path, "login", "status"], timeout=5)
+    rc, out, err = _run_probe([exe_path, "login", "status"], timeout=timeout)
     status = (out + err).lower()
     logged_in = rc == 0 and "logged in" in status and "chatgpt" in status
     return {
@@ -555,6 +588,51 @@ def _default_registry():
     return reg
 
 
+def _validate_registry(data):
+    """Reject malformed containers before merging defaults or replacing saved data."""
+    if not isinstance(data, dict):
+        raise ValueError("model registry root must be an object")
+    version = data.get("schema_version", 1)
+    if type(version) is not int or version != 1:
+        raise ValueError("unsupported model registry schema_version")
+    for key in ("models", "pools", "cli_agents", "benchmarks"):
+        if key in data and not isinstance(data[key], dict):
+            raise ValueError(f"model registry {key} must be an object")
+    if "installed_apps" in data:
+        apps = data["installed_apps"]
+        if not isinstance(apps, list) or any(not isinstance(app, dict) for app in apps):
+            raise ValueError("model registry installed_apps must be an object array")
+    benchmarks = data.get("benchmarks", {}).get("models", {})
+    if not isinstance(benchmarks, dict):
+        raise ValueError("model registry benchmarks.models must be an object")
+    for key, rows in (("models", data.get("models", {})), ("pools", data.get("pools", {})),
+                      ("cli_agents", data.get("cli_agents", {})), ("benchmarks.models", benchmarks)):
+        if any(not isinstance(row, dict) for row in rows.values()):
+            raise ValueError(f"model registry {key} entries must be objects")
+        for row in rows.values():
+            for field in ("cli", "model_id", "pool", "benchmark_key", "binary"):
+                if row.get(field) is not None and not isinstance(row[field], str):
+                    raise ValueError(f"model registry {field} must be text")
+            for field in ("roles", "tiers", "efforts", "worker_argv", "generic_worker_argv", "quota_argv", "catalog_argv"):
+                value = row.get(field)
+                if value is not None and (not isinstance(value, list) or any(not isinstance(x, str) for x in value)):
+                    raise ValueError(f"model registry {field} must be a text array")
+            for field in ("quality", "coding", "intelligence", "cost_weight", "remaining_pct",
+                          "reserve_pct", "primary_5h_remaining_pct", "weekly_7d_remaining_pct"):
+                value = row.get(field)
+                if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value < 0
+                                          or (field != "cost_weight" and value > 100)):
+                    raise ValueError(f"invalid model registry {field}")
+            windows = row.get("quota_windows")
+            if windows is not None:
+                if not isinstance(windows, list) or any(not isinstance(w, dict) for w in windows):
+                    raise ValueError("model registry quota_windows must be an object array")
+                for w in windows:
+                    wpct = w.get("remaining_pct")
+                    if wpct is not None and (type(wpct) not in (int, float) or not math.isfinite(wpct) or not 0 <= wpct <= 100):
+                        raise ValueError("invalid model registry quota_windows.remaining_pct")
+
+
 def load(path=None):
     p = registry_path(path)
     if not p.exists():
@@ -563,8 +641,7 @@ def load(path=None):
         data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
     except ValueError as exc:
         raise ValueError(f"{p}: invalid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError(f"{p}: root must be an object")
+    _validate_registry(data)
     data.setdefault("schema_version", 1)
     data.setdefault("benchmarks", {"source": "builtin", "updated_at": "", "models": dict(BUILTIN_BENCHMARKS)})
     bm_models = data["benchmarks"].setdefault("models", {})
@@ -577,12 +654,12 @@ def load(path=None):
 
 
 def save(data, path=None):
+    import brain as B
+
+    _validate_registry(data)
     p = registry_path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
     data["updated_at"] = now_iso()
-    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, p)
+    B.write_atomic(p, json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False))
     return p
 
 
@@ -595,15 +672,200 @@ def deep_merge(dst, src):
     return dst
 
 
-def scan_agents(path=None, probe_quota=True, persist=True):
-    """Scan local machine for installed CLI agents, populate pools/models, and optionally read live quotas."""
+def omniroute_base_url():
+    env_url = (os.environ.get("OMNIROUTE_BASE_URL") or "").strip().rstrip("/")
+    if env_url:
+        return env_url
+    port = (os.environ.get("PORT") or "20128").strip() or "20128"
+    return f"http://127.0.0.1:{port}"
+
+
+def omniroute_server_up(timeout=1.5):
+    """Check whether the local OmniRoute gateway HTTP server is listening and healthy."""
+    url = f"{omniroute_base_url()}/api/health"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=max(0.2, float(timeout))) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            return isinstance(status, int) and 200 <= status < 500
+    except Exception:
+        return False
+
+
+def ensure_omniroute_server(exe_path, timeout=25.0):
+    """Ensure the OmniRoute background server is running; start it in daemon mode if offline."""
+    if omniroute_server_up(timeout=min(1.5, max(0.2, float(timeout)))):
+        return True
+    if not exe_path or not isinstance(exe_path, str) or not Path(exe_path).is_file():
+        return False
+    cmd = [exe_path, "serve", "--daemon", "--no-open", "--no-tray"]
+    try:
+        _check_batch_args(cmd)
+        run_cmd = list(cmd)
+        if os.name == "nt" and exe_path.lower().endswith((".cmd", ".bat")):
+            run_cmd = ["cmd.exe", "/d", "/s", "/c", subprocess.list2cmdline(cmd)]
+        popen_kw = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if os.name == "nt":
+            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200) | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+            try:
+                proc = subprocess.Popen(run_cmd, creationflags=flags | breakaway, **popen_kw)
+            except OSError:
+                proc = subprocess.Popen(run_cmd, creationflags=flags, **popen_kw)
+        else:
+            proc = subprocess.Popen(run_cmd, start_new_session=True, **popen_kw)
+        try:
+            proc.wait(timeout=min(5.0, max(1.0, float(timeout) * 0.4)))
+        except subprocess.TimeoutExpired:
+            pass
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return False
+    deadline = time.monotonic() + max(1.0, float(timeout))
+    while time.monotonic() < deadline:
+        if omniroute_server_up(timeout=1.5):
+            return True
+        time.sleep(0.5)
+    return omniroute_server_up(timeout=1.5)
+
+
+def probe_catalog(argv, timeout=8):
+    """Read metadata only. Catalog membership never establishes access or billing."""
+    if not isinstance(argv, list) or not argv or any(not isinstance(x, str) or not x or "\x00" in x for x in argv):
+        raise ValueError("catalog_argv must contain nonempty explicit arguments")
+    rc, out, _ = _run_probe(argv, timeout=timeout)
+    if rc != 0:
+        return [], "unavailable"
+    # Some CLIs prefix JSON with diagnostics; only accept a complete object/array.
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"(?m)^\s*[\[{]", out):
+        try:
+            content = out[match.start():].lstrip()
+            value, end = decoder.raw_decode(content)
+        except ValueError:
+            continue
+        rows = value.get("models", value.get("data")) if isinstance(value, dict) else value
+        if not isinstance(rows, list) or len(rows) > 10000:
+            continue
+        models = {}
+        for row in rows:
+            row = {"id": row} if isinstance(row, str) else row
+            if not isinstance(row, dict):
+                return [], "invalid"
+            model = row.get("id") if "id" in row else row.get("model_id", row.get("fullModel", row.get("model", row.get("name"))))
+            if not isinstance(model, str) or not model.strip() or len(model) > 512 or any(ord(c) < 32 for c in model):
+                return [], "invalid"
+            provider = row.get("provider")
+            models[model] = {"model_id": model, "provider": provider if isinstance(provider, str) else "unknown"}
+        # OmniRoute 2.x can truncate even its JSON output; never claim completeness.
+        return list(models.values()), "partial" if content[end:].strip() else "ok"
+    return [], "invalid"
+
+
+def _purge_retired_agents(data):
+    """Remove retired gemini CLI entries from persisted registries."""
+    (data.get("cli_agents") or {}).pop("gemini", None)
+    (data.get("pools") or {}).pop("gemini", None)
+    models = data.get("models") or {}
+    for alias in [k for k, v in models.items() if isinstance(v, dict) and v.get("cli") == "gemini"]:
+        models.pop(alias, None)
+
+
+def _mark_unfound(data, discovered):
+    """Demote previously discovered CLIs that are no longer resolvable on this machine."""
+    for cli_id, old in data.get("cli_agents", {}).items():
+        if cli_id not in discovered and old.get("discovered_at"):
+            old["available"] = False
+            old["authenticated"] = False
+            old["discovery_status"] = "not_found"
+            for spec in data["models"].values():
+                if spec.get("cli") == cli_id:
+                    spec["available"] = False
+
+
+def _attach_installed_apps(data, apps, discovered):
+    """Publish app inventory with per-app CLI setup status; discovery grants no usage rights."""
+    for app in apps:
+        if not app.get("cli"):
+            app["setup_status"] = "UNCLASSIFIED"
+            continue
+        app["cli_binary"] = discovered.get(app["cli"], {}).get("binary")
+        app["setup_status"] = "CLI_FOUND_ACCESS_UNVERIFIED" if app["cli_binary"] else "CLI_SETUP_REQUIRED"
+    data["installed_apps"] = apps
+
+
+def snapshot_agents(path=None, persist=True):
+    """Refresh CLI presence and the installed-app inventory without launching any CLI process.
+
+    Version, authentication and quota fields keep their last live values from `agents scan`,
+    so a new pool proposal stays cheap and deterministic on every new main session."""
     data = load(path)
+    _purge_retired_agents(data)
+    import runtime_discovery as D
+    apps = D.windows_app_metadata()
+    previous = data.get("cli_agents") or {}
     discovered = {}
     for cli_id, binaries, desc in CLI_SPECS:
         exe = which_cli(binaries)
-        if not exe:
+        prefix = [exe] if exe else D.bundled_cli(apps, cli_id)
+        if not prefix:
             continue
-        rc, ver_out, ver_err = _run_probe([exe, "--version"], timeout=3)
+        prev_entry = previous.get(cli_id)
+        entry = dict(prev_entry) if isinstance(prev_entry, dict) else {}
+        entry.update({"id": cli_id, "binary": prefix[0], "probe_argv": prefix, "description": desc,
+                      "available": True, "discovery_status": "found", "snapshot_at": now_iso()})
+        if isinstance(prev_entry, dict):
+            for key in ("binary", "worker_argv"):
+                if prev_entry.get(key) is not None:
+                    entry[key] = prev_entry[key]
+        entry.setdefault("version", "unknown")
+        entry.setdefault("discovered_at", now_iso())
+        entry.setdefault("authenticated", False)
+        discovered[cli_id] = entry
+    _mark_unfound(data, discovered)
+    data["cli_agents"] = {**previous, **discovered}
+    _attach_installed_apps(data, apps, discovered)
+    if persist:
+        save(data, path)
+    return data
+
+
+def scan_agents(path=None, probe_quota=True, persist=True, deadline=90.0):
+    """Scan local machine for installed CLI agents, populate pools/models, and optionally read live quotas.
+
+    Total wall time is bounded by `deadline` seconds; CLIs not reached before the budget runs
+    out are recorded with discovery_status "budget_exhausted" instead of stalling the caller."""
+    stop_at = (time.monotonic() + deadline) if deadline and deadline > 0 else None
+
+    def remaining(cap):
+        return cap if stop_at is None else max(1.0, min(cap, stop_at - time.monotonic()))
+
+    def spent():
+        return stop_at is not None and stop_at - time.monotonic() <= 1.0
+
+    data = load(path)
+    _purge_retired_agents(data)
+    discovered = {}
+    apps = installed_ai_apps(timeout=remaining(8), skip_store=spent())
+    import runtime_discovery as D
+    for cli_id, binaries, desc in CLI_SPECS:
+        exe = which_cli(binaries)
+        prefix = [exe] if exe else D.bundled_cli(apps, cli_id)
+        if not prefix:
+            continue
+        exe = prefix[0]
+        if spent():
+            discovered[cli_id] = {
+                "id": cli_id, "binary": exe, "probe_argv": prefix, "description": desc,
+                "version": "unknown", "available": True, "authenticated": False,
+                "discovery_status": "budget_exhausted", "discovered_at": now_iso(),
+            }
+            continue
+        rc, ver_out, ver_err = _run_probe(prefix + ["--version"], timeout=remaining(3))
         raw_ver = ver_out if rc == 0 and ver_out else (ver_out or ver_err)
         if "timed out" in raw_ver.lower():
             ver_line = "installed"
@@ -612,18 +874,20 @@ def scan_agents(path=None, probe_quota=True, persist=True):
         entry = {
             "id": cli_id,
             "binary": exe,
+            "probe_argv": prefix,
             "description": desc,
             "version": ver_line[:80],
             "available": True,
+            "discovery_status": "found",
             "authenticated": False,
             "discovered_at": now_iso(),
         }
         if cli_id == "codex":
-            cinfo = probe_codex_info(exe)
+            cinfo = probe_codex_info(exe, timeout=remaining(5))
             entry.update(cinfo)
             pool = data["pools"].setdefault("codex", {"remaining_pct": None, "reserve_pct": WORKER_RESERVE_PCT})
-            if probe_quota:
-                q = probe_codex_quota(exe)
+            if probe_quota and not spent():
+                q = probe_codex_quota(exe, timeout=remaining(8))
                 if q:
                     pool.update(q)
                     entry["quota"] = q
@@ -641,7 +905,7 @@ def scan_agents(path=None, probe_quota=True, persist=True):
                     "available": False,
                 })
         elif cli_id == "opencode":
-            oc_models = probe_opencode_models(exe)
+            oc_models = [] if spent() else probe_opencode_models(exe, timeout=remaining(8))
             entry["models"] = oc_models
             data["pools"].setdefault("opencode-catalog", {"remaining_pct": None, "reserve_pct": 10.0, "plan_type": "unknown"})
             for om in oc_models:
@@ -650,7 +914,7 @@ def scan_agents(path=None, probe_quota=True, persist=True):
                     "roles": [], "tiers": [], "efforts": ["default"], "available": False,
                 })
         elif cli_id == "claude":
-            cstat = probe_claude_status(exe)
+            cstat = {} if spent() else probe_claude_status(exe, timeout=remaining(6))
             cstat["authenticated"] = bool(cstat.get("authenticated") and cstat.get("subscription_type") and cstat.get("auth_method") != "api_key")
             entry.update(cstat)
             data["pools"].setdefault("claude", {
@@ -658,14 +922,13 @@ def scan_agents(path=None, probe_quota=True, persist=True):
                 "reserve_pct": WORKER_RESERVE_PCT,
                 "plan_type": cstat.get("subscription_type") or "subscription",
             })
-        elif cli_id == "gemini":
-            entry["authenticated"] = False  # Local credential files do not prove usable subscription access.
-            data["pools"].setdefault("gemini", {"remaining_pct": None, "reserve_pct": WORKER_RESERVE_PCT})
         elif cli_id == "qwen":
             entry["authenticated"] = False
             data["pools"].setdefault("qwen", {"remaining_pct": None, "reserve_pct": WORKER_RESERVE_PCT})
         elif cli_id == "agy":
             data["pools"].setdefault("agy", {"remaining_pct": None, "reserve_pct": DIRECTOR_RESERVE_PCT})
+        elif cli_id == "omniroute":
+            data["pools"].setdefault("omniroute", {"remaining_pct": None, "reserve_pct": WORKER_RESERVE_PCT})
         if cli_id in ("mcode", "kimi", "hermes") and not any(
                 isinstance(spec, dict) and spec.get("cli") == cli_id for spec in data["models"].values()):
             data["pools"].setdefault(cli_id, {"remaining_pct": None, "reserve_pct": WORKER_RESERVE_PCT})
@@ -674,6 +937,7 @@ def scan_agents(path=None, probe_quota=True, persist=True):
                 "roles": [], "tiers": [], "efforts": ["default"], "available": False,
             })
         discovered[cli_id] = entry
+    _mark_unfound(data, discovered)
     for cli_id, entry in discovered.items():
         existing = (data.get("cli_agents") or {}).get(cli_id)
         if existing and isinstance(existing, dict):
@@ -684,9 +948,100 @@ def scan_agents(path=None, probe_quota=True, persist=True):
                     entry[key] = existing[key]
             discovered[cli_id] = entry
     data["cli_agents"] = {**(data.get("cli_agents") or {}), **discovered}
+    for cli_id, entry in data["cli_agents"].items():
+        argv = entry.get("catalog_argv")
+        fallback_argv = None
+        if cli_id == "omniroute" and cli_id in discovered:
+            server_up = False if spent() else ensure_omniroute_server(entry["binary"], timeout=remaining(25))
+            entry["server_running"] = server_up
+            entry["authenticated"] = server_up
+            if argv is None:
+                argv = [entry["binary"], "api", "models", "get-api-models", "--output", "json"]
+                fallback_argv = [entry["binary"], "models", "--output", "json"]
+        if argv is None:
+            continue
+        if spent():
+            entry["catalog_status"] = "deferred"
+            entry["catalog_checked_at"] = now_iso()
+            continue
+        rows, status = probe_catalog(argv, timeout=remaining(8))
+        if status in ("unavailable", "invalid") and fallback_argv and not spent():
+            rows, status = probe_catalog(fallback_argv, timeout=remaining(8))
+        entry["catalog_status"] = status
+        entry["catalog_checked_at"] = now_iso()
+        if status in ("ok", "partial"):
+            entry["models"] = [row["model_id"] for row in rows]
+        if status == "ok":
+            present = {row["model_id"] for row in rows}
+            for spec in data["models"].values():
+                if spec.get("cli") == cli_id and spec.get("catalog_source") == cli_id:
+                    spec["catalog_missing"] = spec.get("model_id") not in present
+                    if spec["catalog_missing"]:
+                        spec["available"] = False
+        for row in rows:
+            alias = f"{cli_id}:{row['model_id']}"
+            default_efforts = ["low", "medium", "high", "default"] if cli_id == "omniroute" else ["default"]
+            default_spec = {
+                "cli": cli_id, "model_id": row["model_id"], "provider": row["provider"],
+                "roles": [], "tiers": [], "efforts": default_efforts, "available": False,
+            }
+            if cli_id == "omniroute":
+                default_spec["pool"] = "omniroute"
+            data["models"].setdefault(alias, default_spec)
+            data["models"][alias].update(catalog_source=cli_id, catalog_missing=False)
+    _attach_installed_apps(data, apps, discovered)
+    if probe_quota:
+        _refresh_configured_quotas(data, stop_at=stop_at)
     if persist:
         save(data, path)
     return data
+
+
+def _refresh_configured_quotas(data, stop_at=None):
+    for pool in data.get("pools", {}).values():
+        argv = pool.get("quota_argv")
+        if argv is None:
+            continue
+        if stop_at is not None and stop_at - time.monotonic() <= 1.0:
+            pool["quota_status"] = "deferred"
+            continue
+        if not argv or any(not item or "\x00" in item for item in argv):
+            raise ValueError("quota_argv must contain nonempty explicit arguments")
+        _check_batch_args(argv)
+        timeout = 8 if stop_at is None else max(1.0, min(8, stop_at - time.monotonic()))
+        rc, out, _ = _run_probe(argv, timeout=timeout)
+        if rc != 0:
+            pool["quota_status"] = "unavailable"  # Preserve last-known low quota, never reset to 100%.
+            continue
+        try:
+            snapshot = json.loads(out)
+            if not isinstance(snapshot, dict):
+                raise ValueError("quota response must be an object")
+            kept = {k: snapshot[k] for k in ("remaining_pct", "updated_at", "resets_at",
+                    "primary_5h_remaining_pct", "weekly_7d_remaining_pct", "quota_windows") if k in snapshot}
+            if any(pool.get(k) is not None and k not in kept for k in
+                   ("primary_5h_remaining_pct", "weekly_7d_remaining_pct", "quota_windows")):
+                raise ValueError("quota response omitted a previously observed window")
+            if "quota_windows" in kept:
+                windows = kept["quota_windows"]
+                if not isinstance(windows, list) or any(not isinstance(w, dict) for w in windows):
+                    raise ValueError("invalid quota windows")
+                kept["quota_windows"] = [{k: w[k] for k in ("name", "remaining_pct", "resets_at", "window_minutes")
+                                          if k in w} for w in windows]
+            for key in ("remaining_pct", "primary_5h_remaining_pct", "weekly_7d_remaining_pct"):
+                value = kept.get(key)
+                if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 100):
+                    raise ValueError("invalid quota value")
+            if kept.get("remaining_pct") is None or not isinstance(kept.get("updated_at"), str):
+                raise ValueError("quota percent and timestamp required")
+            import runtime_pool as P
+            _, fresh = P._quota({"pools": {"probe": kept}}, {"pool": "probe"})
+            if not fresh:
+                raise ValueError("quota timestamp is stale or invalid")
+        except (ValueError, TypeError):
+            pool["quota_status"] = "invalid"
+            continue
+        pool.update(kept, quota_status="fresh", quota_source="configured metadata CLI")
 
 
 def refresh_quota(path=None):
@@ -705,6 +1060,7 @@ def refresh_quota(path=None):
     if claude_info and claude_info.get("binary"):
         cs = probe_claude_status(claude_info["binary"])
         claude_info.update(cs)
+    _refresh_configured_quotas(data)
     save(data, path)
     return data
 
@@ -726,9 +1082,13 @@ def _quality(bm):
 
 
 def _pool_status(data, spec, role, tier):
+    import runtime_pool as P
     pool_name = spec.get("pool")
     pool = (data.get("pools") or {}).get(pool_name or "") or {}
-    rem = pool.get("remaining_pct")
+    try:
+        rem, _ = P._quota(data, spec)
+    except ValueError:
+        return False, None, "invalid remaining quota"
     raw_reserve = pool.get("reserve_pct", WORKER_RESERVE_PCT)
     if type(raw_reserve) not in (int, float):
         return False, None, "invalid quota reserve"
@@ -791,7 +1151,9 @@ def candidates(data, role="worker", tier="M", risk="MEDIUM", exclude="", cli_fil
                 continue
         if effective_q is None and not spec.get("user_approved"):
             continue
-        if effective_q is not None and effective_q < floor and not spec.get("user_approved"):
+        if effective_q is None and role == "worker" and (tier != "L" or risk != "LOW"):
+            continue
+        if effective_q is not None and effective_q < floor:
             continue
         try:
             cost = float(spec.get("cost_weight", 1.0))
@@ -801,7 +1163,7 @@ def candidates(data, role="worker", tier="M", risk="MEDIUM", exclude="", cli_fil
             cost = 1.0
         quality_sort = effective_q if effective_q is not None else 0.0
         if tier in ("L", "M") and role == "worker":
-            sort_key = (cost, -(rem_pct if rem_pct is not None else 50.0), -quality_sort, alias)
+            sort_key = (cost, spec.get("cli") == "host", -(rem_pct if rem_pct is not None else 50.0), -quality_sort, alias)
         else:
             sort_key = (-quality_sort, cost, -(rem_pct if rem_pct is not None else 50.0), alias)
         row = {
@@ -880,7 +1242,8 @@ def gate(B, task, alias, action, path=None, root=None):
         quality = _quality(_benchmark_for(data, alias, spec))
         if quality is None:
             quality = spec.get("quality")
-        if not spec.get("user_approved") and (not isinstance(quality, (int, float)) or not math.isfinite(quality) or quality < QUALITY_FLOOR[(tier, risk)]):
+        if ((type(quality) in (int, float) and (not math.isfinite(quality) or quality < QUALITY_FLOOR[(tier, risk)]))
+                or (quality is None and (not spec.get("user_approved") or (action == "start" and (tier != "L" or risk != "LOW"))))):
             raise ValueError(f"{alias}: quality below tier={tier} risk={risk} floor")
     elif action == "review":
         if "reviewer" not in roles and "lead" not in roles:
@@ -891,7 +1254,8 @@ def gate(B, task, alias, action, path=None, root=None):
         quality = _quality(_benchmark_for(data, alias, spec))
         if quality is None:
             quality = spec.get("quality")
-        if not spec.get("user_approved") and (not isinstance(quality, (int, float)) or not math.isfinite(quality) or quality < QUALITY_FLOOR[(tier, risk)]):
+        if ((type(quality) in (int, float) and (not math.isfinite(quality) or quality < QUALITY_FLOOR[(tier, risk)]))
+                or (quality is None and (not spec.get("user_approved") or (action == "start" and (tier != "L" or risk != "LOW"))))):
             raise ValueError(f"{alias}: reviewer quality below tier={tier} risk={risk} floor")
         if task:
             impl = V.implementers(B, task)
@@ -904,7 +1268,7 @@ def gate(B, task, alias, action, path=None, root=None):
                     bm_imp = _quality(_benchmark_for(data, imp, imp_spec))
                     if bm_imp is None:
                         bm_imp = imp_spec.get("quality")
-                    if not spec.get("user_approved") and bm_rev is not None and bm_imp is not None and bm_rev < bm_imp:
+                    if bm_rev is not None and bm_imp is not None and bm_rev < bm_imp:
                         raise ValueError(f"reviewer {alias} (quality {bm_rev}) is weaker than implementer {imp} (quality {bm_imp})")
 
 
@@ -932,11 +1296,16 @@ def build_worker_prompt(B, root, task, score_info):
             "validate external inputs at the boundary, and enforce idempotency/error contracts."
         )
     rules.append("6. Run every command in `## Verify` and fix any failures before finishing.")
+    rules.append("7. Keep context to the named files; no full-repository dumps or nested delegation. Stop after one failed repair with the exact failure and remaining work. Return changed files, check results and unresolved risks in at most 12 lines; intention-only output is not completion.")
     return "\n".join(rules)
 
 
 def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config=None, prompt_file=""):
     """Construct the exact non-interactive CLI command + optional stdin payload."""
+    if any(not isinstance(v, str) or "\x00" in v for v in (cli_name, binary, model_id, effort, prompt, prompt_file)):
+        raise ValueError("worker command fields must be text without NUL")
+    if not binary or (cli_config is not None and not isinstance(cli_config, dict)):
+        raise ValueError("worker binary and object adapter configuration required")
     root_str = str(Path(root).resolve())
     if cli_name == "mcode" and effort != "default" and re.search(r"(?:^|[-_])m3(?:$|[.-])", model_id, re.I):
         raise ValueError("MiniMax-M3 does not support a worker effort setting")
@@ -955,13 +1324,13 @@ def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config
         argv = []
         for raw in template:
             names = re.findall(r"\{([^{}]+)\}", raw)
-            if any(name not in allowed for name in names):
+            if any(name not in allowed for name in names) or re.search(r"[{}]", re.sub(r"\{[^{}]+\}", "", raw)):
                 raise ValueError(f"unknown worker_argv placeholder for {cli_name}")
             value = raw
             for name in names:
                 value = value.replace("{" + name + "}", str(values[name]))
-            if "{" in value or "}" in value:
-                raise ValueError(f"invalid worker_argv placeholder for {cli_name}")
+            if not value or "\x00" in value:
+                raise ValueError(f"empty or NUL worker argument for {cli_name}")
             argv.append(value)
         if not argv[0]:
             raise ValueError(f"worker_argv binary is empty for {cli_name}")
@@ -976,7 +1345,7 @@ def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config
                  "-c", "approval_policy='never'", "-"]
         return argv, prompt
     if cli_name == "opencode":
-        argv = [binary, "run", "--pure"]
+        argv = [binary, "run", "--pure", "--format", "json"]
         if model_id != "default":
             argv += ["-m", model_id]
         if effort != "default":
@@ -989,11 +1358,6 @@ def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config
         if effort != "default":
             argv += ["--effort", effort]
         return argv + ["--permission-mode", "acceptEdits"], prompt
-    if cli_name == "gemini":
-        argv = [binary, "-p", "Execute the task provided on stdin."]
-        if model_id != "default":
-            argv += ["-m", model_id]
-        return argv + ["--approval-mode", "auto_edit"], prompt
     if cli_name == "agy":
         argv = [binary]
         if model_id != "default":
@@ -1002,6 +1366,8 @@ def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config
             argv += ["--effort", effort]
         return argv + ["--mode", "auto", "--print", prompt], None
     if cli_name == "qwen":
+        if effort != "default":
+            raise ValueError("Qwen adapter requires effort=default; no verified effort selector")
         argv = [binary, "-p", "Execute the task provided on stdin."]
         if model_id != "default":
             argv += ["-m", model_id]
@@ -1016,12 +1382,64 @@ def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config
                 raise ValueError("MCode default model effort support is unknown; select effort=default")
             argv += ["--effort", effort]
         return argv, prompt
+    if cli_name == "omniroute":
+        argv = [binary, "chat", "--stdin", "--no-history"]
+        if model_id != "default":
+            argv += ["-m", model_id]
+        if effort != "default":
+            if effort not in ("low", "medium", "high"):
+                raise ValueError("OmniRoute adapter requires effort in low|medium|high|default")
+            argv += ["--reasoning-effort", effort]
+        return argv, prompt
     raise ValueError(f"unsupported worker CLI: {cli_name}")
 
 
 def _check_batch_args(argv):
     if argv and Path(argv[0]).suffix.lower() in (".cmd", ".bat") and any(V.BATCH_META.search(arg) for arg in argv):
         raise ValueError("Unsafe Windows batch arguments; use a native executable or a CLI accepting the prompt on stdin")
+
+
+def worker_usage(log_path, cli_name):
+    """Read only structured provider counters; unknown output is never zero usage."""
+    if cli_name != "opencode":
+        return None
+    totals = dict.fromkeys(("total", "input", "output", "reasoning", "cache_read", "cache_write"), 0)
+    seen, cost, cost_known, complete = set(), 0.0, True, False
+    with Path(log_path).open(encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "step_finish":
+                continue
+            part = event.get("part")
+            if not isinstance(part, dict) or not isinstance(part.get("tokens"), dict):
+                return None
+            identity = part.get("id")
+            if not isinstance(identity, str) or not identity:
+                return None
+            if identity in seen:
+                continue
+            seen.add(identity)
+            tokens = part["tokens"]
+            cache = tokens.get("cache", {})
+            if not isinstance(cache, dict):
+                return None
+            values = {k: tokens.get(k) for k in ("total", "input", "output", "reasoning")}
+            values.update(cache_read=cache.get("read"), cache_write=cache.get("write"))
+            if any(type(v) is not int or v < 0 for v in values.values()):
+                return None
+            for key, value in values.items():
+                totals[key] += value
+            amount = part.get("cost")
+            if type(amount) in (int, float) and math.isfinite(amount) and amount >= 0:
+                cost += amount
+            else:
+                cost_known = False
+            complete = part.get("reason") == "stop"
+    return {"source": "opencode.step_finish", "tokens": totals, "reported_cost": cost if cost_known else None,
+            "complete": complete, "steps": len(seen)} if seen else None
 
 
 def delegate_task(B, root, tid, cli_filter="", model_override="", effort_override="",
@@ -1065,7 +1483,7 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
         if pool_session and pool_session.get("status") == "APPROVED":
             data, approved_session = P.approved_data(B, root, data, reg_path)
         elif not data.get("cli_agents") and not data.get("models"):
-            data = scan_agents(reg_path, probe_quota=False, persist=False)
+            data = snapshot_agents(reg_path, persist=False)
     else:
         import runtime_pool as P
         try:
@@ -1107,6 +1525,8 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
     binary = binary or cli_name
 
     prompt = build_worker_prompt(B, root, task, sinfo)
+    reason = "explicit selection" if model_override or cli_filter else "quality first, cost next; external CLI on equal cost"
+    print(f"ROUTE {chosen['alias']}: {reason}; timeout={timeout}s prompt_bytes={len(prompt.encode('utf-8'))}; token usage unknown until provider readback")
     if cli_name == "host":
         if dry_run:
             print(f"DELEGATE_PLAN {task['id']}: native host handoff preview")
@@ -1157,6 +1577,10 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
         print(f"  cmd: {subprocess.list2cmdline(argv)}")
         return 0
 
+    if cli_name == "omniroute" and not ensure_omniroute_server(binary, timeout=min(25, timeout)):
+        print(f"FAIL {task['id']}: OmniRoute server is not running and could not be started")
+        return 2
+
     if prompt_file:
         prompt_path = V.public_path(root, prompt_file)
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1180,7 +1604,7 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
 
     rdir = V.public_path(root, ".project-brain/.cache/runs")
     rdir.mkdir(parents=True, exist_ok=True)
-    log_path = V.public_path(root, f".project-brain/.cache/runs/{task['id']}-delegate.log")
+    log_path = V.public_path(root, f".project-brain/.cache/runs/{task['id']}-{job_id}-delegate.log")
     log_rel = f".project-brain/.cache/runs/{log_path.name}"
     run_cmd = list(argv)
     if os.name == "nt" and run_cmd[0].lower().endswith((".cmd", ".bat")):
@@ -1213,7 +1637,8 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
                 proc.wait(timeout=timeout)
                 rc = proc.returncode
             except subprocess.TimeoutExpired:
-                P.finish(B, root, job_id, exit_code=None, registry=reg_path)
+                logf.flush()
+                P.finish(B, root, job_id, exit_code=None, registry=reg_path, usage=worker_usage(log_path, cli_name))
                 logf.write(f"\nTIMEOUT after {timeout}s\n")
                 print(f"FAIL {task['id']}: worker `{chosen['alias']}` timed out after {timeout}s (log: {log_rel})")
                 return 2
@@ -1221,10 +1646,12 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
                 P.finish(B, root, job_id, exit_code=None, registry=reg_path)
                 raise
 
-    P.finish(B, root, job_id, exit_code=rc, registry=reg_path)
+    usage = worker_usage(log_path, cli_name)
+    P.finish(B, root, job_id, exit_code=rc, registry=reg_path, usage=usage)
 
     elapsed = time.monotonic() - t0
     print(f"WORKER_DONE {task['id']}: {chosen['alias']} (effort={chosen['effort']}) exit={rc} in {elapsed:.1f}s (log: {log_rel})")
+    print("USAGE " + (json.dumps(usage) if usage is not None else "unknown (provider counters unavailable)"))
     if rc != 0:
         return 2
     with B.checkout_lock(root):
@@ -1255,7 +1682,7 @@ def run_agents(B, args):
                 session = inherited_session
             else:
                 session = P.propose(B, root, p, new=getattr(args, "new", False),
-                                    refresh=getattr(args, "refresh", False))
+                                    refresh=getattr(args, "refresh", False) or getattr(args, "new", False))
         elif sub == "approve":
             selection_path = Path(args.file)
             selection = json.loads(selection_path.read_text(encoding="utf-8"))
@@ -1277,6 +1704,10 @@ def run_agents(B, args):
             print(json.dumps(data, indent=2, ensure_ascii=False))
             return 0
         agents = data.get("cli_agents") or {}
+        for app in data.get("installed_apps", []):
+            if not app.get("cli"):
+                continue
+            print(f"APP {app['name']} | subscription={app['subscription_group']} | {app['setup_status']}")
         print(f"DISCOVERED {len(agents)} CLI agents (saved to {p}):")
         for cid, info in sorted(agents.items()):
             q = info.get("quota") or (data.get("pools") or {}).get(cid) or {}
@@ -1306,6 +1737,7 @@ def run_agents(B, args):
             print(f"FAIL {src}: file not found")
             return 2
         patch = json.loads(src.read_text(encoding="utf-8", errors="replace"))
+        _validate_registry(patch)
         data = deep_merge(load(p), patch)
         save(data, p)
         print(f"MERGED {p} ({len(data.get('models', {}))} models, {len(data.get('pools', {}))} pools)")

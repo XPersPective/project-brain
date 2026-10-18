@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from unittest.mock import patch
 
 import brain as B
 import runtime_verify as V
@@ -19,6 +20,16 @@ def main():
         with redirect_stdout(StringIO()):
             B.cmd_init(root)
         (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+        original = (root / "app.py").read_bytes()
+        with patch.object(B.os, "fsync", side_effect=OSError("storage flush failed")):
+            try:
+                B.write_atomic(root / "app.py", "x = 2\n")
+            except OSError:
+                pass
+            else:
+                raise AssertionError("failed storage flush was ignored")
+        assert (root / "app.py").read_bytes() == original
+        assert not list(root.glob(".app.py.*.tmp"))
         task = root / ".project-brain/tasks/PB-001.md"
         spec = ("# PB-001 — Recover external write\nStatus: READY\nPriority: P1\nTier: H\n"
                 "Risk: LOW\nOwner:\nDepends: -\nAreas: `app.py`\nDomains: core\n"

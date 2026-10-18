@@ -21,6 +21,7 @@ from pathlib import Path, PureWindowsPath
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -65,6 +66,17 @@ def _reserved(part):
     return ntpath.isreserved(part) if hasattr(ntpath, "isreserved") else PureWindowsPath(part).is_reserved()
 
 
+def is_link(path):
+    """Include Windows junctions on Python 3.8+, before Path.is_junction existed."""
+    try:
+        info = Path(path).lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or (
+        os.name == "nt" and info.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+    )
+
+
 def public_path(root, name):
     """Refuse private, escaping or linked paths before anything is opened."""
     if not isinstance(name, str) or not name.strip():
@@ -83,7 +95,7 @@ def public_path(root, name):
         raise ValueError("Private or escaping path refused: " + name)
     path = root / name
     for entry in (path, *path.parents):
-        if entry.is_symlink() or (hasattr(entry, "is_junction") and entry.is_junction()):
+        if is_link(entry):
             raise ValueError("Linked path refused: " + name)
         if entry == root:
             break

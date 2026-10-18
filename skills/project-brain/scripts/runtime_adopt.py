@@ -111,7 +111,7 @@ def _enumerate(root, rel):
                 child = basep / name
                 child_rel = _rel(root, child)
                 _safe(root, child_rel)
-                if child.is_symlink() or (hasattr(child, "is_junction") and child.is_junction()):
+                if V.is_link(child):
                     raise ValueError("linked source refused: " + child_rel)
                 _tracking_file(child_rel)
                 files.append(child)
@@ -344,7 +344,7 @@ def _archive_path(root, data, archive_dir):
     base = Path(archive_dir) if archive_dir else Path(root).parent / ".project-brain-archives"
     base = base.absolute()
     for p in (base, *base.parents):
-        if p.exists() and (p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction())):
+        if V.is_link(p):
             raise ValueError("linked archive path refused")
     base = base.resolve()
     if base == Path(root) or Path(root) in base.parents:
@@ -413,7 +413,7 @@ def _archive_valid(root, data):
     if not path.is_absolute() or root == path.resolve() or root in path.resolve().parents:
         return False
     for item in (path, *path.parents):
-        if item.exists() and (item.is_symlink() or (hasattr(item, "is_junction") and item.is_junction())):
+        if V.is_link(item):
             return False
     if not path.is_file() or _hash_file(path) != archive.get("sha256"):
         return False

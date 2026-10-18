@@ -44,7 +44,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -250,6 +250,8 @@ def write_atomic(path, content):
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
     except Exception:
         try:

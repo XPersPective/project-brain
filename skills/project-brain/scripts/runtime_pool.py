@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import uuid
 from datetime import datetime, timezone
+import runtime_verify as V
 
 
 ROLES = {"lead", "worker", "reviewer", "discovery"}
@@ -29,9 +30,9 @@ def _path(root, registry=None):
 def session_file(root, registry=None):
     path = _path(root, registry)
     for parent in path.parents:
-        if parent.is_symlink() or (hasattr(parent, "is_junction") and parent.is_junction()):
+        if V.is_link(parent):
             raise ValueError("linked session path refused")
-    if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+    if V.is_link(path):
         raise ValueError("linked session file refused")
     return path
 
@@ -66,6 +67,8 @@ def _read(root, registry=None):
         for jid, j in value["jobs"].items()
     ):
         raise ValueError("invalid pool job data")
+    for job in value["jobs"].values():
+        _validate_usage(job.get("usage"))
     selection = value["selection"]
     if selection and (not isinstance(selection.get("models"), dict) or not isinstance(selection.get("exclude", []), list)):
         raise ValueError("invalid pool selection")
@@ -98,7 +101,8 @@ def _safe_metadata(value):
     allowed = ("id", "description", "model_id", "cli", "pool", "adapter", "efforts", "roles", "tiers", "available",
                "authenticated", "billing", "remaining_pct", "primary_5h_remaining_pct",
                "weekly_7d_remaining_pct", "resets_at", "updated_at", "binary", "version",
-               "generic_worker_argv", "worker_argv", "prompt_stdin", "catalog_argv", "auth_source", "access_source")
+               "generic_worker_argv", "worker_argv", "prompt_stdin", "catalog_argv", "auth_source", "access_source",
+               "catalog_status", "catalog_checked_at", "discovery_status", "provider")
     out = {}
     for key in allowed:
         item = value.get(key)
@@ -133,7 +137,7 @@ def _config(data, selection=None):
                        "efforts": selected.get("efforts", spec.get("efforts")),
                        "registry_billing": spec.get("billing"), "billing": selected.get("billing")}
         if spec.get("pool") in pools:
-            rows[alias]["pool_config"] = {k: pools[spec["pool"]].get(k) for k in ("reserve_pct", "billing", "plan_type", "billing_source")}
+            rows[alias]["pool_config"] = {k: pools[spec["pool"]].get(k) for k in ("reserve_pct", "billing", "plan_type", "billing_source", "quota_argv")}
     return rows
 
 
@@ -165,8 +169,14 @@ def _inventory(data):
         for key in ("remaining_pct", "primary_5h_remaining_pct", "weekly_7d_remaining_pct", "resets_at", "updated_at"):
             if isinstance(pool.get(key), (str, int, float)) or pool.get(key) is None:
                 row[key] = pool.get(key)
+        try:
+            row["remaining_pct"] = _quota(data, spec)[0]
+        except ValueError:
+            pass
         models[alias] = row
-    return {"models": models,
+    apps = [{k: app.get(k) for k in ("name", "cli", "subscription_group", "version", "setup_status")}
+            for app in data.get("installed_apps", []) if isinstance(app, dict) and app.get("cli")]
+    return {"models": models, "installed_apps": apps,
             "cli_agents": {a: _safe_metadata(s) for a, s in sorted((data.get("cli_agents") or {}).items())
                            if isinstance(s, dict)}}
 
@@ -174,9 +184,9 @@ def _inventory(data):
 def _save(B, root, session, registry=None):
     path = session_file(root, registry)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.parent.is_symlink():
+    if V.is_link(path.parent):
         raise ValueError("linked session directory refused")
-    if path.is_symlink():
+    if V.is_link(path):
         raise ValueError("linked session file refused")
     B.write_atomic(path, json.dumps(session, sort_keys=True, indent=2, ensure_ascii=False))
 
@@ -194,7 +204,9 @@ def _propose_locked(B, root, registry=None, new=False, refresh=False):
         raise ValueError("cannot replace/refresh a session with unsettled jobs")
     if cached and not new and not refresh:
         return cached
-    data = A.scan_agents(registry) if refresh else A.load(registry)
+    # Presence snapshot only: version/auth/quota probes belong to explicit `agents scan`/`agents quota`,
+    # keeping every new main session's proposal cheap and subprocess-free.
+    data = A.snapshot_agents(registry) if refresh else A.load(registry)
     inventory = _inventory(data)
     session = {"schema": 1, "session_id": str(uuid.uuid4()), "status": "PROPOSED",
                "project": str(root), "inventory_digest": _digest(data), "created_at": _now(),
@@ -216,6 +228,8 @@ def _validate_selection(data, selection):
             raise ValueError("unknown model alias: " + str(alias))
         if alias in out["exclude"]:
             raise ValueError("alias is both selected and excluded: " + alias)
+        if models[alias].get("catalog_missing"):
+            raise ValueError("model is absent from its refreshed catalog: " + alias)
         if not isinstance(choice, dict):
             raise ValueError("model choice must be an object")
         roles, efforts, billing = choice.get("roles"), choice.get("efforts"), choice.get("billing")
@@ -330,11 +344,17 @@ def approved_data(B, root, data, registry=None):
 
 def _quota(data, spec):
     pool = (data.get("pools") or {}).get(spec.get("pool")) or {}
-    value = pool.get("remaining_pct")
-    if value is None:
+    values = [pool.get(k) for k in ("remaining_pct", "primary_5h_remaining_pct", "weekly_7d_remaining_pct")
+              if pool.get(k) is not None]
+    windows = pool.get("quota_windows", [])
+    if not isinstance(windows, list) or any(not isinstance(w, dict) for w in windows):
+        raise ValueError("invalid quota windows")
+    values.extend(w["remaining_pct"] for w in windows if w.get("remaining_pct") is not None)
+    if not values:
         return None, False
-    if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 100:
+    if any(type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 100 for v in values):
         raise ValueError("invalid quota percent")
+    value = min(values)
     try:
         stamp = datetime.fromisoformat(str(pool.get("updated_at", "")).replace("Z", "+00:00"))
         if stamp.tzinfo is None or stamp.utcoffset() is None:
@@ -358,6 +378,11 @@ def authorize(B, root, data, alias, effort, registry=None, role="worker"):
     spec = filtered["models"].get(alias)
     if not spec or role not in choice["roles"] or effort not in choice["efforts"]:
         raise ValueError("model, role or effort is outside the approved selection")
+    if spec.get("catalog_missing"):
+        raise ValueError("selected model is absent from its refreshed catalog")
+    cli = (data.get("cli_agents") or {}).get(spec.get("cli")) or {}
+    if cli.get("discovery_status") == "not_found" or cli.get("available") is False:
+        raise ValueError("selected CLI is no longer available; rediscover before dispatch")
     if choice["billing"] not in BILLING or (choice["billing"] == "api" and choice.get("allow_paid") is not True):
         raise ValueError("billing route is not explicitly authorized")
     declared = _known_billing(data, (data.get("models") or {}).get(alias) or {})
@@ -410,9 +435,26 @@ def _load_registry(registry):
     return A.load(registry)
 
 
-def finish(B, root, job_id, exit_code=None, registry=None):
+def _validate_usage(usage):
+    if usage is None:
+        return
+    keys = {"total", "input", "output", "reasoning", "cache_read", "cache_write"}
+    if (not isinstance(usage, dict) or set(usage) != {"source", "tokens", "reported_cost", "complete", "steps"}
+            or usage.get("source") != "opencode.step_finish"
+            or not isinstance(usage.get("tokens"), dict) or set(usage["tokens"]) != keys
+            or any(type(v) is not int or v < 0 for v in usage["tokens"].values())
+            or type(usage.get("complete")) is not bool
+            or type(usage.get("steps")) is not int or usage["steps"] < 1):
+        raise ValueError("invalid provider usage counters")
+    cost = usage.get("reported_cost")
+    if cost is not None and (type(cost) not in (int, float) or not math.isfinite(cost) or cost < 0):
+        raise ValueError("invalid provider reported cost")
+
+
+def finish(B, root, job_id, exit_code=None, registry=None, usage=None):
     if not isinstance(job_id, str):
         raise ValueError("job_id must be text")
+    _validate_usage(usage)
     with B.checkout_lock(root, name="pool.lock"):
         session = load_session(root, registry)
         job = session.get("jobs", {}).get(job_id)
@@ -422,6 +464,7 @@ def finish(B, root, job_id, exit_code=None, registry=None):
             raise ValueError("exit_code must be an integer or None")
         job.update(state=("response_unknown" if exit_code is None else ("completed" if exit_code == 0 else "failed")),
                    exit_code=exit_code, finished_at=_now())
+        job["usage"] = usage
         _save(B, root, session, registry)
         return session
 
@@ -448,6 +491,9 @@ def summary(B, root, registry=None):
     drift = session["inventory_digest"] != _digest(data, session.get("selection") or None)
     state = "REAPPROVAL_REQUIRED" if session["status"] == "APPROVED" and drift else session["status"]
     lines = [f"MODEL_POOL: {state} session={session['session_id'][:8]}"]
+    for app in data.get("installed_apps", []):
+        if app.get("cli"):
+            lines.append(f"  APP {app['name']}: group={app.get('subscription_group')} setup={app.get('setup_status', 'unknown')}")
     selection = session.get("selection") or {}
     choices = selection.get("models") or {}
     proposed = session.get("inventory", {}).get("models") or {}
@@ -477,6 +523,10 @@ def summary(B, root, registry=None):
         proposed_rem = proposed.get(alias, {}).get("remaining_pct")
         quota_delta = f" proposal_quota={proposed_rem if proposed_rem is not None else 'unknown'}" if rem != proposed_rem else ""
         lines.append(f"  {alias}: model={model_id} cli={cli} access={auth} roles={','.join(choice.get('roles', [])) or 'proposed'} efforts={','.join(choice.get('efforts', [])) or 'proposed'} billing={choice.get('billing', inventory.get('billing', 'unknown'))} quota_now={rem if rem is not None else 'unknown'} ({freshness}){window}{reset}{quota_delta}")
+        spec = (data.get("models") or {}).get(alias) or {}
+        pool = (data.get("pools") or {}).get(spec.get("pool")) or {}
+        for quota_window in pool.get("quota_windows", []):
+            lines.append(f"    window={quota_window.get('name', 'unknown')} remaining={quota_window.get('remaining_pct', 'unknown')}% duration_minutes={quota_window.get('window_minutes', 'unknown')} reset={quota_window.get('resets_at', 'unknown')}")
     if len(rows) > len(shown):
         lines.append(f"  {len(rows) - len(shown)} additional model rows omitted; use agents session --json for full inventory")
     current_clis = data.get("cli_agents") or {}
@@ -485,10 +535,15 @@ def summary(B, root, registry=None):
     for cli in all_clis[:16]:
         metadata = current_clis.get(cli) or saved_clis.get(cli) or {}
         access = "authenticated" if metadata.get("authenticated") is True else ("unauthenticated" if metadata.get("authenticated") is False else "unknown")
-        lines.append(f"  CLI {cli}: {metadata.get('binary', 'unknown binary')} version={metadata.get('version', 'unknown')} access={access}")
+        lines.append(f"  CLI {cli}: {metadata.get('binary', 'unknown binary')} version={metadata.get('version', 'unknown')} access={access} catalog={metadata.get('catalog_status', 'unknown')}")
     if len(all_clis) > 16:
         lines.append(f"  {len(all_clis) - 16} additional CLI rows omitted; use agents session --json for full inventory")
     pending = _unsettled(session)
+    measured = [j["usage"] for j in session["jobs"].values() if isinstance(j.get("usage"), dict)
+                and isinstance(j["usage"].get("tokens"), dict) and type(j["usage"]["tokens"].get("total")) is int]
+    total = sum(u["tokens"]["total"] for u in measured)
+    incomplete = sum(u.get("complete") is not True for u in measured)
+    lines.append(f"  usage: reported_tokens={total} measured_jobs={len(measured)} partial_jobs={incomplete} unknown_jobs={len(session['jobs']) - len(measured)} (provider counters; not a hard budget)")
     lines.append("  approval needed" if session["status"] != "APPROVED" else ("  approval must be renewed" if drift else "  approved"))
     if pending:
         lines.append("  unresolved jobs: " + ", ".join(pending))

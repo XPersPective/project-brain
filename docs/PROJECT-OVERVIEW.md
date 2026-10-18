@@ -1,7 +1,9 @@
-# Project Brain 3.1 — Genel bakış ve teslim durumu
+# Project Brain 3.2 — Genel bakış ve teslim durumu
 
 Tarih: 18 Ekim 2026. Dal: `codex/project-brain-v3-audit`.
 Bu belge sohbet geçmişi olmadan kullanıcı kapsamını ve doğrulanmış sonucu gösterir.
+18 Ekim 2026 ek kaynak denetimi ve yerel düzeltmeler: [13-source-audit-2026-10-18.md](design/13-source-audit-2026-10-18.md).
+Devam eden Windows/CLI, OmniRoute otomatik başlatma ve abonelik kapsamı: [14-windows-cli-economy.md](design/14-windows-cli-economy.md); açık kurulum/giriş maddeleri burada korunur.
 Son commit/remote durumu `git log -1`, `git status --short` ve `git ls-remote --heads origin codex/project-brain-v3-audit` ile doğrulanır.
 
 ## Sıralı gereksinimler ve durum
@@ -26,8 +28,8 @@ Son commit/remote durumu `git log -1`, `git status --short` ve `git ls-remote --
 - [x] İçe aktarma kaynak kimliğine bağlı; aynı başlık farklı içeriği kaybettirmiyor, yarım görev iskeleti yeniden başlatılınca onarılıyor, orijinal önce korunuyor.
 - [x] Her eski dosya için hedef veya açık atılma gerekçesi olan iz doğrulanıyor. Dış arşiv doğrulanmadan silinmiyor; kaynak/hedef değişimi, kod/asset/özel dosya, link ve ilgisiz AGENTS kuralının kaldırılması reddediliyor.
 - [x] `legacy --prepare/--verify/--cleanup` durumu/jurnali, kısmi arşiv hatası, temizlik sırasında kesinti, tekrar çalıştırma ve sonraki boot'ta eski planın geri gelmemesi test edildi.
-- [x] Sürüm 3.1.0, proje şeması4 ve makine oturum şeması1 olarak kaynak/manifests tutarlı; kullanıcı projelerinin eski şema geçişi korunuyor.
-- [x] Son kaynak-bağlı kabul kayıtları, tam regresyon ve bağımsız inceleme checkpoint'i tamamlandı (25e0b93, 474b312).
+- [x] Sürüm 3.2.0, proje şeması4 ve makine oturum şeması1 olarak kaynak/manifests tutarlı; `gemini` CLI Antigravity (`agy`) lehine kaldırıldı ve OmniRoute sunucu otomatik başlatma + tam katalog (118 model) + worker dispatch eklendi.
+- [x] Son kaynak-bağlı kabul kayıtları, tam regresyon ve bağımsız inceleme checkpoint'i tamamlandı.
 - [x] Yalnız BU deponun geçici `.project-brain/` geliştirme planı, self-boot pointer'ı ve cache-ignore satırı doğrulanmış dış arşivden sonra kaldırıldı; kaynaklar/testler/belgeler korundu.
 - [x] Temizlik sonrası tam test, NO_BRAIN, sürüm/dilbilgisi kontrolleri, commit/push ve uzak HEAD eşleşmesi doğrulandı; çalışma ağacı temiz.
 
