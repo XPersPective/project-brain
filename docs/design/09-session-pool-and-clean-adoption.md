@@ -1,9 +1,9 @@
 # Confirmed follow-up requirements
 
-Source: user, 2026-10-18, after the integration audit. These are requirements for the
-next implementation slices, not claims that the current runtime already implements them.
-Finish the active verification audit first. Keep this record outside self-hosted Brain
-state so it survives the requested final removal of that state.
+Source: user, 2026-10-18, after the integration audit. These requirements were
+implemented in the 3.1 runtime and protocols; verification and practical limits are
+recorded in 12-final-delivery.md. This durable scope record survives removal of this
+repository's temporary self-hosted Brain state.
 
 ## Session model pool and user authority
 
