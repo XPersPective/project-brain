@@ -1,8 +1,13 @@
-# Project Brain 3.2.1 — Session Pool, CLI Discovery and Delegation
+# Project Brain 3.3.0 — Session Pool, CLI Discovery and Delegation
 
 Load this file when measuring task complexity, scanning installed CLI coding agents, managing subscription token quotas, or delegating `Tier L` / `Tier M` tasks to CLI worker sub-agents.
 
-## 0. Explicit session authority
+Normal discovery and delegation use the separate CLI Agent Pool backend: see
+[POOL.md](POOL.md). The session/approval and direct CLI contracts below apply only
+to explicit `--backend direct` or `--registry` operation. They do not require a
+second approval for owner-configured Pool models.
+
+## 0. Standalone session authority
 
 Models have no immutable H/M/L group: the user assigns director, worker, reviewer and
 discovery roles for the session. Task scores describe work complexity; seeded model

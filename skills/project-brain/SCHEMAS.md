@@ -133,6 +133,13 @@ Domains: utils
 - Milestone: import v2
 ```
 
+Pool-backed `PB start` appends `| strength=<low, medium or high>` before any
+takeover reason in its source/contract-bound start record. This records ordinary
+non-delegated work too. Reviewer checks use immutable start and dispatch strengths,
+never a model's latest global selection. The `pool/<24-hex>` actor namespace retains
+exact model identity in the external registry. Incomparable cross-backend review
+is refused.
+
 | Header | Values |
 |---|---|
 | `Status` | `PLANNED → READY → IN_PROGRESS → REVIEW → DONE` with Evidence → deleted after its checkpoint; any → `BLOCKED → READY` |

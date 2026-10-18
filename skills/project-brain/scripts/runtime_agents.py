@@ -1210,10 +1210,22 @@ def candidates(data, role="worker", tier="M", risk="MEDIUM", exclude="", cli_fil
 def gate(B, task, alias, action, path=None, root=None):
     """Validate that `alias` is permitted for `action` (start/review/accept) on `task`."""
     p = registry_path(path)
+    if action == "review" and task and not p.exists() and any(re.fullmatch(r"pool/[0-9a-f]{24}", i) for i in V.implementers(B, task)):
+        raise ValueError("Pool implementation review requires its registry; a missing registry cannot bypass strength checks")
     if not alias or not p.exists():
         return
     data = load(p)
     selected = None
+    spec = data.get("models", {}).get(alias)
+    if action == "review" and task:
+        implementers = V.implementers(B, task)
+        backend_flags = [bool(data.get("models", {}).get(i, {}).get("pool_route")) or bool(re.fullmatch(r"pool/[0-9a-f]{24}", i)) for i in implementers]
+        reviewer_pool = isinstance(spec, dict) and bool(spec.get("pool_route"))
+        if backend_flags and (any(backend_flags) and not reviewer_pool or reviewer_pool and not all(backend_flags)):
+            raise ValueError("mixed-backend review has no comparable strength; use a reviewer from the implementation backend")
+    if isinstance(spec, dict) and spec.get("pool_route"):
+        import runtime_agent_pool as AP
+        return AP.gate(B, task, spec, alias, action, root)
     if root is not None:
         import runtime_pool as P
         session = P.load_session(root, p)

@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **3.2.1** — [release notes](https://github.com/XPersPective/project-brain/releases/tag/v3.2.1).
+Current release: **3.3.0** — [changelog](CHANGELOG.md).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
@@ -79,12 +79,16 @@ read <path-to>/skills/project-brain/SKILL.md and follow it (first step: its boot
 
 ## Use
 
-At a new session, a low/mid-cost discovery worker (or local metadata tools when no
-worker is approved yet) prepares the model pool. Project Brain shows available
-CLI/native routes, access, billing and dated quota information. You approve or edit
-roles/models/efforts before jobs run; it does not fall back to the director's account.
-`agents session --new`, `agents approve`, `agents revoke` and `agents settle` expose
-that protocol. See [the session contract](skills/project-brain/AGENTS_CLI.md).
+Normal agent discovery and delegation connect to the separate CLI Agent Pool 1.1.0+
+and start its local daemon if stopped. Configure high/medium/low pools and effort
+once in Pool; Brain honors that owner policy, preserves known quota reserves, and
+resumes interrupted jobs without replay. Plans, local research and quality evidence
+remain Brain's responsibility. No skill is merged into the other.
+
+Use `agents scan --json`, `agents select --task PB-001 --json`, then
+`delegate PB-001 --dry-run` / `delegate PB-001`. See [the integration contract](skills/project-brain/POOL.md).
+`--backend direct` or an explicit `--registry` retains the standalone CLI/native
+session approval workflow; there is no silent fallback between authorities.
 
 | You say | The agent does |
 |---|---|

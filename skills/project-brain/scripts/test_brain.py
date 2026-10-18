@@ -594,3 +594,5 @@ if __name__ == "__main__":
     economy_checks()
     from test_discovery import main as discovery_checks
     discovery_checks()
+    from test_agent_pool import main as agent_pool_checks
+    agent_pool_checks()

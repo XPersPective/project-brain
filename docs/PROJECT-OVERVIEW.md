@@ -1,4 +1,4 @@
-# Project Brain 3.2.1
+# Project Brain 3.3.0
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,
@@ -13,6 +13,9 @@ session schema 1.
 - `scripts/runtime_verify.py`: checks, evidence, review, acceptance and containment.
 - `scripts/runtime_agents.py`, `runtime_pool.py`, `runtime_discovery.py`:
   discovery, model approval, quotas and durable job accounting.
+- `scripts/runtime_agent_pool.py`, `POOL.md`: default separate CLI Agent Pool
+  transport, owner policy and task-bound dispatch/recovery. Standalone discovery
+  and session accounting remain available explicitly with `--backend direct`.
 - `scripts/migrate.py`, `runtime_adopt.py`: conversion, archive and recovery.
 - `scripts/test_brain.py`: complete offline regression entry point.
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.3.0 — 2026-10-19
+
+- Use the separate CLI Agent Pool for normal discovery, exact model identity,
+  owner strength/effort policy, quota reserves and contained worker execution.
+- Automatically wake Pool through its editor-neutral JSON stdin transport; keep
+  the shared daemon outside short-lived metadata process containment on Windows.
+- Persist task-bound requests, strength and idempotency keys outside the project;
+  recover lost acknowledgements and poll existing jobs without replaying writes.
+- Keep Brain's scoring, local research, source evidence and independent review;
+  enforce task-bound reviewer strength and block recursive Pool delegation.
+- Preserve explicit standalone `--backend direct` / `--registry` operation.
+- Add offline transport/policy/recovery checks and a real synthetic-worker
+  integration check without provider inference or user workspace changes.
+
 ## 3.2.1 — 2026-10-18
 
 - Preserve previously measured quota windows when a partial response omits, nulls or drops them, including Codex refresh and configured metadata commands.

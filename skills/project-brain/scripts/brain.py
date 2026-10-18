@@ -44,7 +44,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.2.1"
+VERSION = "3.3.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -92,6 +92,7 @@ ITEM_RE = re.compile(r"^\s*-\s*\[([ xX])\]\s*(?:\[([a-zA-Z0-9_-]+)\]\s*)?(.+?)\s
 START_RE = re.compile(
     r"^- start: IN_PROGRESS \| owner=(?P<owner>[^|]+?) \| risk=(?P<risk>LOW|MEDIUM|HIGH) "
     r"\| digest=(?P<digest>[0-9a-f]+) \| contract=(?P<contract>[0-9a-f]+)"
+    r"(?: \| strength=(?P<strength>low|medium|high))?"
     r"(?: \| takeover=(?P<takeover>.+))?$"
 )
 EXT_RE = re.compile(
@@ -990,7 +991,7 @@ def cmd_boot(root):
         foreign = A.detect_foreign(root)
         print("STATE: NO_BRAIN")
         import runtime_pool as P
-        for line in P.summary(sys.modules[__name__], root):
+        for line in (P.summary(sys.modules[__name__], root) if os.environ.get("PB_AGENTS_REGISTRY") else ["MODEL_POOL: CLI Agent Pool; `agents scan --json` connects and auto-starts; owner rules apply"]):
             print(line)
         for fname, fpaths in foreign:
             print(f"  ! foreign planning state detected: {fname} ({', '.join(fpaths)}) -> run `legacy` to preview adoption")
@@ -1090,7 +1091,7 @@ def cmd_boot(root):
     print(f"STATE: {state}")
     print(gitline)
     import runtime_pool as P
-    for line in P.summary(sys.modules[__name__], root):
+    for line in (P.summary(sys.modules[__name__], root) if os.environ.get("PB_AGENTS_REGISTRY") else ["MODEL_POOL: CLI Agent Pool; `agents scan --json` connects and auto-starts; owner rules apply"]):
         print(line)
     for n in notes:
         print(f"  ! {n}")
@@ -1397,7 +1398,7 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
     with checkout_lock(root):
         task = find_task(root, task_id)
         actor = agent_id(agent, "--agent")
-        A.gate(sys.modules[__name__], task, actor, "start", agents_path, root=root)
+        policy = A.gate(sys.modules[__name__], task, actor, "start", agents_path, root=root) or {}
         all_tasks = list_tasks(root)
         pending = [t["id"] for t in all_tasks for e in t.get("external", [])
                    if e["state"] in ("sent", "response_unknown")]
@@ -1437,6 +1438,7 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
         set_headers(task["file"], {"Status": "IN_PROGRESS", "Owner": actor, "Risk": risk})
         line = (
             f"- start: IN_PROGRESS | owner={actor} | risk={risk} | digest={dig} | contract={con}"
+            + (f" | strength={policy['poolStrength']}" if policy.get("poolStrength") else "")
             + (f" | takeover={takeover.strip()}" if takeover.strip() else "")
         )
         append_section(task["file"], "Evidence", line)
@@ -1764,6 +1766,8 @@ def main():
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("delegate")
+    p.add_argument("--backend", choices=("pool", "direct"), default=None)
+    p.add_argument("--group", choices=("high", "medium", "low"), default="")
     p.add_argument("pos1")
     p.add_argument("pos2", nargs="?", default=".")
     p.add_argument("--cli", default="")
@@ -1795,12 +1799,14 @@ def main():
         sp.add_argument("--registry", default=None)
     for ag_name in ("scan", "list", "quota"):
         sp = ag_sub.add_parser(ag_name)
+        sp.add_argument("--backend", choices=("pool", "direct"), default=None)
         sp.add_argument("root", nargs="?", default=".")
         sp.add_argument("--json", action="store_true")
         sp.add_argument("--registry", default=None)
         if ag_name == "scan":
             sp.add_argument("--no-quota", action="store_true")
     sp_sel = ag_sub.add_parser("select")
+    sp_sel.add_argument("--backend", choices=("pool", "direct"), default=None)
     sp_sel.add_argument("root", nargs="?", default=".")
     sp_sel.add_argument("--role", choices=A.ROLES, default="worker")
     sp_sel.add_argument("--tier", default="")
@@ -1819,6 +1825,9 @@ def main():
     B_mod = sys.modules[__name__]
 
     if a.cmd == "agents":
+        if a.agents_cmd in ("scan", "list", "quota", "select") and (a.backend == "pool" or a.backend is None and a.registry is None):
+            import runtime_agent_pool as AP
+            return AP.agents(B_mod, a)
         return A.run_agents(B_mod, a)
 
     if a.cmd in ("start", "check", "evidence", "review", "accept", "score", "delegate"):
@@ -1865,6 +1874,14 @@ def main():
                 print(l)
             return rc
         if a.cmd == "delegate":
+            if os.environ.get("CLI_AGENT_POOL_WORKER"):
+                raise ValueError("Pool workers cannot delegate recursively")
+            if a.backend == "pool" or a.backend is None and a.registry is None:
+                import runtime_agent_pool as AP
+                task = find_task(root, tid)
+                if not task:
+                    raise ValueError("task not found")
+                return AP.delegate(B_mod, root, task, A.score_task(B_mod, root, task), a)
             return A.delegate_task(
                 B_mod,
                 root,

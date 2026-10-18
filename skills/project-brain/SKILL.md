@@ -2,7 +2,7 @@
 name: project-brain
 description: >-
   Git-native project memory, architecture, quality enforcement, and multi-agent
-  CLI orchestration protocol (v3.2.1) that lets coding agents (Claude, Codex,
+  CLI orchestration protocol (v3.3.0) that lets coding agents (Claude, Codex,
   OpenCode, Antigravity, OmniRoute, Qwen, ZCode, or others) plan, delegate, verify,
   review, and resume software projects from recorded repository state. Enforces
   Frontend Design System & UI Triad verification, Backend Clean Architecture &
@@ -14,11 +14,11 @@ description: >-
   planning, or auditing a multi-session project.
 license: MIT
 metadata:
-  version: 3.2.1
+  version: 3.3.0
   author: XPersPective
 ---
 
-# Project Brain 3.2.1
+# Project Brain 3.3.0
 
 **One plan, many agents, verified handoffs.** Any session can end at any moment (token limit, crash, model switch). Another agent can continue from the repository alone. That works because:
 1. **State lives in files and commits**, never only in chat;
@@ -37,9 +37,9 @@ In `.project-brain/`:
 - `PB map` / `PB init` — Genesis: repo overview + detected commands / create skeleton (never overwrites).
 - `PB new . "title" [--priority P1] [--tier L|M|H] [--risk HIGH] [--depends PB-001]` — create the next task.
 - `PB score [PB-NNN] [--write] [--json]` — measure task complexity (`0..100`), computed Tier (`L|M|H`), recommended effort (`low|medium|high`), risk floor, and worker delegation eligibility.
-- `PB agents <scan|quota|list|select|merge>` — scan installed CLI coding agents (`codex`, `claude`, `opencode`, `agy`, `omniroute`, `qwen`, `zcode`, etc.), auto-start local OmniRoute gateway if offline, read live subscription quotas, and select the lowest-cost model meeting the quality floor and quota reserve (`10%` worker reserve, `25%` director reserve).
+- `PB agents <scan|quota|list|select>` — connect to the separate CLI Agent Pool, automatically start it if needed, read exact models/owner pools/quotas, and select within owner rules (`10%` worker reserve, `25%` lead/reviewer reserve). `--backend direct` or an explicit `--registry` retains the standalone discovery/session workflow.
 - `PB agents session [--new] [--refresh]` / `approve <selection.json> --session <id> --user-confirmed --note "<actual user decision>"` / `revoke` / `settle <job-id> --state completed|failed --note "<readback>"` — propose, confirm, revoke and recover a project/session model pool.
-- `PB delegate <PB-NNN> [--cli <cli>] [--model <alias>] [--effort low|medium|high] [--dry-run]` — dispatch a `Tier L/M` task to a CLI worker inside `ProcessTree` and automatically run `PB check`.
+- `PB delegate <PB-NNN> [--group low|medium|high] [--cli <routeId>] [--model <exact-id>] [--effort low|medium|high|default] [--dry-run]` — submit one `Tier L/M` task through Pool and run `PB check` after success. On interruption rerun the same command to read back the existing job, never replay it.
 - `PB start <PB-NNN> --agent <alias> [--takeover "<reason>"]` — claim a task (`Status: IN_PROGRESS`) and bind `Owner`, `Risk`, `areas_digest`, and `contract`.
 - `PB check <PB-NNN> [--as <alias>]` — run `Verify` commands inside `ProcessTree` and append digest-bound `[machine]` evidence.
 - `PB evidence <PB-NNN> --kind <kind> --note "<text>" [--criterion <id>] [--file <relpath>]` — record digest-bound non-machine evidence (`visual`, `interaction`, `accessibility`, `security`, `integration`, `architecture`, `user_feedback`).
@@ -80,38 +80,31 @@ Run `PB boot`. Read its output and LOAD files, then route the user's message (§
 
 **Takeover check** (once per session, before new work): run the `test` command from CMDS, reading only its summary. Red → find the cause first; fix a regression caused by this request or blocking it. **Trust nothing unverified, including your predecessor.**
 
-### Session pool — before inference or delegation
+### Pool connection — before inference or delegation
 
-At a new top-level session, have an authorized low/mid-cost discovery worker inventory
-all installed CLI/provider resources and the previous registry. ZAI/MiniMax/Codex are
-examples, not a search limit. If no approved cheap worker exists, use deterministic
-metadata collection; never spend a director model or paid API to bootstrap discovery.
-Register host-native subagents as `cli: host` alongside CLI routes when the host exposes
-their model/effort metadata; never invent access or infer price from a model name.
+Run `PB agents scan --json` to connect to CLI Agent Pool and wake it if stopped.
+Read the owner's pools, exact model IDs, fixed efforts, billing and dated quota
+information. Use deterministic metadata collection, not inference, for discovery.
+Do not ask the user to reapprove an already authorized Pool configuration.
 
-Run `agents session --new`; it snapshots CLI/app presence without launching any CLI
-process. When live versions/login/quotas are needed, run the deadline-bounded
-`agents scan` (or `agents quota`) first, then repropose. Show the
-user concrete models, providers/CLIs, access and billing, remaining quota/windows/
-reset/freshness, proposed roles and efforts. Unknown is unknown. The user can approve
-all, exclude/add aliases, or promote/change roles. Write that decision as selection
-JSON and invoke `agents approve`; `--user-confirmed` records actual approval, never
-permission inferred from a task file. New model/CLI/billing configuration needs renewed
-approval. Task Tier measures complexity; model role groups belong to the user.
+`PB agents select --task PB-NNN --json` previews the task's low/medium/high pool;
+`PB delegate PB-NNN` submits and checks one bounded task. Manual mode is a hard
+membership boundary. Automatic mode can use matching capability hints only when
+no pool candidate is usable. Fixed owner effort wins; otherwise task effort is
+selected only from the CLI's supported values. Unknown quota remains unknown.
+Known windows preserve at least 10% for workers and 25% for lead/reviewers.
 
-For continuation/crash recovery reuse the recorded session and display `agents session`;
-do not rotate it in nested workers. Child workers inherit the pool ID. `select` previews
-are advisory until approved; actual dispatch has no unapproved high-model fallback.
-Known quotas obey the 10%/25% floors. An explicitly chosen route with unavailable quota
-needs a bounded `max_jobs` allowance; say that the numeric reserve cannot be proven.
-API billing additionally needs explicit paid authorization. An unresolved reserved job
-means readback before retry: inspect its CLI/session/log, then `agents settle`.
+Read [POOL.md](POOL.md) for the transport, authority, token-economy and recovery
+contract. On a lost response or interrupted invocation rerun the same delegate
+command to resume the saved job; never automatically replay failed writes.
+Use local research and compact tasks to conserve tokens without lowering quality.
+Pool workers must not delegate recursively. Brain's source/evidence/review gates
+remain mandatory; a successful Pool task alone does not mean acceptance.
 
-Host-native dispatch prints `HOST_ACTION_PENDING` with a compact action packet; the
-parent uses the host's subagent tool with exactly that model/effort, then settles the
-job and runs `PB check`. Printing a packet is not execution or task completion. An
-unsupported adapter fails before spending; configure explicit argv/stdin for another
-installed CLI instead of guessing flags. See `AGENTS_CLI.md` for the JSON contract.
+`--backend direct` (or an explicit `--registry`) retains the previous standalone
+CLI/native-host session protocol in AGENTS_CLI.md. That backend needs its own real
+session approval. Do not combine its approval authority with the owner's Pool
+configuration or silently fall back to it when Pool fails.
 
 ## 3. Intake — route the user's message
 
@@ -140,11 +133,11 @@ exploration. Before any external route is known, use deterministic metadata coll
 or the smallest suitable authorized native discovery worker. Merge its results and
 the native routes into the same user-visible pool. Never weaken
 acceptance, lower the quality floor or silently spend a stronger account to save time.
-See `AGENTS_CLI.md` §1.1 for task budgets, model grouping and escalation.
+See `POOL.md` for normal Pool routing; `AGENTS_CLI.md` §1.1 describes standalone task budgets and escalation.
 
 1. **Select & Score**: Pick the `IN_PROGRESS` or `REVIEW` task, else the highest-priority `READY` task with evidenced completed dependencies. Run `PB score <PB-NNN> --write` to confirm its computed Tier (`L|M|H`), effective Risk (`LOW|MEDIUM|HIGH`), recommended effort (`low|medium|high`), and whether it is `DELEGATABLE`.
 2. **Route Execution (Lead vs. CLI Worker)**:
-   - **Delegatable `Tier L` or `Tier M` task**: If local CLI worker agents are available (`PB agents scan` / `PB agents select --task <PB-NNN>`), prefer dispatching via `PB delegate <PB-NNN>` so a lower-cost model/subscription executes the implementation at `low` or `medium` effort while preserving the lead model's quota (see `AGENTS_CLI.md`).
+   - **Delegatable `Tier L` or `Tier M` task**: Use `PB agents select --task <PB-NNN>`, then `PB delegate <PB-NNN>` through the configured Pool. Respect owner membership/fixed effort, preserve quota reserves and verify actual results (see `POOL.md`).
    - **Lead execution (`Tier H`)**: the approved director handles architecture/security decisions and independent review. For routine work with no suitable approved worker, preserve Resume and select another user-approved route; never silently spend the director's account as a fallback.
 3. **Load**: Read the task, the Current section of its Domains, `constraints.md`, linked ADRs, and `QUALITY.md` if touching UI or backend/state layers.
 4. **Implement & Observe**:
@@ -295,6 +288,8 @@ PB-Reviewer: <reviewer model alias, when reviewed>
 - Keep context bounded: boot/Map → task + domain slices → exact symbols/callers. Load references only for the current decision. Delegate one bounded task per worker, return checks/failures and artifact paths, and stop re-reading verified files without a changed premise. Risk/tier scores and model ratings are estimates, not benchmarks or authority.
 
 ## 13. Reference documents (load on demand)
+
+- [`POOL.md`](POOL.md) — Default separate CLI Agent Pool backend, automatic startup, owner pools/efforts and idempotent recovery.
 
 - [`QUALITY.md`](QUALITY.md) — Frontend Design System & Token Foundation, UI Verification Triad (`[visual]`, `[interaction]`, `[accessibility]`), `QUALITY` review findings, Backend Clean Architecture, and Explicit State Machine rubric.
 - [`AGENTS_CLI.md`](AGENTS_CLI.md) — Mechanical task complexity scoring (`PB score`), system CLI agent discovery (`PB agents scan`), live subscription quota tracking (`PB agents quota`), reserve floors (`10%` worker / `25%` director), and CLI worker delegation (`PB delegate`).
