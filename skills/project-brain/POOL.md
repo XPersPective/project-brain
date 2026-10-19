@@ -82,3 +82,19 @@ path unless `--backend pool` is given. There is no automatic fallback between th
 two authorities. The `session/approve/revoke/settle/merge` commands manage only the
 standalone backend. See AGENTS_CLI.md for that protocol; do not request a second
 session approval for a Pool configuration the owner already authorized.
+
+## Pool 1.4 workspace compatibility
+
+The Pool dashboard can attach an installed or project SKILL.md through its plus/slash
+picker. The selected skill's absolute source path accompanies its instructions;
+resolve Brain's scripts relative to that source directory, not to the task workspace.
+Attaching instructions does not install files or grant worker permission to delegate.
+The nested-worker guard and owner high/medium/low/effort/filter rules remain binding.
+
+No agent RPC schema change is needed for this dashboard feature. Keep the Brain
+project root equal to the selected work directory. A CLI turn that returns normally
+is not proof of edited files: inspect artifacts and run the task Verify commands.
+Native Windows Codex writes require its Windows sandbox backend while retaining
+workspace-write boundaries. Pool 1.4 selects that backend explicitly when it ignores
+unrelated user config; do not work around missing native sandbox setup by removing
+sandboxing, changing billing, switching to direct execution or replaying a write.

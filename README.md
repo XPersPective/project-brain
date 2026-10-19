@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **3.3.0** — [changelog](CHANGELOG.md).
+Current release: **3.3.1** — [changelog](CHANGELOG.md).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.

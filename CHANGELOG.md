@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.1 — 2026-10-19
+
+- Document Pool 1.4 project/installed skill attachment source resolution and unchanged RPC compatibility.
+- Require artifact/Verify evidence rather than treating a completed CLI turn as a successful project.
+- Keep worker nesting, owner filters/effort and Windows native sandbox boundaries intact.
+- Align both plugin manifests with the distributed skill/runtime version.
+
 ## 3.3.0 — 2026-10-19
 
 - Use the separate CLI Agent Pool for normal discovery, exact model identity,
