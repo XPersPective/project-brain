@@ -7,7 +7,7 @@ quota-based admission and process execution. Neither is copied into the other.
 
 ## Normal use from any editor or agent
 
-Install CLI Agent Pool 1.1.0+ locally, then use the existing Brain commands:
+Install CLI Agent Pool 1.6.0+ locally, then use the existing Brain commands:
 
 ```text
 python <skill>/scripts/brain.py agents scan --json
@@ -17,13 +17,14 @@ python <skill>/scripts/brain.py delegate PB-001
 ```
 
 These commands wake the shared local daemon when needed. They do not open a browser,
-ask for tokens, enable disabled routes, grant trust, alter owner groups or expand
-workspace roots. Add the project using Pool's folder picker if WORKSPACE_DENIED is
-returned. Configure models once in Pool, then use the same memberships from every
+ask for tokens, enable disabled routes, grant trust or alter owner groups. Any existing
+absolute project folder is accepted; Pool keeps no project allowlist. Configure models once in Pool, then use the same memberships from every
 agent/editor. Scans are deterministic metadata operations, not model inference.
 
 `agents list` reads the current Pool catalog and owner settings; `agents quota`
 additionally asks each route for live quota, leaving unsupported readings unknown.
+Pool 1.6.0+ reads vendor quota natively (no cclimits); snapshots may add a readable
+`note` (plan, balance) and `windowMinutes`, and only a missing login is `auth_required`.
 Pool caches and quota observation timestamps remain authoritative. A scan does not
 grant execution access or prove login. `agents scan` reads Pool's imported inventory;
 use Pool's **Modelleri tara** or `cli-agent-pool scan-import` for newly installed CLIs.
