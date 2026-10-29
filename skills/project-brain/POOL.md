@@ -1,4 +1,4 @@
-# CLI Agent Pool integration (Project Brain 3.3.0)
+# CLI Agent Pool integration (Project Brain 3.5.1)
 
 Project Brain and CLI Agent Pool are separate products and skills. Brain owns task
 specifications, local research, source evidence, review and recovery. Pool owns CLI
@@ -7,9 +7,20 @@ quota-based admission and process execution. Neither is copied into the other.
 
 ## Normal use from any editor or agent
 
-Install CLI Agent Pool 1.6.0+ locally, then use the existing Brain commands:
+Choose EXEC/REV once per top-level implementation session using SKILL.md §2.1.
+Native/SOLO choices do not connect to Pool. Modes limit resources, never risk or
+reviewer strength floors. If a qualified reviewer is unavailable inside the selected
+REV boundary, record the blocker and continue independent work; never invent a PASS.
+Within existing authorization, dispatch/review continues without repeated permission
+questions. User feedback, scope changes and external permissions remain real gates.
+
+Connect only when EXEC or REV is P-ALL/P-ML/P-L. P-ALL permits H dispatch;
+P-ML and P-L route above-cap implementation to the main lead. `--force` cannot
+bypass the user's selected resource cap. SOLO review needs an explicit audit and
+`review --self-review`; acceptance cannot manufacture a review.
 
 ```text
+python <skill>/scripts/brain.py agents mode --new --exec P-ML --rev P-ML --note "User selected Pool Medium & Low"
 python <skill>/scripts/brain.py agents scan --json
 python <skill>/scripts/brain.py agents select --task PB-001 --json
 python <skill>/scripts/brain.py delegate PB-001 --dry-run
@@ -33,7 +44,8 @@ use Pool's **Modelleri tara** or `cli-agent-pool scan-import` for newly installe
 
 - Task tier L/M/H requests low/medium/high. An explicit `--group` can choose a
   stronger pool; a weaker pool cannot satisfy the task quality tier. Risk and task
-  splitting checks still apply. Tier H delegation requires explicit `--force`.
+  splitting checks still apply. P-ALL authorizes Tier H dispatch; legacy direct
+  operation otherwise requires explicit `--force`, which never widens a mode cap.
 - Manual mode uses only that owner's pool. An empty/exhausted pool fails visibly;
   there is no outside-group, stronger-account or paid-API escape.
 - Automatic mode first uses the same strength pool. If none is usable, known

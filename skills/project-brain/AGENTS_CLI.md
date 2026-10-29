@@ -1,11 +1,15 @@
-# Project Brain 3.3.0 — Session Pool, CLI Discovery and Delegation
+# Project Brain 3.5.1 — Session Pool, CLI Discovery and Delegation
 
 Load this file when measuring task complexity, scanning installed CLI coding agents, managing subscription token quotas, or delegating `Tier L` / `Tier M` tasks to CLI worker sub-agents.
 
-Normal discovery and delegation use the separate CLI Agent Pool backend: see
-[POOL.md](POOL.md). The session/approval and direct CLI contracts below apply only
-to explicit `--backend direct` or `--registry` operation. They do not require a
-second approval for owner-configured Pool models.
+Normal discovery and delegation use the separate CLI Agent Pool backend when the user
+selects a `Pool` (`P-ALL` / `pool_mixed`, `P-ML` / `pool_med_low`, `P-L` / `pool_low`)
+session mode: see [POOL.md](POOL.md). When the user selects `Self` (`S-ALL` /
+`self_mixed`, `S-ML` / `self_and_lower`) or `Solo` (`SOLO` / `solo`) via
+`PB agents mode --new --exec <mode> --rev <mode>`, do not connect to CLI Agent Pool. The
+session/approval and direct CLI contracts below apply to explicit `--backend direct`
+or `--registry` operation. They do not require a second approval for owner-configured
+Pool models.
 
 ## 0. Standalone session authority
 

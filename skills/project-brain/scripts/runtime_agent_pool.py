@@ -188,18 +188,50 @@ def delegate(B, root, task, score, args):
     import runtime_agents as A
     if os.environ.get("CLI_AGENT_POOL_WORKER"):
         raise ValueError("Pool workers cannot delegate recursively")
+    if getattr(args, "readback", False):
+        import runtime_protocol as R
+        import runtime_security as S
+        entry = R.read_json(journal_path(root, task["id"]))
+        if not isinstance(entry.get("taskId"), str) or not entry["taskId"]:
+            raise ValueError("READBACK_FIRST: no acknowledged task ID; resolve the saved idempotency key with Pool, never launch a changed request")
+        current = rpc("pool_get_task", {"taskId": entry["taskId"], "after": 0})
+        print(S.sanitize(json.dumps({k: current.get(k) for k in ("id", "state", "error")}, ensure_ascii=False)))
+        print(S.sanitize(str(current.get("result") or ""))[:1500])
+        print("READBACK ONLY: source/spec were not checked and no work was submitted")
+        return 0 if current.get("state") == "succeeded" else 1 if current.get("state") in ACTIVE else 2
     if task["status"] not in ("READY", "IN_PROGRESS") or B.task_errors(task) or score["must_split"]:
         raise ValueError("delegation requires a READY/IN_PROGRESS executable task")
-    if score["effective_tier"] == "H" and not args.force:
+    import runtime_protocol as R
+    import runtime_security as S
+    R.guard(B, root, task)
+    if task.get("secrets", "none") != "none":
+        raise ValueError("Secret-bearing work is not sent to Pool; split implementation into secret-free fixtures, then use the approved host check adapter")
+    modes = B.get_session_modes(root) if hasattr(B, "get_session_modes") else {"exec": ""}
+    exec_mode = modes.get("exec", "")
+    if not exec_mode:
+        raise ValueError("Select a Pool EXEC mode before delegating to CLI Agent Pool")
+    if exec_mode == "solo":
+        raise ValueError("session EXEC mode is 'solo' (SOLO); execute directly without delegating")
+    if exec_mode in ("self_mixed", "self_and_lower"):
+        raise ValueError(f"session EXEC mode is '{exec_mode}'; use native subagents instead of CLI Agent Pool")
+    if exec_mode == "pool_low" and score["effective_tier"] != "L":
+        raise ValueError("session EXEC mode is 'pool_low' (P-L); only Tier L tasks may be delegated to Pool")
+    if exec_mode == "pool_med_low" and score["effective_tier"] == "H":
+        raise ValueError("session EXEC mode is 'pool_med_low' (P-ML); only Tier L/M tasks may be delegated to Pool")
+    if score["effective_tier"] == "H" and exec_mode != "pool_mixed" and not args.force:
         raise ValueError("Tier H requires the lead; split the task or explicitly pass --force")
     if not 5 <= args.timeout <= 3600:
         raise ValueError("Pool timeout must be 5..3600 seconds")
     with B.checkout_lock(root, timeout=0.1, name="delegate.lock"):
         file = journal_path(root, task["id"])
-        entry = json.loads(file.read_text(encoding="utf-8")) if file.exists() else None
+        entry = R.read_json(file) if file.exists() else None
+        if entry and (not isinstance(entry.get("contract"), str) or not isinstance(entry.get("actor"), str)
+                      or not isinstance(entry.get("request"), dict)):
+            raise ValueError("Malformed Pool journal; inspect/read back the existing job before dispatch")
         if entry and entry["contract"] != B.contract(task):
             raise ValueError("task contract changed after dispatch; inspect the existing Pool job before creating another task")
         if not entry:
+            R.attempt_guard(B, root, task)
             selected = select(score["effective_tier"], role="lead" if score["effective_tier"] == "H" else "worker", route=args.cli, model=args.model,
                               effort=args.effort, group=args.group)
             print("POOL_SELECT " + json.dumps({k: selected[k] for k in ("alias", "strength", "request")}, ensure_ascii=False))
@@ -221,6 +253,16 @@ def delegate(B, root, task, score, args):
         if args.dry_run:
             print("POOL_RESUME " + str(entry.get("taskId", "response_unknown")))
             return 0
+        if R.enabled(B, root) and entry.get("verified") and not args.dry_run:
+            value, _ = V.task_digest(B, root, task)
+            receipt = entry["verified"]
+            live_task = B.find_task(root, task["id"])
+            if (B.contract(live_task) == B.contract(task) and isinstance(receipt, dict) and receipt.get("digest") == value
+                    and receipt.get("contract") == B.contract(task)
+                    and receipt.get("taskId") == entry.get("taskId")
+                    and V.current_checks(B, root, live_task, value, B.contract(task))):
+                print("PASS CACHED: completed Pool job and intact current verification; no RPC or commands repeated")
+                return 0
         if not entry.get("taskId"):
             # Same key + exact request recovers a lost acknowledgement safely.
             submitted = rpc("pool_submit", entry["request"])
@@ -236,8 +278,19 @@ def delegate(B, root, task, score, args):
                 print("READBACK_FIRST: task still active; rerun delegate to resume polling without replay")
                 return 2
             time.sleep(1)
-        print("POOL_RESULT " + json.dumps({k: current.get(k) for k in ("id", "state", "modelId", "reportedModel", "effort", "error")}, ensure_ascii=False))
-        print(str(current.get("result") or "")[:20000])
+        print("POOL_RESULT " + S.sanitize(json.dumps({k: current.get(k) for k in ("id", "state", "modelId", "reportedModel", "effort", "error")}, ensure_ascii=False)))
+        res_text = S.sanitize(str(current.get("result") or ""))
+        if len(res_text) > 1500:
+            log_rel = f".project-brain/.cache/runs/{task['id']}-pool.log"
+            try:
+                log_path = V.public_path(root, log_rel)
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                B.write_atomic(log_path, res_text)
+                print(res_text[:1500] + f"\n[... truncated, full output in {log_rel}]")
+            except Exception:
+                print(res_text[:1500])
+        else:
+            print(res_text)
         if current["state"] != "succeeded":
             print("READBACK_FIRST: inspect the failed/interrupted job; no automatic retry")
             return 2
@@ -245,10 +298,17 @@ def delegate(B, root, task, score, args):
             rc, lines = V.check(B, root, task["id"], timeout=args.timeout, actor=entry["actor"])
         for line in lines:
             print(line)
+        if rc == 0 and R.enabled(B, root):
+            current_task = B.find_task(root, task["id"])
+            entry["verified"] = {"taskId": entry["taskId"], "digest": V.task_digest(B, root, current_task)[0], "contract": B.contract(current_task)}
+            B.write_atomic(file, json.dumps(entry, ensure_ascii=False))
         return rc
 
 
 def agents(B, args):
+    modes = B.get_session_modes(Path(args.root).resolve())
+    if not any(modes.get(role, "").startswith("pool_") for role in ("exec", "rev")):
+        raise ValueError("Select a Pool EXEC or REV mode before connecting to CLI Agent Pool")
     sub = args.agents_cmd
     if sub == "select":
         tier = (args.tier or ("H" if args.role in ("lead", "reviewer") else "M")).upper()
@@ -257,6 +317,10 @@ def agents(B, args):
             if not task:
                 raise ValueError("task not found")
             tier = A_score(B, args.root, task)["effective_tier"]
+        role_mode = modes.get("rev" if args.role == "reviewer" else "exec", "")
+        limit = {"pool_mixed": "H", "pool_med_low": "M", "pool_low": "L"}.get(role_mode)
+        if not limit or B.TIER_VALUES.index(tier) > B.TIER_VALUES.index(limit):
+            raise ValueError("No eligible Pool role/tier within the selected session mode; retain quality floors")
         if args.exclude:
             raise ValueError("--exclude is available with --backend direct; use Pool owner membership to exclude models")
         value = select(tier, args.role, route=args.cli)

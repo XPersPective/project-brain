@@ -83,6 +83,9 @@ def main():
         assert all(c["alias"] != "unmeasured" for c in A.candidates(loaded, tier="L", risk="LOW"))
 
         quiet(B.cmd_init, root)
+        cfg = B.parse_config(root)
+        cfg["protocol_version"] = "0"
+        B.write_atomic(B.bp(root) / "config.yaml", B.config_text(root, cfg))
         (root / "src").mkdir()
         (root / "src/a.py").write_text("pass\n", encoding="utf-8")
         task_file = root / ".project-brain/tasks/PB-001.md"

@@ -157,6 +157,9 @@ def recovery_checks():
         git(root, "config", "user.email", "t@t")
         git(root, "config", "user.name", "t")
         run(root, "init")
+        cfg = B.parse_config(root)
+        cfg["protocol_version"] = "0"  # Legacy v3 lifecycle remains supported.
+        write(root, ".project-brain/config.yaml", B.config_text(root, cfg))
         write(root, ".project-brain/current.md", "# Current\n## Map\n### Auth\nSources: `auth.py`\n"
               "### Billing\nSources: `billing.py`\n")
         write(root, "auth.py", "old\n")
@@ -328,6 +331,23 @@ def migrate_checks():
         assert "Status: DRAFT" in tgt and "## Goal" in tgt, tgt
         assert "STATE: LEGACY" not in run(root, "boot")[1]
         assert "NOTHING TO MIGRATE" in run(root, "migrate")[1]
+        # v3.0-v3.3 -> v3.4 auto-upgrade inside an existing schema-4 directory on `boot` (transfers Owner, Handoff->Resume, Discoveries->Notes, Evidence, Review)
+        write(
+            root,
+            ".project-brain/tasks/PB-005.md",
+            "# PB-005 — Pre-3.4 task\nStatus: IN_PROGRESS\nOwner: legacy-worker\nAreas: `lib/a.dart`, credentials.py\n\n"
+            "## Objective\nKeep all headers and sections.\n\n## Acceptance\n- [ ] works\n\n"
+            "## Handoff\nNext: finish wiring\n\n## Discoveries\nFound token helper\n",
+        )
+        assert "PREVIEW (schema-4 upgrade)" in run(root, "upgrade")[1]
+        boot_out = run(root, "boot")[1]
+        assert "VERSION_CHECK: auto-upgraded project" in boot_out, boot_out
+        t5 = (root / ".project-brain/tasks/PB-005.md").read_text(encoding="utf-8")
+        for needle in ("Status: IN_PROGRESS", "Priority: P2", "Tier: M", "Risk: MEDIUM", "Owner: legacy-worker",
+                       "Areas: `lib/a.dart`, `credentials.py`", "## Resume\nNext: finish wiring",
+                       "## Evidence", "## Review", "Discoveries (migrated): Found token helper"):
+            assert needle in t5, (needle, t5)
+        assert "NOTHING TO MIGRATE" in run(root, "upgrade")[1]
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -436,6 +456,9 @@ def v3_checks():
         write(root, "tests/test_card.py", "assert True\n")
         commit(root, "init")
         run(root, "init")
+        cfg = B.parse_config(root)
+        cfg["protocol_version"] = "0"  # Legacy task lifecycle is tested separately from strict protocol.
+        write(root, ".project-brain/config.yaml", B.config_text(root, cfg))
         write(root, ".project-brain/current.md", "# Current\n\n## Map\n- `src/ui/card.py` — card\n\n## Domains\n\n### UI\nStatus: VERIFIED\nSources: `src/ui/**`, `tests/**`\n")
         write(root, ".project-brain/target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nBuild polished UI.\n")
 
@@ -538,12 +561,27 @@ def v3_checks():
         # Tick all checkboxes
         edit(root, ".project-brain/tasks/PB-001.md", "- [ ]", "- [x]")
 
+        # Boot reports TAKEOVER_CHECK: SKIP and proven criteria on current digest (no duplicate checks on handoff)
+        code, out = run(root, "boot")
+        assert code == 0 and "TAKEOVER_CHECK: REQUIRED (source edits outside active Areas)" in out and "proven on current digest (DO NOT repeat)" in out, out
+
+        # Session EXEC/REV mode selection (`agents mode`) & tier boundary enforcement
+        code, out = run(root, "agents", "mode", "--exec", "P-L", "--rev", "P-ML", "--note", "test modes")
+        assert code == 0 and "exec=pool_low" in out and "rev=pool_med_low" in out, out
+        code, out = run(root, "delegate", "PB-001", "--model", "codex/gpt-5.2-codex", "--dry-run", "--registry", str(reg_file))
+        assert code == 2 and "pool_low" in out, out
+        code, out = run(root, "agents", "mode", "--exec", "SOLO")
+        assert code == 0 and "exec=solo" in out and "rev=solo" in out, out
+        code, out = run(root, "delegate", "PB-001", "--model", "codex/gpt-5.2-codex", "--dry-run", "--registry", str(reg_file))
+        assert code == 2 and "solo" in out, out
+        run(root, "agents", "mode", "--exec", "P-ALL", "--rev", "P-ALL")
+
         # First `accept` on MEDIUM risk transitions to REVIEW_PENDING
         code, out = run(root, "accept", "PB-001", "--as", "codex/gpt-5.2-codex", "--registry", str(reg_file))
         assert code == 1 and "REVIEW_PENDING PB-001" in out, out
         assert B.parse_task(root / ".project-brain/tasks/PB-001.md")["status"] == "REVIEW"
 
-        # Implementer cannot self-review
+        # Implementer cannot self-review when REV is not SOLO
         code, out = run(root, "review", "PB-001", "--reviewer", "codex/gpt-5.2-codex", "--verdict", "PASS", "--registry", str(reg_file))
         assert code == 2 and "must not have implemented" in out, out
 
@@ -559,6 +597,42 @@ def v3_checks():
         code, out = run(root, "accept", "PB-001", "--as", "claude/claude-opus-4-6", "--registry", str(reg_file))
         assert code == 0 and "DONE PB-001" in out and "PB-Reviewer: claude/claude-opus-4-6" in out, out
         assert B.parse_task(root / ".project-brain/tasks/PB-001.md")["status"] == "DONE"
+
+        # SOLO review mode (`--rev SOLO` or `--self-review`) allows self-acceptance without external reviewer deadlock
+        write(root, "src/core/helper.py", "def ok(): return True\n")
+        write(
+            root,
+            ".project-brain/tasks/PB-002.md",
+            "# PB-002 — Add core helper\nStatus: READY\nPriority: P2\nTier: L\nRisk: MEDIUM\nOwner:\nDepends: -\n"
+            "Areas: `src/core/helper.py`\nDomains: core\n\n## Objective\nAdd helper.\n\n## Steps\n1. Update `src/core/helper.py`.\n\n"
+            "## Acceptance\n- [x] [machine] test passes\n\n## Verify\n"
+            f"- `{sys.executable} -c \"print('helper ok')\"`\n\n## Evidence\n\n## Review\n",
+        )
+        assert run(root, "agents", "mode", "--exec", "SOLO", "--rev", "SOLO")[0] == 0
+        code, out = run(root, "start", "PB-002", "--agent", "codex/gpt-5.2-codex", "--registry", str(reg_file))
+        assert code == 0, out
+        code, out = run(root, "check", "PB-002", "--as", "codex/gpt-5.2-codex")
+        assert code == 0, out
+        code, out = run(root, "review", "PB-002", "--reviewer", "codex/gpt-5.2-codex", "--verdict", "PASS", "--self-review", "--registry", str(reg_file))
+        assert code == 0, out
+        code, out = run(root, "accept", "PB-002", "--as", "codex/gpt-5.2-codex", "--registry", str(reg_file))
+        assert code == 0 and "DONE PB-002" in out and "PB-Reviewer: codex/gpt-5.2-codex" in out, out
+
+        # Automatic garbage collection (`gc_brain`) on `boot` once tasks are committed in Git
+        write(root, ".project-brain/migration-backup/old.txt", "legacy backup\n")
+        write(root, ".project-brain/.cache/runs/PB-001-old.log", "old log\n")
+        commit(
+            root,
+            "feat(ui): complete PB-001 and PB-002 [PB-001] [PB-002]\n\n"
+            "PB-Task: PB-001\nPB-Task: PB-002\nPB-Verification: local\nPB-Current-Checkpoint: ui",
+        )
+        code, gc_out = run(root, "boot")
+        assert code == 0 and "GC_CLEANUP: removed" in gc_out, gc_out
+        assert not (root / ".project-brain/tasks/PB-001.md").exists()
+        assert not (root / ".project-brain/tasks/PB-002.md").exists()
+        assert not (root / ".project-brain/evidence/PB-001").exists()
+        assert not (root / ".project-brain/.cache/runs/PB-001-old.log").exists()
+        assert (root / ".project-brain/migration-backup/old.txt").read_text(encoding="utf-8") == "legacy backup\n"
 
     # 4. Foreign planning state adoption (`legacy`) filters out store-publishing tasks
     with tempfile.TemporaryDirectory(prefix="pb-legacy-") as tmp:
@@ -596,3 +670,7 @@ if __name__ == "__main__":
     discovery_checks()
     from test_agent_pool import main as agent_pool_checks
     agent_pool_checks()
+    from test_handoff_audit import main as handoff_checks
+    handoff_checks()
+    from test_production import main as production_checks
+    production_checks()

@@ -294,7 +294,7 @@ class ProcessTree:
             self.proc = None
 
 
-def run_command(root, argv, log_path, timeout=900, input_bytes=None, strip_secrets=True):
+def run_command(root, argv, log_path, timeout=900, input_bytes=None, strip_secrets=True, output_guard=None, extra_env=None):
     """Run one argv in a kill-on-close process tree; full output goes to log_path."""
     if (
         not isinstance(argv, list)
@@ -325,12 +325,17 @@ def run_command(root, argv, log_path, timeout=900, input_bytes=None, strip_secre
         if strip_secrets
         else dict(os.environ)
     )
+    if extra_env:
+        if set(extra_env) - {"PB_SESSION_ID"}:
+            raise ValueError("Only PB_SESSION_ID may be explicitly inherited")
+        env.update(extra_env)
     cache = tempfile.mkdtemp(prefix="pb-pycache-")
     env["PYTHONPYCACHEPREFIX"] = cache
     started = time.monotonic()
     tree = ProcessTree()
     Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "wb") as log, (
+    exceeded = False
+    with tempfile.TemporaryFile(mode="w+b") as log, (
         tempfile.TemporaryFile() if input_bytes is not None else nullcontext()
     ) as input_stream:
         proc, timed_out = None, False
@@ -348,7 +353,19 @@ def run_command(root, argv, log_path, timeout=900, input_bytes=None, strip_secre
                     stderr=subprocess.STDOUT,
                 )
                 try:
-                    proc.wait(timeout=timeout)
+                    deadline = time.monotonic() + timeout
+                    while proc.poll() is None:
+                        if os.fstat(log.fileno()).st_size > 4 * 1024 * 1024:
+                            exceeded = True
+                            break
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            timed_out = True
+                            break
+                        try:
+                            proc.wait(timeout=min(0.2, remaining))
+                        except subprocess.TimeoutExpired:
+                            pass
                 except subprocess.TimeoutExpired:
                     timed_out = True
             finally:
@@ -361,8 +378,23 @@ def run_command(root, argv, log_path, timeout=900, input_bytes=None, strip_secre
         finally:
             if cache:
                 shutil.rmtree(cache, ignore_errors=True)
+        import runtime_security as S
+        log.seek(0)
+        raw = log.read(4 * 1024 * 1024 + 1)
+        exceeded = exceeded or len(raw) > 4 * 1024 * 1024
+        blocked = False
+        if output_guard is not None:
+            try:
+                output_guard(raw)
+            except ValueError:
+                blocked = True
+        safe = "[output withheld: scanner rejected output]\n" if blocked else S.sanitize(raw[:4 * 1024 * 1024].decode("utf-8", errors="replace"))
+        if exceeded:
+            safe += "\n[output limit exceeded; result is not PASS]\n"
+        with open(log_path, "w", encoding="utf-8", newline="\n") as final_log:
+            final_log.write(safe)
     return {
-        "exit_code": 124 if timed_out else (proc.returncode if proc is not None else 1),
+        "exit_code": 125 if exceeded or blocked else 124 if timed_out else (proc.returncode if proc is not None else 1),
         "timed_out": timed_out,
         "duration_seconds": round(time.monotonic() - started, 3),
         "containment": "Windows JobObject" if os.name == "nt" else "POSIX process group",
@@ -410,6 +442,11 @@ def digest(B, root, areas):
     return B.areas_digest([(f, public_path(root, f).read_bytes()) for f in files]), len(files)
 
 
+def task_digest(B, root, task):
+    import runtime_protocol as R
+    return R.task_digest(B, root, task)
+
+
 def prune_runs(B, root):
     """Keep .project-brain/.cache/runs/ bounded while preserving logs cited by open tasks."""
     runs = public_path(root, B.BRAIN_DIR + "/.cache/runs")
@@ -417,11 +454,12 @@ def prune_runs(B, root):
         return
     cited = set()
     for t in B.list_tasks(root):
-        if t["status"] != "DONE":
-            for line in t.get("evidence_lines", []):
-                m = CHECK_RE.match(line)
-                if m:
-                    cited.add(m.group("log").split("/")[-1])
+        latest = {}
+        for line in t.get("evidence_lines", []):
+            match = CHECK_RE.match(line)
+            if match:
+                latest[match.group("cmd")] = match
+        cited.update(m.group("log").split("/")[-1] for m in latest.values())
     logs = sorted((p for p in runs.glob("*.log") if p.name not in cited), key=lambda p: p.stat().st_mtime)
     cutoff = datetime.now(timezone.utc).timestamp() - RUNS_KEEP_DAYS * 86400
     for n, path in enumerate(logs):
@@ -430,6 +468,32 @@ def prune_runs(B, root):
                 path.unlink()
             except OSError:
                 pass
+
+
+def compact_machine_records(B, task, value=None, contract=None):
+    """Keep current proofs and latest checks; retain ownership/user feedback/history notes."""
+    lines = task.get("evidence_lines", [])
+    latest = {}
+    for index, line in enumerate(lines):
+        match = CHECK_RE.match(line)
+        if match:
+            latest[match.group("cmd")] = index
+    keep = set(latest[cmd] for cmd in task.get("verify_cmds", []) if cmd in latest)
+    compact = []
+    for index, line in enumerate(lines):
+        check = CHECK_RE.match(line)
+        typed = EVIDENCE_RE.match(line)
+        if check and index not in keep:
+            continue
+        if (typed and value and contract and typed.group("kind") != "user_feedback"
+                and (typed.group("digest") != value or typed.group("contract") != contract)):
+            continue
+        compact.append(line)
+    text = B.read(task["file"]) or ""
+    if compact != lines:
+        replacement = "## Evidence\n" + "\n".join(compact) + "\n\n"
+        text = re.sub(r"^## Evidence\s*\n.*?(?=^## |\Z)", lambda _: replacement, text, count=1, flags=re.M | re.S)
+        B.write_atomic(task["file"], text)
 
 
 def _log_path(B, root, task_id, n):
@@ -502,7 +566,7 @@ def _actor(B, task, actor, anyone_on_review=False):
     return actor
 
 
-def check(B, root, task_id, timeout=None, actor=""):
+def check(B, root, task_id, timeout=None, actor="", rerun=False):
     task = B.find_task(root, task_id)
     if task["status"] not in ("IN_PROGRESS", "REVIEW"):
         return 2, [f"FAIL {task['id']} is {task['status']}: `start` it first"]
@@ -513,13 +577,27 @@ def check(B, root, task_id, timeout=None, actor=""):
         return 2, [f"FAIL {task['id']} has no backticked Verify command"]
     cfg = B.parse_config(root) if (B.bp(root) / "config.yaml").exists() else {}
     timeout = timeout or float(cfg.get("check_timeout", 900) or 900)
-    before, count = digest(B, root, task["areas"])
+    import runtime_protocol as R
+    import runtime_security as S
+    R.guard(B, root, task)
+    before, count = task_digest(B, root, task)
     contract = B.contract(task)
+    if R.enabled(B, root) and not rerun and current_checks(B, root, task, before, contract):
+        return 0, [f"PASS CACHED: {task['id']} current inputs/environment/spec and intact logs; no commands repeated"]
+    R.attempt_guard(B, root, task)
     results = []
     for n, cmd in enumerate(task["verify_cmds"], 1):
         path, log_rel = _log_path(B, root, task["id"], n)
-        results.append((cmd, run_command(root, command_argv(cmd), path, timeout), path, log_rel))
-    after, _ = digest(B, root, task["areas"])
+        remaining = R.remaining_seconds(B, root, task, sum(r["duration_seconds"] for _, r, _, _ in results))
+        if remaining is not None and remaining <= 0:
+            B.write_atomic(path, "Explicit check execution budget reached; command not launched")
+            result = {"exit_code": 125, "duration_seconds": 0}
+        else:
+            result = run_command(root, S.command(B, root, task, cmd), path,
+                                 min(timeout, remaining) if remaining is not None else timeout,
+                                 output_guard=lambda raw: S.scan_output(B, root, task, raw))
+        results.append((cmd, result, path, log_rel))
+    after, _ = task_digest(B, root, task)
     out = []
     for cmd, r, path, log_rel in results:
         ok = r["exit_code"] == 0 and before == after
@@ -539,12 +617,21 @@ def check(B, root, task_id, timeout=None, actor=""):
         out.append("! Areas changed while checks ran; results are FAIL. Rerun on stable source.")
     passed = all(r["exit_code"] == 0 for _, r, _, _ in results) and before == after
     out.append(f"{'PASS' if passed else 'FAIL'}: {len(results)} command(s) on {count} file(s) in Areas")
+    if R.enabled(B, root):
+        compact_machine_records(B, B.find_task(root, task["id"]), after, contract)
+        R.account_check(B, root, task, sum(r["duration_seconds"] for _, r, _, _ in results))
+        R.progress(B, root, task, "Tick proven criteria, verify remaining behavior, then review and accept" if passed else "Inspect the failed check; change approach before repeating",
+                   failing="" if passed else "Verify failed: " + ",".join(str(r["exit_code"]) for _, r, _, _ in results), strategy="check")
     return (0 if passed else 1), out
 
 
 def evidence(B, root, task_id, kind, note, files=(), actor="", criteria=()):
     task = B.find_task(root, task_id)
     actor = _actor(B, task, actor)
+    import runtime_security as S
+    import runtime_protocol as R
+    R.guard(B, root, task)
+    S.require_clean(note, "evidence note")
     if kind not in B.KINDS or kind == "machine":
         raise ValueError(
             "Kind must be one of "
@@ -582,8 +669,10 @@ def evidence(B, root, task_id, kind, note, files=(), actor="", criteria=()):
         path = public_path(root, name)
         if not path.is_file():
             raise ValueError("Evidence file missing: " + name)
+        if path.suffix.lower() not in SHOT_SUFFIXES:
+            S.scan_artifacts(B, root, [name])
         hashed.append(f"{name}@{_hash(path)}")
-    value, _ = digest(B, root, task["areas"])
+    value, _ = task_digest(B, root, task)
     line = (
         f"- [{kind}] {note.strip()} | criterion={','.join(criteria)}"
         + (f" | files={','.join(hashed)}" if hashed else "")
@@ -593,25 +682,40 @@ def evidence(B, root, task_id, kind, note, files=(), actor="", criteria=()):
     return 0, [line[2:]]
 
 
-def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None):
+def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, self_review=False):
     import runtime_agents
 
     task = B.find_task(root, task_id)
     reviewer = B.agent_id(reviewer, "--reviewer")
+    import runtime_protocol as R
+    import runtime_security as S
+    R.guard(B, root, task)
+    for finding in findings:
+        S.require_clean(finding, "review finding")
     if task["status"] not in ("IN_PROGRESS", "REVIEW"):
         return 2, [f"FAIL {task['id']} is {task['status']}; nothing to review"]
+    modes = B.get_session_modes(root) if hasattr(B, "get_session_modes") else {"rev": ""}
+    if self_review and modes.get("rev") != "solo":
+        raise ValueError("--self-review requires the upfront REV mode SOLO")
+    allow_self = modes.get("rev") == "solo"
     imps = implementers(B, task)
     identity = runtime_agents.canonical_identity(reviewer, agents_path)
-    if not task.get("owner") or any(
+    if not task.get("owner") or (not allow_self and any(
         identity == runtime_agents.canonical_identity(imp, agents_path) for imp in imps
-    ):
+    )):
         return 2, [
             f"FAIL reviewer must be named and must not have implemented {task['id']} "
-            f"({', '.join(sorted(imps)) or 'no Owner'}); a session never reviews its own work"
+            f"({', '.join(sorted(imps)) or 'no Owner'}); a session never reviews its own work (unless REV mode is solo / --self-review)"
         ]
     if verdict not in ("PASS", "BLOCKED"):
         raise ValueError("Verdict must be PASS or BLOCKED")
-    runtime_agents.gate(B, task, reviewer, "review", agents_path, root=root)
+    if not allow_self:
+        if R.enabled(B, root):
+            registry = runtime_agents.registry_path(agents_path)
+            models = runtime_agents.load(registry).get("models", {}) if registry.exists() else {}
+            if reviewer not in models:
+                raise ValueError("REVIEW_PROVENANCE_PENDING: independent reviewer must be registered; a different alias alone is not evidence")
+        runtime_agents.gate(B, task, reviewer, "review", agents_path, root=root)
     for f in findings:
         if any(ord(c) < 32 for c in f):
             raise ValueError("Finding must be one line without control characters")
@@ -634,7 +738,7 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None):
                 'Accepted MINOR owner must be "user" or an open follow-up task PB-NNN; '
                 "an accepted QUALITY gap is owned by the user only"
             )
-    value, _ = digest(B, root, task["areas"])
+    value, _ = task_digest(B, root, task)
     lines = [f"- review by {reviewer} | {verdict} | digest={value} | contract={B.contract(task)}"] + [
         f"- finding {f.strip()}" for f in findings
     ]
@@ -642,6 +746,9 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None):
         B.append_section(task["file"], "Review", line)
     if task["status"] == "IN_PROGRESS":
         B.set_header(task["file"], "Status", "REVIEW")
+    if R.enabled(B, root):
+        assurance = R.provenance(B, root, task, reviewer, allow_self, agents_path)
+        lines.append("- assurance: " + assurance["assurance"])
     return 0, [line[2:] for line in lines]
 
 
@@ -654,11 +761,64 @@ def _file_matches(root, ref):
         return False
 
 
-def accept(B, root, task_id, actor="", agents_path=None):
+def check_log_valid(B, root, match):
+    try:
+        log = public_path(root, B.BRAIN_DIR + "/" + match.group("log"))
+        footer = (f"{LOG_FOOTER} {match.group('result')} exit={match.group('exit')} "
+                  f"digest={match.group('digest')} contract={match.group('contract')}")
+        return (log.is_file() and _hash(log) == match.group("hash")
+                and log.read_text(encoding="utf-8", errors="replace").rstrip().endswith(footer))
+    except (ValueError, OSError):
+        return False
+
+
+def current_checks(B, root, task, value, contract):
+    latest = {}
+    for line in task.get("evidence_lines", []):
+        match = CHECK_RE.match(line)
+        if match:
+            latest[match.group("cmd")] = match
+    return bool(task.get("verify_cmds")) and all(
+        cmd in latest and latest[cmd].group("result") == "PASS"
+        and latest[cmd].group("exit") == "0"
+        and latest[cmd].group("digest") == value
+        and latest[cmd].group("contract") == contract
+        and check_log_valid(B, root, latest[cmd]) for cmd in task["verify_cmds"]
+    )
+
+
+def current_criteria(task, root, value, contract):
+    proven = set()
+    for item in task.get("items", []):
+        if item["kind"] == "machine":
+            continue
+        for line in task.get("evidence_lines", []):
+            match = EVIDENCE_RE.match(line)
+            if (match and match.group("kind") == item["kind"]
+                    and match.group("digest") == value and match.group("contract") == contract
+                    and item["id"] in match.group("criteria").split(",")
+                    and all(_file_matches(root, ref) for ref in (match.group("files") or "").split(",") if ref.strip())):
+                proven.add(item["id"])
+                break
+    return proven
+
+
+def accept(B, root, task_id, actor="", agents_path=None, self_review=False):
     task = B.find_task(root, task_id)
     if task["status"] not in ("IN_PROGRESS", "REVIEW"):
         return 2, [f"FAIL {task['id']} is {task['status']}: only IN_PROGRESS or REVIEW tasks are accepted"]
     _actor(B, task, actor or task.get("owner", ""))
+    import runtime_protocol as R
+    R.guard(B, root, task)
+    if R.enabled(B, root):
+        import runtime_security as S
+        S.require_clean(B.read(task["file"]) or "", "task export")
+        if B.git(root, "rev-parse", "--is-inside-work-tree") == "true":
+            S.scan_staged(B, root)
+    modes = B.get_session_modes(root) if hasattr(B, "get_session_modes") else {"rev": ""}
+    if self_review and modes.get("rev") != "solo":
+        raise ValueError("--self-review requires the upfront REV mode SOLO")
+    allow_self = modes.get("rev") == "solo"
     import runtime_agents
 
     runtime_agents.gate(B, task, actor or task.get("owner", ""), "accept", agents_path, root=root)
@@ -667,7 +827,7 @@ def accept(B, root, task_id, actor="", agents_path=None):
     errors = B.task_errors(task)
     if errors:
         return 2, [f"BLOCKED {task['id']}"] + [f"  - {e}" for e in errors]
-    current, _ = digest(B, root, task["areas"])
+    current, _ = task_digest(B, root, task)
     contract = B.contract(task)
     risk = effective_risk(B, task)
     problems, missing = [], []
@@ -692,12 +852,7 @@ def accept(B, root, task_id, actor="", agents_path=None):
             log = public_path(root, B.BRAIN_DIR + "/" + m.group("log"))
             if not log.is_file():
                 missing.append(f"log of the latest `{cmd}` check is not in this checkout: run `check`")
-            elif _hash(log) != m.group("hash") or not log.read_text(
-                encoding="utf-8", errors="replace"
-            ).rstrip().endswith(
-                f"{LOG_FOOTER} {m.group('result')} exit={m.group('exit')} "
-                f"digest={m.group('digest')} contract={m.group('contract')}"
-            ):
+            elif not check_log_valid(B, root, m):
                 problems.append(f"`{cmd}` check line does not match its log: evidence is written only by `check`")
             elif m.group("result") == "FAIL":
                 problems.append(f"latest check failed: `{cmd}`")
@@ -730,17 +885,24 @@ def accept(B, root, task_id, actor="", agents_path=None):
     if risk in ("MEDIUM", "HIGH"):
         if rev is None or rev["digest"] != current or rev["contract"] != contract:
             missing.append(
-                f"independent review on current source and spec required ({risk} risk"
-                f"{', recorded at start' if risk != task['risk'] else ''})"
+                f"independent review on current source and spec required ({risk} risk)"
+                if not allow_self else
+                "explicit SOLO review required on current source and spec: run `review --self-review` after the audit"
             )
         else:
-            try:
-                runtime_agents.gate(B, task, rev["reviewer"], "review", agents_path, root=root)
-            except ValueError as error:
-                problems.append("reviewer policy: " + str(error))
-            identity = runtime_agents.canonical_identity(rev["reviewer"], agents_path)
-            if any(identity == runtime_agents.canonical_identity(imp, agents_path) for imp in implementers(B, task)):
-                problems.append(f"reviewer {rev['reviewer']} implemented this task")
+            if R.enabled(B, root):
+                try:
+                    R.review_guard(B, root, task, rev, allow_self, agents_path)
+                except ValueError as error:
+                    problems.append("review provenance: " + str(error))
+            if not allow_self:
+                try:
+                    runtime_agents.gate(B, task, rev["reviewer"], "review", agents_path, root=root)
+                except ValueError as error:
+                    problems.append("reviewer policy: " + str(error))
+                identity = runtime_agents.canonical_identity(rev["reviewer"], agents_path)
+                if any(identity == runtime_agents.canonical_identity(imp, agents_path) for imp in implementers(B, task)):
+                    problems.append(f"reviewer {rev['reviewer']} implemented this task")
             if rev["verdict"] != "PASS":
                 problems.append("review verdict BLOCKED")
             for severity, text_, reason, owner in rev["findings"]:
@@ -753,7 +915,7 @@ def accept(B, root, task_id, actor="", agents_path=None):
     if problems:
         return 2, [f"BLOCKED {task['id']}"] + [f"  - {p}" for p in problems + missing]
     user_items = [i["text"] for i in task["items"] if not i["done"] and i["kind"] == "user_feedback"]
-    rest = [m for m in missing if not m.startswith(("open acceptance: [user_feedback]", "independent review"))]
+    rest = [m for m in missing if not m.startswith(("open acceptance: [user_feedback]", "independent review", "explicit SOLO review"))]
     if user_items and not rest:
         B.set_headers(
             task["file"],
@@ -768,14 +930,13 @@ def accept(B, root, task_id, actor="", agents_path=None):
             "work can start. When the user answers: `start`, `evidence --kind user_feedback`, tick the "
             "item, `accept`. Whoever started it may not review it."
         ]
-    review_only = missing and all(m.startswith("independent review") for m in missing)
+    review_only = missing and all(m.startswith(("independent review", "explicit SOLO review")) for m in missing)
     if review_only:
         if task["status"] != "REVIEW":
             B.set_header(task["file"], "Status", "REVIEW")
         return 1, [
             f"REVIEW_PENDING {task['id']}: implementation evidence is current; a different, stronger agent "
-            f"that did not implement it runs `review {task['id']}` then `accept`. Commit now with "
-            "PB-WIP: true if you stop here."
+            f"that did not implement it runs `review {task['id']}` then `accept` (SOLO: explicitly run `review --self-review` after the audit). Commit now with PB-WIP: true if you stop here."
         ]
     if missing:
         return 1, [f"UNVERIFIED {task['id']}"] + [f"  - {m}" for m in missing]
@@ -793,6 +954,6 @@ def accept(B, root, task_id, actor="", agents_path=None):
         + [f"  {t}" for t in trailers]
         + [
             "Add PB-Current-Checkpoint: <domains> if you reconciled current.md. After the commit succeeds, "
-            "delete the task file in the next commit."
+            "delete the task file in the next commit (or delete it in the same commit with the trailers above)."
         ],
     )

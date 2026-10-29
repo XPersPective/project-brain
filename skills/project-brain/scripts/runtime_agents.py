@@ -200,7 +200,7 @@ def score_task(B, root, task):
                 missing_ui_triad.append(req_k)
 
     executable = bool(task.get("has_steps") and task.get("checkboxes") and task.get("verify_cmd") and not task.get("vague"))
-    must_split = raw_score > 78 or task.get("lines", 0) > B.BUDGETS["task"] or len(steps) > 10
+    must_split = raw_score > 78 or task.get("spec_lines", task.get("lines", 0)) > B.BUDGETS["task"] or len(steps) > 10
     delegatable = bool(
         eff_tier in ("L", "M")
         and executable
@@ -1311,13 +1311,27 @@ def build_worker_prompt(B, root, task, score_info):
     """Build a compact, zero-history execution prompt for a delegated CLI worker."""
     rel_task = Path(os.path.relpath(task["file"], root)).as_posix()
     surf = score_info["surface"]
+    cur_file = B.bp(root) / "current.md"
+    _, rng = (
+        B.current_slices(cur_file, task.get("domains", []))
+        if cur_file.exists() and hasattr(B, "current_slices")
+        else (None, None)
+    )
+    slice_hint = f" (lines {rng})" if rng else " (only matching domain sections)"
+    proven = B.proven_criteria_ids(root, task) if hasattr(B, "proven_criteria_ids") else []
     rules = [
         f"You are executing Project Brain task `{task['id']}: {task['title']}` in `{Path(root).as_posix()}`.",
-        "Read repository agent instructions, `.project-brain/constraints.md`, matching domain slices in `.project-brain/current.md`, and task-linked ADRs before editing.",
+        f"Read repository agent instructions, `.project-brain/constraints.md`, matching domain slices in `.project-brain/current.md`{slice_hint}, and task-linked ADRs before editing.",
         f"1. Read `{rel_task}` first. Follow its `Objective`, `Steps`, `Acceptance`, and `Verify` sections strictly.",
         f"2. Restrict all file edits to `Areas`: {', '.join(f'`{a}`' for a in task['areas']) or '(see task file)'}.",
         "3. Do NOT modify unrelated tasks, do NOT rewrite git history, and do NOT hand-edit `## Evidence` or `## Review`.",
+        "Use the user's existing human Git identity. Never add AI/model/provider/bot author, Co-authored-by, generated-by or contributor/PR credit; leave commits pending if human identity is missing.",
     ]
+    if proven:
+        rules.append(
+            f"   - Reusable typed evidence on current digest: {', '.join(sorted(proven))}. "
+            "Inspect it before ticking open criteria; re-verify if source, dependencies or environment change."
+        )
     if surf["ui"]:
         rules.append(
             "4. UI QUALITY RUBRIC: Reuse the existing design foundation and verify applicable loading, empty, error/retry, "
@@ -1328,9 +1342,12 @@ def build_worker_prompt(B, root, task, score_info):
             "5. BACKEND & STATE RUBRIC: Preserve the project's architecture boundaries and explicit state transitions, "
             "validate external inputs at the boundary, and enforce idempotency/error contracts."
         )
-    rules.append("6. Run every command in `## Verify` and fix any failures before finishing.")
+    rules.append("6. Use `PB check` for Verify receipts; reuse intact current proof, recheck changed inputs. Record progress/Resume before stopping; never invent a PASS.")
     rules.append("7. Keep context to the named files; no full-repository dumps or nested delegation. Stop after one failed repair with the exact failure and remaining work. Return changed files, check results and unresolved risks in at most 12 lines; intention-only output is not completion.")
-    return "\n".join(rules)
+    import runtime_security as S
+    prompt = "\n".join(rules)
+    S.require_clean(prompt, "worker prompt")
+    return prompt
 
 
 def _worker_command(cli_name, binary, root, model_id, effort, prompt, cli_config=None, prompt_file=""):
@@ -1484,11 +1501,30 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
     if not task:
         print(f"FAIL {tid}: task not found")
         return 2
+    import runtime_protocol as R
+    R.guard(B, root, task)
+    R.attempt_guard(B, root, task)
+    if task.get("secrets", "none") != "none":
+        raise ValueError("Do not delegate secret-bearing tasks; use secret-free fixtures and the approved host check adapter")
     sinfo = score_task(B, root, task)
     if task["status"] not in ("READY", "IN_PROGRESS"):
         print(f"FAIL {task['id']}: delegation requires READY or IN_PROGRESS status")
         return 2
-    if sinfo["effective_tier"] == "H" and not force:
+    modes = B.get_session_modes(root) if hasattr(B, "get_session_modes") else {"exec": ""}
+    exec_mode = modes.get("exec", "")
+    if exec_mode in ("self_mixed", "self_and_lower"):
+        print("FAIL use native subagents for the selected EXEC mode")
+        return 2
+    if exec_mode == "solo":
+        print(f"FAIL {task['id']}: session EXEC mode is 'solo' (SOLO); execute directly without delegating")
+        return 2
+    if exec_mode == "pool_low" and sinfo["effective_tier"] != "L":
+        print(f"FAIL {task['id']}: session EXEC mode is 'pool_low' (P-L); only Tier L tasks may be delegated")
+        return 2
+    if exec_mode == "pool_med_low" and sinfo["effective_tier"] == "H":
+        print(f"FAIL {task['id']}: session EXEC mode is 'pool_med_low' (P-ML); only Tier L/M tasks may be delegated")
+        return 2
+    if sinfo["effective_tier"] == "H" and exec_mode != "pool_mixed" and not force:
         print(
             f"FAIL {task['id']}: computed Tier is H (score {sinfo['score']}/100, risk {sinfo['effective_risk']}). "
             "High-complexity architecture tasks belong to the lead model; split into L/M tasks or pass --force."
@@ -1635,40 +1671,18 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
         run_cmd = ["cmd.exe", "/d", "/s", "/c", subprocess.list2cmdline(run_cmd)]
 
     t0 = time.monotonic()
-    with open(log_path, "w", encoding="utf-8", newline="\n") as logf, tempfile.TemporaryFile(mode="w+", encoding="utf-8") as payload:
-        if stdin_text is not None:
-            payload.write(stdin_text)
-            payload.seek(0)
-        logf.write(f"# DELEGATE {task['id']} -> {chosen['alias']} (effort={chosen['effort']}) @ {now_iso()}\n")
-        logf.write(f"# CMD: {subprocess.list2cmdline(argv)}\n\n")
-        logf.flush()
-        with V.ProcessTree() as tree:
-            try:
-                child_env = {k: v for k, v in os.environ.items() if not V.SECRET_ENV.search(k)}
-                if approved_session:
-                    child_env["PB_SESSION_ID"] = approved_session["session_id"]
-                proc = tree.spawn(
-                    run_cmd,
-                    cwd=str(root),
-                    env=child_env,
-                    stdin=payload if stdin_text is not None else subprocess.DEVNULL,
-                    stdout=logf,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                proc.wait(timeout=timeout)
-                rc = proc.returncode
-            except subprocess.TimeoutExpired:
-                logf.flush()
-                P.finish(B, root, job_id, exit_code=None, registry=reg_path, usage=worker_usage(log_path, cli_name))
-                logf.write(f"\nTIMEOUT after {timeout}s\n")
-                print(f"FAIL {task['id']}: worker `{chosen['alias']}` timed out after {timeout}s (log: {log_rel})")
-                return 2
-            except Exception:
-                P.finish(B, root, job_id, exit_code=None, registry=reg_path)
-                raise
+    try:
+        run = V.run_command(root, run_cmd, log_path, timeout=timeout,
+                            input_bytes=stdin_text.encode("utf-8") if stdin_text is not None else None,
+                            extra_env={"PB_SESSION_ID": approved_session["session_id"]} if approved_session else None)
+        rc = run["exit_code"]
+    except Exception:
+        P.finish(B, root, job_id, exit_code=None, registry=reg_path)
+        raise
+    if run["timed_out"]:
+        P.finish(B, root, job_id, exit_code=None, registry=reg_path, usage=worker_usage(log_path, cli_name))
+        print(f"FAIL {task['id']}: worker timed out; read back its reserved job before retrying")
+        return 2
 
     usage = worker_usage(log_path, cli_name)
     P.finish(B, root, job_id, exit_code=rc, registry=reg_path, usage=usage)

@@ -13,9 +13,13 @@ import runtime_agents as A
 import runtime_pool as P
 
 
-def _project(root):
+def _project(root, legacy=True):
     with contextlib.redirect_stdout(io.StringIO()):
         B.cmd_init(root)
+    if legacy:
+        cfg = B.parse_config(root)
+        cfg["protocol_version"] = "0"  # This fixture exercises legacy routing compatibility.
+        B.write_atomic(B.bp(root) / "config.yaml", B.config_text(root, cfg))
     (root / "src").mkdir(exist_ok=True)
     (root / "src" / "a.py").write_text("pass\n", encoding="utf-8")
     task = root / ".project-brain" / "tasks" / "PB-001.md"
@@ -202,6 +206,8 @@ def main():
         assert rc == 0 and "WORKER_DONE" in output.getvalue() and "CHECK_OK" in output.getvalue()
         assert (root / "worker-ran").exists()
         assert P.load_session(root, registry)["session_id"] in (root / "worker-ran").read_text(encoding="utf-8")
+        worker_prompt = (root / "worker-ran").read_text(encoding="utf-8")
+        assert "human Git identity" in worker_prompt and "Co-authored-by" in worker_prompt  # no AI credit rule
         session = P.load_session(root, registry)
         job = next(iter(session["jobs"].values()))
         assert job["state"] == "completed" and job["exit_code"] == 0

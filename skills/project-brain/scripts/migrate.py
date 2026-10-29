@@ -19,9 +19,10 @@ SECTION_KEYS = {
     "acceptance criteria", "acceptance", "verification", "verify", "architecture impact",
     "decision boundary", "escalate if", "discoveries", "resume", "notes", "blocker",
     "needed resolution", "safe work remaining", "context", "risk", "domains", "priority", "tier", "blocked",
+    "owner", "handoff", "external", "evidence", "review", "inputs", "purpose", "secrets",
 }
 HEADER_ONLY = {"status", "dependencies", "depends", "affected areas", "areas", "risk", "domains",
-               "priority", "tier", "blocked"}
+               "priority", "tier", "blocked", "owner", "inputs", "purpose", "secrets"}
 PATH_RE = re.compile(r"(?<![\w`/])((?:[\w.-]+/)+[\w.*-]*)")
 LEVELS = ("LOW", "MEDIUM", "HIGH")
 
@@ -83,14 +84,29 @@ def checkboxes(lines):
 
 
 def paths_in(text):
-    ticks = re.findall(r"`([^`]+)`", text)
-    if ticks:
-        return ticks
     out = []
     for line in text.splitlines():
-        bullet = re.match(r"^\s*[-*]\s+(\S+)", line)
-        out += [bullet.group(1)] if bullet else PATH_RE.findall(line)
-    return [x.rstrip(".,;)") for x in out]
+        s = line.strip()
+        if not s:
+            continue
+        bullet = re.match(r"^[-*]\s+`?([^`\s,;)]+)`?", s)
+        if bullet:
+            out.append(bullet.group(1))
+            continue
+        parts = [p.strip().strip("`") for p in s.split(",") if p.strip()]
+        if parts and all(re.fullmatch(r"[\w.*/-]+", p) for p in parts):
+            out.extend(parts)
+            continue
+        ticks = re.findall(r"`([^`]+)`", s)
+        if ticks:
+            out.extend(ticks)
+        else:
+            out.extend(PATH_RE.findall(s))
+    seen = []
+    for x in (p.rstrip(".,;)") for p in out):
+        if x and x not in seen:
+            seen.append(x)
+    return seen
 
 
 def squash(text):
@@ -111,15 +127,19 @@ def highest_level(text):
 
 def task_text(tid, title, head, body):
     """Render a schema-4 task. head: ordered dict of header lines; body: [(section, lines)]."""
-    out = [f"# {tid} — {title}"] + [f"{k}: {v}" for k, v in head.items() if v] + [""]
+    out = (
+        [f"# {tid} — {title}"]
+        + [f"{k}: {v}" if v != "" else f"{k}:" for k, v in head.items() if v or k == "Owner"]
+        + [""]
+    )
     for name, lines in body:
         lines = trim(lines)
-        if lines or name in ("Acceptance", "Notes"):
+        if lines or name in ("Acceptance", "Evidence", "Review", "Notes"):
             out += [f"## {name}"] + lines + [""]
     return "\n".join(out).rstrip() + "\n"
 
 
-# ── schema 1-3 ────────────────────────────────────────────────────────────
+# ── schema 1-3 & v3.x upgrade ─────────────────────────────────────────────
 
 def convert_task(path, open_ids):
     text = B.read(path) or ""
@@ -149,7 +169,7 @@ def convert_task(path, open_ids):
     verify = get(secs, "verification", "verify")
     level_lines = [l for l in verify if re.fullmatch(r"\s*(LOW|MEDIUM|HIGH)([ -]+(LOW|MEDIUM|HIGH))*\.?\s*", l, re.I)]
     risk_raw = get(secs, "risk") + level_lines
-    risk = highest_level("\n".join(risk_raw))
+    risk = highest_level("\n".join(risk_raw)) or "MEDIUM"
     keep_raw(notes, "Risk", risk_raw, risk)
     verify = [l for l in verify if l not in level_lines and not re.match(r"^\s*required\s*:?\s*$", l, re.I)]
     domains_raw = get(secs, "domains")
@@ -164,19 +184,35 @@ def convert_task(path, open_ids):
                    and not re.fullmatch(r"\s*expected\s*:\s*(yes|no)\.?\s*", l, re.I)]
     if impact_rest:
         notes.append("- Architecture impact (migrated): " + " ".join(x.strip() for x in impact_rest))
-    head = {"Status": status, "Priority": " ".join(trim(get(secs, "priority"))) or "P2",
-            "Tier": " ".join(trim(get(secs, "tier"))), "Risk": risk,
+    for extra_sec, label in (("discoveries", "Discoveries"), ("needed resolution", "Needed resolution"), ("safe work remaining", "Safe work remaining")):
+        extra_lines = trim(get(secs, extra_sec))
+        if extra_lines:
+            notes.append(f"- {label} (migrated): " + " ".join(x.strip() for x in extra_lines if x.strip()))
+    owner = " ".join(trim(get(secs, "owner"))).strip()
+    priority = " ".join(trim(get(secs, "priority"))).strip().upper() or "P2"
+    tier = " ".join(trim(get(secs, "tier"))).strip().upper() or "M"
+    head = {"Status": status, "Priority": priority,
+            "Tier": tier, "Risk": risk, "Owner": owner,
             "Depends": ", ".join(deps) or "-",
             "Areas": ", ".join(f"`{a}`" for a in areas),
             "Domains": ", ".join(B.split_list(domains_src)) if domains_src else "",
             "Blocked": blocked if status == "BLOCKED" else ""}
+    for name in ("Inputs", "Purpose", "Secrets"):
+        value = " ".join(trim(get(secs, name.lower())))
+        if value:
+            head[name] = value
     body = [("Objective", get(secs, "objective", "context") or get(secs, "")),
             ("Steps", get(secs, "steps")),
             ("Acceptance", checkboxes(get(secs, "acceptance criteria", "acceptance"))),
             ("Verify", verify),
-            ("Escalate if", get(secs, "decision boundary", "escalate if"))]
+            ("Escalate if", get(secs, "decision boundary", "escalate if")),
+            ("Resume", get(secs, "resume", "handoff")),
+            ("External", get(secs, "external")),
+            ("Evidence", get(secs, "evidence")),
+            ("Review", get(secs, "review"))]
     known = {"objective", "context", "", "steps", "acceptance criteria", "acceptance", "verification", "verify",
-             "decision boundary", "escalate if", "notes", "architecture impact"} | HEADER_ONLY
+             "decision boundary", "escalate if", "notes", "architecture impact", "discoveries",
+             "needed resolution", "safe work remaining", "resume", "handoff", "external", "evidence", "review"} | HEADER_ONLY
     body += [(name, lines) for name, lines in secs if name.lower() not in known]
     body.append(("Notes", notes))
     new = task_text(tid, title, head, body)
@@ -311,12 +347,15 @@ def migrate_v0(root, plan, todo):
         body = [("Objective", [it["title"]]), ("Steps", steps),
                 ("Acceptance", [f"- [ ] {done_when}"] if done_when else []),
                 ("Verify", [f"- `{c}`" for c in re.findall(r"`([^`]+)`", done_when)]),
+                ("Evidence", []),
+                ("Review", []),
                 ("Notes", notes)]
         if status == "IN_PROGRESS" and handoff:
-            body.append(("Resume", ["Next: see handoff below (migrated)"] + handoff.splitlines()))
+            body.insert(4, ("Resume", ["Next: see handoff below (migrated)"] + handoff.splitlines()))
             handoff = ""
         tid = B.norm_id("PB", num)
-        head = {"Status": status, "Priority": "P2", "Tier": it["tier"], "Depends": ", ".join(needs) or "-",
+        head = {"Status": status, "Priority": "P2", "Tier": it["tier"] or "M", "Risk": "MEDIUM", "Owner": "",
+                "Depends": ", ".join(needs) or "-",
                 "Areas": ", ".join(f"`{a}`" for a in paths_in(fl.get("where", ""))),
                 "Blocked": (it["title"] if status == "BLOCKED" else "")}
         plan.append((b / "tasks" / f"{tid}.md", task_text(tid, it["title"][:80], head, body), f"from T{it['num']}"))
@@ -337,10 +376,142 @@ def migrate_v0(root, plan, todo):
     todo.append("closed legacy tasks remain in migration-backup/PROJECT_BRAIN.md; review them before claiming completion")
 
 
+def migrate_v3_upgrade(root, plan, todo, force_all=True):
+    """Check an existing schema-4 (.project-brain/) directory from 3.0-3.3 for any un-migrated v3 task files or missing .gitignore/target status."""
+    b = B.bp(root)
+    target = B.read(b / "target.md")
+    if target is not None and not re.search(r"^Status:\s*(DRAFT|CONFIRMED)\b", target, re.M | re.I):
+        lines = target.splitlines()
+        i = next((k + 1 for k, l in enumerate(lines) if l.startswith("# ")), 0)
+        lines.insert(i, "Status: DRAFT")
+        text = "\n".join(lines) + "\n"
+        if "## Goal" not in text:
+            text = re.sub(r"^## (Objective)\s*$", "## Goal", text, count=1, flags=re.M)
+        plan.append((b / "target.md", text, "Status: DRAFT (approval absent; verify user intent)"))
+    if not (b / ".gitignore").exists():
+        plan.append((b / ".gitignore", ".cache/\n", "ignore cache"))
+    tdir = b / "tasks"
+    if tdir.is_dir():
+        tasks = B.list_tasks(root)
+        open_ids = {t["id"] for t in tasks if t["status"] != "DONE"}
+        legacy_secs = {
+            "status", "acceptance criteria", "verification", "affected areas", "dependencies",
+            "architecture impact", "context", "decision boundary", "blocker", "handoff",
+            "discoveries", "needed resolution", "safe work remaining",
+        }
+        for f in sorted(tdir.glob("PB-*.md")):
+            if not B.TASK_FILE_RE.match(f.name):
+                continue
+            raw = B.read(f) or ""
+            secs = B.sections(raw)
+            parsed = B.parse_task(f, raw)
+            has_full_body = "objective" in secs and ("acceptance" in secs or "acceptance criteria" in secs)
+            if not force_all and not has_full_body:
+                continue
+            missing_v34 = has_full_body and (
+                "evidence" not in secs
+                or "review" not in secs
+                or not re.search(r"^Owner:", raw, re.M | re.I)
+                or not re.search(r"^Risk:\s*\S+", raw, re.M | re.I)
+                or not re.search(r"^Tier:\s*\S+", raw, re.M | re.I)
+                or not re.search(r"^Priority:\s*\S+", raw, re.M | re.I)
+            )
+            if (set(secs) & legacy_secs) or missing_v34 or (parsed and (parsed.get("status_note") or parsed.get("status") == "?")):
+                new, issue = convert_task(f, open_ids)
+                if issue:
+                    todo.append(issue)
+                elif new and new != raw:
+                    plan.append((f, new, "task -> schema 4 (v3.4 upgrade)"))
+
+
+def has_pending_upgrade(root, force_all=True):
+    if B.legacy_kind(root):
+        return True
+    if not B.brain_exists(root):
+        return False
+    cfg = B.parse_config(root)
+    if cfg.get("skill_version") != B.VERSION:
+        return True
+    plan, todo = [], []
+    migrate_v3_upgrade(Path(root), plan, todo, force_all=force_all)
+    return bool(plan)
+
+
+def auto_upgrade_v34(root, force_all=None):
+    """Automatically upgrade an older schema-4 (.project-brain/) project in-place during boot."""
+    root = Path(root)
+    if not B.brain_exists(root):
+        return []
+    require_supported(root)
+    cfg_path = B.bp(root) / "config.yaml"
+    old_cfg = B.parse_config(root) if cfg_path.exists() else {}
+    old_ver = old_cfg.get("skill_version", "")
+    if force_all is None:
+        force_all = (old_ver != B.VERSION)
+    plan, todo = [], []
+    migrate_v3_upgrade(root, plan, todo, force_all=force_all)
+    backup_inputs(root, [p for p, _, _ in plan] + ([cfg_path] if old_ver != B.VERSION else []))
+    actions = []
+    for path, text, why in plan:
+        rel = path.relative_to(root).as_posix()
+        B.write_atomic(path, text)
+        actions.append(f"{rel} ({why})")
+    if old_ver != B.VERSION:
+        for name, action in B.ensure_pointers(root, write=True):
+            actions.append(f"{name} ({action})")
+    if old_ver != B.VERSION or not cfg_path.exists():
+        new_cfg_text = B.config_text(root, old_cfg)
+        if not cfg_path.exists() or B.read(cfg_path) != new_cfg_text:
+            B.write_atomic(cfg_path, new_cfg_text)
+            if old_ver != B.VERSION:
+                actions.append(f"config.yaml (skill_version {old_ver or 'pre-3.4'} -> {B.VERSION})")
+    return actions
+
+
+def require_supported(root):
+    cfg = B.parse_config(root)
+    schema = str(cfg.get("schema_version", ""))
+    version = str(cfg.get("skill_version", ""))
+    current = tuple(int(n) for n in B.VERSION.split("."))
+    if schema.isdigit() and int(schema) > B.SCHEMA:
+        raise ValueError("Newer Brain schema; use a compatible skill before migration")
+    if version and re.fullmatch(r"\d+\.\d+\.\d+", version) and tuple(int(n) for n in version.split(".")) > current:
+        raise ValueError("Newer Brain skill_version; refusing automatic downgrade")
+
+
+def backup_inputs(root, paths):
+    """Retain each distinct raw input before conversion; never overwrite an earlier backup."""
+    import hashlib
+    import runtime_verify as V
+    root = Path(root)
+    for source in paths:
+        rel = source.relative_to(root).as_posix()
+        source = V.public_path(root, rel)
+        if not source.is_file():
+            continue
+        name = source.relative_to(B.bp(root)) if source != root / B.LEGACY_FILE else Path(B.LEGACY_FILE)
+        saved_rel = B.BRAIN_DIR + "/migration-backup/" + name.as_posix()
+        saved = V.public_path(root, saved_rel)
+        raw = source.read_bytes()
+        if saved.exists() and saved.read_bytes() != raw:
+            saved = V.public_path(root, saved_rel + "." + hashlib.sha256(raw).hexdigest()[:16])
+        if not saved.exists():
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            # Exclusive creation preserves the original even across interrupted retries.
+            with saved.open("xb") as stream:
+                stream.write(raw)
+                stream.flush()
+                import os
+                os.fsync(stream.fileno())
+
+
 # ── entry point ───────────────────────────────────────────────────────────
 
-def run(root, apply):
+def run(root, apply, sync_skills=False):
+    if sync_skills:
+        raise ValueError("Installed skills are managed separately; use Skills Manager to preserve deployment metadata")
     root = Path(root)
+    require_supported(root)
     kind = B.legacy_kind(root)
     plan, todo = [], []
     if kind == "v0":
@@ -349,22 +520,24 @@ def run(root, apply):
         migrate_dir(root, plan, todo)
         if (root / B.LEGACY_FILE).exists():
             todo.append(f"{B.LEGACY_FILE} (old pointer/summary): carry over unique facts, then delete it")
+    elif B.brain_exists(root):
+        migrate_v3_upgrade(root, plan, todo)
+        cfg = B.parse_config(root)
+        if cfg.get("skill_version") != B.VERSION:
+            plan.append((B.bp(root) / "config.yaml", B.config_text(root, cfg), "record skill version"))
+        if plan:
+            kind = "schema-4 upgrade"
+        else:
+            print("NOTHING TO MIGRATE: .project-brain/ is already schema 4")
+            return 0
     else:
-        print("NOTHING TO MIGRATE: .project-brain/ is already schema 4" if B.brain_exists(root)
-              else "NOTHING TO MIGRATE: no legacy Brain found (use `init` for a new one)")
+        print("NOTHING TO MIGRATE: no legacy Brain found (use `init` for a new one)")
         return 0
     if not apply:
         print(f"PREVIEW ({kind}): nothing written. Run `migrate --apply` to write.")
     else:
         # Preserve raw input, including syntax the converter does not interpret. Never overwrite a backup.
-        backup = B.bp(root) / "migration-backup"
-        for source in [root / B.LEGACY_FILE] + [p for p, _, _ in plan]:
-            if source.is_file():
-                relative = source.relative_to(B.bp(root)) if source != root / B.LEGACY_FILE else Path(B.LEGACY_FILE)
-                saved = backup / relative
-                if not saved.exists():
-                    saved.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(source, saved)
+        backup_inputs(root, [root / B.LEGACY_FILE] + [p for p, _, _ in plan])
         print("BACKUP .project-brain/migration-backup/: original input retained; review before removing")
     # A failed write must leave the old schema so the next invocation retries conversion.
     config = [(p, t, why) for p, t, why in plan if p.name == "config.yaml"]
@@ -383,6 +556,6 @@ def run(root, apply):
             B.write_atomic(path, text)
     for t in todo:
         print(f"TODO {t}")
-    print("NEXT: " + ("`validate`, finish the TODO lines, Plan audit (SKILL.md section 9), commit "
+    print("NEXT: " + ("`validate`, finish the TODO lines, Plan audit (SKILL.md section 6), commit "
                       "`chore(brain): migrate to schema 4`." if apply else "review the preview, then `migrate --apply`."))
     return 0

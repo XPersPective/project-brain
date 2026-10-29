@@ -31,11 +31,13 @@ Generic, unstyled, or fragile UI output is treated as a **blocking defect** (`QU
 
 ### 1.1 Design System & Token Foundation (Mandatory First UI Milestone)
 Before feature screens, establish or identify the shared Design System & Token Foundation
-(ADR + foundation task for a new UI; reuse and extend an existing foundation):
+(ADR + foundation task for a new UI; reuse and extend an existing foundation).
+Choose values and needed roles for the actual product; the examples below are design
+starting points, not a required visual style or a reason to add unused tokens:
 - **Typography Scale**: Display, headline, title, body, caption, and monospace roles with explicit font family, size, weight, line-height, and letter-spacing tokens.
 - **Semantic Color Tokens**: Theme roles (`surface`, `text-primary`, `text-muted`, `accent`, `border`, `danger`, `success`); light/dark variants when required. Feature components use shared tokens, with reasoned exceptions recorded once.
-- **Spacing, Radius & Elevation Grid**: 4px/8px spatial rhythm, consistent border-radius scale, and elevation/shadow tokens.
-- **Motion & Micro-interaction Tokens**: Fast (`120-160ms`), standard (`200-260ms`), and emphasized (`320ms`) transitions with `prefers-reduced-motion` support.
+- **Spacing, Radius & Elevation Grid**: a coherent spatial rhythm (for example 4px/8px), consistent radius and elevation tokens.
+- **Motion & Micro-interaction Tokens**: product-appropriate durations (examples: `120-160ms` fast, `200-260ms` standard) with reduced-motion support; static interfaces do not need decorative animation.
 - **Responsive Breakpoints & Shell**: Choose breakpoints from the real content and target devices; name compact and wide test viewports. No clipped content or unreachable actions.
 
 ### 1.2 The UI Verification Triad (Required on Every UI Task)

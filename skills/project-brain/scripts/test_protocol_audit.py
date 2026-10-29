@@ -19,6 +19,9 @@ def main():
         root = Path(tmp)
         with redirect_stdout(StringIO()):
             B.cmd_init(root)
+        cfg = B.parse_config(root)
+        cfg["protocol_version"] = "0"  # Existing state-machine compatibility fixture.
+        B.write_atomic(B.bp(root) / "config.yaml", B.config_text(root, cfg))
         (root / "app.py").write_text("x = 1\n", encoding="utf-8")
         original = (root / "app.py").read_bytes()
         with patch.object(B.os, "fsync", side_effect=OSError("storage flush failed")):

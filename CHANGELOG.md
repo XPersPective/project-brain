@@ -1,5 +1,50 @@
 # Changelog
 
+## 3.5.1 — 2026-10-29
+
+- Make "no AI contributor credit" a core protocol rule: the director and every worker
+  prompt use the human Git identity and never add AI/model/bot author, `Co-authored-by`,
+  generated-by, contributor or PR credit.
+- Consolidate superseded audit/delivery reports into [docs/VERIFICATION.md](docs/VERIFICATION.md);
+  keep the overview and accepted ADRs. Remove obsolete release archives and bytecode.
+
+## 3.5.0 — 2026-10-29
+
+- Add protocol-1 target/domain/constraint reconciliation, DRAFT discovery boundaries,
+  deterministic risk normalization and separately scoped verification Inputs.
+- Bind checks to dependency/configuration/tool/host-adapter freshness, reuse valid
+  receipts and avoid completed Pool-job RPC/check repeats. Keep explicit readback.
+- Add bounded durable progress/handoff records, repeated-failure and explicit check
+  budget guards, reviewer registration/identity revalidation and safe retention.
+- Keep only project secret aliases in source; require approved external scoped
+  adapters/scanners for secret-dependent checks, never delegate credential-bearing
+  tasks, sanitize final logs and fail closed on rejected/excessive output.
+- Scan staged bytes before strict acceptance; reject malformed/private records and
+  public handoffs containing host-private paths. Preserve all uncertain operations.
+- Add adversarial strict-protocol tests and independent cold lifecycle evaluation.
+  See [production verification](docs/VERIFICATION.md) for limits.
+
+## 3.4.0 — 2026-10-29
+
+- Keep Brain tracking artifacts together; establish a project-specific external
+  secret/access reference once, without embedding personal directories or values.
+  Document host isolation and raw-log limits; see the long-run architecture audit.
+- Ask once for EXEC/REV resource modes; reset choices with `agents mode --new`,
+  optionally bind them to host `PB_SESSION_ID`, and keep native/SOLO discovery offline.
+- Preserve quality/independence floors across all resource caps; require an explicit
+  SOLO audit/review rather than generating a PASS in acceptance. `--force` cannot
+  widen P-L/P-ML; P-ALL permits high-tier Pool dispatch.
+- Reuse scoped verification only with intact current logs and typed attachments;
+  outside-Areas edits still require investigation. Bound Pool stdout, keep full logs.
+- Upgrade supported old state with raw-input backups; finalize version-only upgrades,
+  reject future state, and offer `boot --read-only` for non-mutating inspection.
+- Collect only unchanged committed closed work and recoverable evidence; retain
+  unknown/dirty artifacts, active logs and unreconciled migration originals.
+- Consolidate boot/handoff/quality guidance without prescribing a visual style.
+  Installed copies remain managed separately through Skills Manager.
+- Add adversarial handoff/cleanup/review/migration regressions. See
+  [verification guide](docs/VERIFICATION.md) for verification and limits.
+
 ## 3.3.1 — 2026-10-19
 
 - Document Pool 1.4 project/installed skill attachment source resolution and unchanged RPC compatibility.

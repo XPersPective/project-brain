@@ -123,7 +123,7 @@ before task cleanup. A recorded result still needs the normal takeover verificat
 Malformed config, duplicate/cyclic/dangling task IDs, several IN_PROGRESS, Current contradicting code
 across many domains:
 1. `brain.py validate` for the structural list. Old format (schema ≤3, `PROJECT_BRAIN.md`) is not corrupt:
-   use `brain.py migrate` instead (SKILL.md §11).
+   use `brain.py migrate` instead (SKILL.md §7).
 2. `git log --oneline -10 -- .project-brain` — find the last good version of broken files.
 3. Keep every piece of user intent that still parses; rebuild only demonstrably invalid generated state
    (status, deps, markers) from code and Git.
@@ -172,6 +172,48 @@ Auth, authorization, sessions, crypto, secrets, permission/sandbox boundaries, d
 full verification, and escalate unless the user explicitly requested that change. Never write credentials
 into Brain files, tasks, trailers, ADRs, or notes.
 
+### Project secret policy — establish once
+
+During setup/adoption, reuse an explicitly approved project policy or ask once:
+"Which approved external vault/store should this project use for secrets and private
+scripts, and which access reference should agents use?" Ask for a reference, never
+the actual values. Record an explicit no-secrets-needed decision when applicable;
+revisit it only when requirements change. No user-specific directory is built in.
+
+Keep only a non-sensitive symbolic reference and access restrictions in Brain
+constraints/config. Resolve machine-specific locations/access through host-private
+configuration. Another machine must resolve that reference or ask for the missing
+access once; it must not copy credentials into Brain to make handoff portable.
+If unresolved, continue secret-free work and block only credential-dependent steps.
+Do not relocate existing credentials or weaken access controls without authorization.
+
+Ordinary build/test scripts belong in source. Only scripts containing credentials,
+private account/host details or explicitly confidential material belong in the
+approved private store. Public wrappers/config templates contain placeholders and
+symbolic references so the project remains reproducible.
+
+### Access, output and incidents
+
+- Give each worker/command only the required access. Prefer provider-native auth
+  or an approved secret adapter over copying values into prompts, argv or files.
+  Never forward the entire secret store or credential-bearing environment.
+- Secret-free tests use synthetic fixtures. Real credential-dependent checks need
+  the approved access method; missing credentials are a blocker, never a fake PASS.
+- Inspect staged changes and outbound artifacts with the project's approved secret
+  checks before sharing. Include logs, screenshots, traces, prompts and archives;
+  avoiding `.env` alone does not cover arbitrary filenames or output.
+- Ignore rules prevent accidental additions of untracked files; they do not secure
+  existing tracked secrets, filesystem reads or network access. External placement
+  also needs suitable host permissions and worker isolation.
+- On exposure, stop propagating the affected material, report only safe metadata,
+  and arrange revocation/rotation through the authorized process. Deleting today's
+  file does not remove earlier commits/logs. Never silently rewrite history.
+
+Runtime limits: filename/environment-name filters are partial defenses; check/direct-worker output is sanitized for known patterns before its final log;
+unknown formats still require the approved scanner/private-data inspection. ProcessTree limits process lifetime, not
+filesystem/network access. These instructions do not create a vault, secret scanner,
+ACL or sandbox. Verify host capabilities before making security claims.
+
 ## ProcessTree containment
 
 `PB check` and `PB delegate` run child processes inside an OS-contained `ProcessTree` (Windows JobObject with
@@ -181,10 +223,12 @@ processes, kill any orphaned test servers, and rerun `PB check`.
 
 ## Quota exhaustion & CLI worker failover
 
-When a subscription pool drops to `<= 25%` (`DIRECTOR_RESERVE_PCT`), L/M dispatch refuses that pool and shifts
-`Tier L` and `Tier M` worker tasks to approved secondary CLI pools (`opencode-free`, `agy`, `claude`, `qwen`; OmniRoute requires an explicit coding-agent adapter) while
-reserving the primary pool for `Tier H` architecture and `PB review`. At `<= 10%` (`WORKER_RESERVE_PCT`),
-the pool is marked exhausted. Unknown or stale quota blocks actual dispatch. Refresh supported rate limits before delegation; do not infer remaining capacity from CLI installation or login.
+Respect the selected backend and approved owner/model pool. Known quota keeps the
+worker/director reserve; never invent a remaining percentage from installation or
+login. Pool applies its bounded unknown-quota policy; the direct backend requires
+an explicit approved per-session job allowance. Refresh supported readings before
+new dispatch. No automatic fallback may exceed the chosen EXEC/REV resource or
+billing boundary. Read back/settle uncertain jobs before another reservation.
 
 ## External readback (`READBACK_FIRST`)
 

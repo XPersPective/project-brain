@@ -47,6 +47,7 @@ def main():
             assert selected["request"]["minRemainingPercent"] == 10
             assert AP.select("H", "reviewer")["request"]["minRemainingPercent"] == 25
             _project(root)
+            B.set_session_modes(root, "P-ALL", "P-ALL", new=True)
             task = B.find_task(root, "PB-001")
             args = argparse.Namespace(force=False, timeout=5, cli="", model="", effort="", group="", dry_run=True)
             score = A.score_task(B, root, task)
@@ -87,6 +88,7 @@ def main():
                     raise AssertionError("recursive worker admitted")
                 except ValueError as exc:
                     assert "recursively" in str(exc)
+            B.set_session_modes(root, "P-ALL", "P-L")  # Review caps never weaken model floors.
             model["enabled"] = False
             try:
                 AP.gate(B, task, A.load()["models"][AP.alias(model)], AP.alias(model), "start")

@@ -9,6 +9,8 @@ Stable policy only — never HEAD, active task, timestamps, model, or test resul
 
 ```yaml
 schema_version: 4
+skill_version: "3.5.1"
+protocol_version: "1"
 architecture:
   mode: single          # domains: current/<d>.md, optional target/<d>.md; target.md always holds Goal/Status
 git:
@@ -85,7 +87,7 @@ Status: CONFIRMED
 ```
 
 - `Status: DRAFT` until the user confirms the Goal; while DRAFT only goal-independent work is planned.
-- **Goal** is the user's, verbatim; agents never edit it (SKILL.md §8c/d). Target State may be revised only
+- **Goal** is the user's, verbatim; agents never edit it (SKILL.md §5). Target State may be revised only
   through the evidence gate (§8b) with an ADR.
 - Open Decision status: OPEN | RESOLVED | DEFERRED. Success Conditions must be observable.
 
@@ -146,9 +148,12 @@ is refused.
 | `Priority` | `P1` user's current ask or blocker · `P2` normal (default) · `P3` later. FOCUS = best priority, then lowest ID |
 | `Tier` | `L` mechanical (`score <= 32`) · `M` normal engineering (`33..64`) · `H` architecture, security, UI foundation (`>= 65`) |
 | `Risk` | `LOW` / `MEDIUM` / `HIGH` (sets verification breadth and independent review requirement) |
-| `Owner` | model/agent alias set by `PB start` (e.g. `codex/gpt-5.2-codex`); implementers may never review their own task |
+| `Owner` | model/agent alias set by `PB start` (e.g. `codex/gpt-5.2-codex`); independent reviewers cannot implement the task; upfront REV=SOLO permits a separately recorded self-audit |
 | `Depends` | task IDs, `-` when none. Requires verified Git completion or retained DONE+Evidence; absence alone is insufficient |
-| `Areas` | backticked globs; `PB check`, `PB evidence`, `PB review`, and `PB accept` hash every public file matched by `Areas` |
+| `Areas` | backticked globs; ownership/write boundary; protocol 1 hashes these plus verification Inputs, intent and environment |
+| `Inputs` | optional verification-only public project globs; private/escaping declarations fail; defaults include root manifests/lockfiles/test configs |
+| `Purpose` | implementation (default), or bounded discovery eligible for goal-independent reconciliation |
+| `Secrets` | none (default) or the approved external symbolic reference; never a value or host path |
 | `Domains` | Current domains this task may change; boot loads only those sections |
 | `Blocked` | only when BLOCKED: what is needed, from whom |
 
@@ -262,4 +267,8 @@ content stays in the backup for review; a converted field that cannot fit a head
 | §6 DECISION LOG, §7 HANDOFF | `decisions/ADR-000.md`; handoff → Resume of the IN_PROGRESS task |
 | custom §0 / extra sections | constraints.md "(review)" sections |
 
-After `--apply`: follow the printed TODO lines, then SKILL.md §11.
+After `--apply`: follow the printed TODO lines, then SKILL.md §7.
+
+Protocol 1 adds intent/progress/handoff/review-provenance records under each task evidence directory.
+See [PROTOCOL.md](PROTOCOL.md) for executable formats, explicit budgets and the external host binding.
+Wire Evidence/Review syntax stays schema 4; old source-only proofs are not reused as protocol-1 input/intent proofs.

@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **3.3.1** — [changelog](CHANGELOG.md).
+Current release: **3.5.1** — [changelog](CHANGELOG.md).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
@@ -55,6 +55,19 @@ LOAD: .project-brain/tasks/PB-013.md .project-brain/current.md (lines 3-40, 88-1
 CMDS: test=python -m pytest -q | lint=ruff check .
 NEXT: Route the user's request before tests or writes. If authorized, run the takeover check; 'continue' starts the queue.
 ```
+
+## Protocol 1
+
+Version 3.5 separates ownership Areas from verification Inputs and binds task proof
+also to reconciled intent, dependencies and local tool/adapter identity. After init,
+confirm Target, choose session EXEC/REV, record `security --ref none|<alias>` once,
+write the task, then `reconcile` before `start`/`delegate`. DRAFT permits explicitly
+bounded independent discovery. `progress` and `handoff` preserve small durable state;
+intact proof is reused, not repeatedly regenerated.
+
+See [the protocol reference](skills/project-brain/PROTOCOL.md) for exact commands,
+revision handling and external secret adapter requirements. These guards are not
+an OS sandbox or a guarantee of provider token usage/model judgment.
 
 ## Install
 
@@ -159,11 +172,11 @@ Completed tasks keep their digest-bound Evidence and Review until committed. Wit
 ## Repository layout
 
 ```text
-skills/project-brain/   the skill: SKILL.md, QUALITY.md, AGENTS_CLI.md, REFERENCE.md, SCHEMAS.md, scripts/
+skills/project-brain/   the skill: SKILL.md, PROTOCOL.md, QUALITY.md, AGENTS_CLI.md, POOL.md, REFERENCE.md, SCHEMAS.md, scripts/
 .claude-plugin/         Claude Code plugin + marketplace manifests
 plugin.json             portable plugin manifest (Codex)
 .agents/plugins/        Codex marketplace
-docs/design/            current protocol, release verification, audit and architecture decisions
+docs/                   PROJECT-OVERVIEW.md, VERIFICATION.md and accepted architecture decisions
 ```
 
 ## Development
