@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Project Brain — Git-native memory and planning for coding agents</title>
+  <meta name="description" content="Open-source agent skill: any coding agent, strong or weak, continues a project exactly where the last one stopped. Plans, architecture and verification evidence live in Git. Python 3.8+, standard library only, MIT.">
+  <meta property="og:title" content="Project Brain">
+  <meta property="og:description" content="Git-native project memory, executable task plans and verified handoffs for Claude, Codex, Antigravity, OpenCode and other coding agents.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="assets/logo.png">
+  <link rel="icon" href="assets/icon.png" type="image/png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <nav class="wrap nav" aria-label="Main">
+      <a class="brand" href="./"><img src="assets/icon.png" alt="" width="32" height="32"> Project Brain</a>
+      <ul>
+        <li><a href="#how">How it works</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#pool">Agent Pool</a></li>
+        <li><a href="#use">Use</a></li>
+        <li><a href="#limits">Limits</a></li>
+        <li><a href="https://github.com/XPersPective/project-brain">GitHub</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap">
+      <div>
+        <p class="eyebrow">Open-source agent skill · MIT · <span data-version>v3.5.1</span></p>
+        <h1>One plan, many agents, <span class="accent">verified handoffs.</span></h1>
+        <p class="lead">Long projects outlive sessions: tokens run out, sessions crash, you switch models or vendors.
+          Project Brain keeps the goal, architecture, task plan and evidence <strong>in the repository</strong>,
+          so the next agent — strong or small, any vendor — resumes from recorded state, not chat history.</p>
+        <div class="cta">
+          <a class="btn primary" href="#install">Install the skill</a>
+          <a class="btn" href="https://github.com/XPersPective/project-brain/releases/latest">Download release</a>
+        </div>
+        <p class="note">Git + Python 3.8+ · standard library only · no account, no telemetry, no server.</p>
+      </div>
+      <img class="logo" src="assets/logo.png" alt="Project Brain logo" width="512" height="512" fetchpriority="high">
+    </section>
+
+    <section class="band" aria-labelledby="flow-title">
+      <div class="wrap">
+        <h2 id="flow-title" class="visually-hidden">Session flow</h2>
+        <ol class="flow">
+          <li><span>Session 1 · strong model</span>Maps the repo, interviews you, writes the target and an executable task plan.</li>
+          <li><span>Session 2 · token limit hit</span>Executes tasks, commits each verified step with evidence.</li>
+          <li><span>Session 3 · small model</span>Says “continue”, boots from the repo and picks up the next task.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="how" class="wrap section">
+      <h2>How it works</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>State lives in files and commits</h3>
+          <p>Never only in chat. Git owns history; commit trailers mark checkpoints and bodies carry the evidence.</p>
+        </article>
+        <article class="card">
+          <h3>The plan is the product</h3>
+          <p>Tasks have exact paths, numbered steps, checkable acceptance criteria and verify commands — written so a
+            weaker model with zero history can execute them.</p>
+        </article>
+        <article class="card">
+          <h3>Trust nothing unverified</h3>
+          <p>Evidence is bound to sources, inputs, dependencies and environment. Changed inputs invalidate old proof;
+            intact proof is reused instead of re-run.</p>
+        </article>
+        <article class="card">
+          <h3>Saves tokens deterministically</h3>
+          <p>A stdlib script computes state, focus and the minimal files to load. Bounded handoffs keep the context small.</p>
+        </article>
+        <article class="card">
+          <h3>Quality gates</h3>
+          <p>UI states, accessibility and responsive checks; backend boundaries, explicit transitions and idempotency.
+            Independent review before acceptance.</p>
+        </article>
+        <article class="card">
+          <h3>Optional delegation</h3>
+          <p>Route low/medium tasks to approved CLI or native workers with quota reserves — never a silent paid fallback.</p>
+        </article>
+      </div>
+
+<pre class="code" tabindex="0" aria-label="Project Brain directory layout"><code>.project-brain/
+├── current.md       where are we?        verified architecture + Map (path → role)
+├── target.md        where are we going?  the user's Goal (verbatim), journeys, open decisions
+├── tasks/PB-*.md    what is left?        prioritized, executable task specs
+├── constraints.md   rules that change decisions
+├── decisions/       ADRs: rationale Git cannot keep
+└── config.yaml      policy + exact test/lint/build commands</code></pre>
+
+<pre class="code" tabindex="0" aria-label="Example boot output"><code>$ python skills/project-brain/scripts/brain.py boot
+STATE: RESUME
+TARGET: CONFIRMED
+PLAN: 3 open, 12 done
+   PB-013 READY       P1 L Add Turkish date parser
+   PB-014 PLANNED     P2 M Export to JSON  [deps PB-013]
+FOCUS PB-013 (READY, P1, tier L, risk LOW): 2/2 acceptance open
+LOAD: .project-brain/tasks/PB-013.md .project-brain/current.md (lines 3-40)
+NEXT: 'continue' starts the queue.</code></pre>
+    </section>
+
+    <section id="install" class="wrap section">
+      <h2>Install</h2>
+      <p>Requirements: Git and Python 3.8+. Pick your agent:</p>
+      <div class="installs">
+        <div class="install">
+          <h3>Claude Code</h3>
+          <div class="cmd"><code>/plugin marketplace add XPersPective/project-brain</code><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><code>/plugin install project-brain@project-brain</code><button type="button" class="copy">Copy</button></div>
+        </div>
+        <div class="install">
+          <h3>Codex</h3>
+          <div class="cmd"><code>codex plugin marketplace add XPersPective/project-brain</code><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><code>codex plugin add project-brain@project-brain</code><button type="button" class="copy">Copy</button></div>
+        </div>
+        <div class="install">
+          <h3>Any Agent Skills tool</h3>
+          <div class="cmd"><code>npx skills add XPersPective/project-brain</code><button type="button" class="copy">Copy</button></div>
+        </div>
+        <div class="install">
+          <h3>Manual</h3>
+          <p>Download the <a href="https://github.com/XPersPective/project-brain/releases/latest">latest release</a> and copy
+            <code>skills/project-brain/</code> into your agent's skills directory, e.g. <code>~/.claude/skills/</code>,
+            <code>~/.codex/skills/</code>, <code>~/.gemini/skills/</code> or <code>~/.agents/skills/</code>.</p>
+        </div>
+      </div>
+      <p><code>brain.py init</code> adds a short pointer to the project's <code>AGENTS.md</code> (and an existing
+        <code>CLAUDE.md</code> / <code>GEMINI.md</code>), so every agent that opens the repository loads the skill.</p>
+    </section>
+
+    <section id="pool" class="wrap section">
+      <h2>CLI Agent Pool <span class="accent">(optional multi-CLI companion)</span></h2>
+      <p>Project Brain works standalone in <code>SOLO</code>, <code>NATIVE</code> (host subagents), or
+        <code>--backend direct</code> mode with zero extra tools. When you want to pool multiple installed AI CLIs
+        (Codex, Claude Code, OpenCode, ZCode, Qwen, MiniMax, Kimi, Local LLMs) with shared High / Medium / Low model
+        groups, fixed effort, native quota floors (10% worker / 25% lead reserve) and automatic daemon startup, install
+         the companion open-source <strong>CLI Agent Pool</strong>:</p>
+      <div class="installs">
+        <div class="install">
+          <h3>Install CLI Agent Pool (Node.js 24.7+ &amp; Python 3.11+)</h3>
+          <div class="cmd"><code>git clone https://github.com/XPersPective/cli-agent-pool.git</code><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><code>cd cli-agent-pool &amp;&amp; npm ci --ignore-scripts &amp;&amp; npm run setup</code><button type="button" class="copy">Copy</button></div>
+        </div>
+        <div class="install">
+          <h3>Repository &amp; Releases</h3>
+          <p>Configure your High / Medium / Low model pools once in the local CLI Agent Pool web dashboard; Project Brain
+            automatically wakes the local daemon on <code>127.0.0.1:43127</code> when you select <code>P-ALL</code>,
+            <code>P-ML</code>, or <code>P-L</code>.</p>
+          <div class="cta">
+            <a class="btn primary" href="https://github.com/XPersPective/cli-agent-pool">CLI Agent Pool on GitHub</a>
+            <a class="btn" href="https://github.com/XPersPective/cli-agent-pool/releases/latest">Download Pool release</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="use" class="wrap section">
+      <h2>Use</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">You say</th><th scope="col">The agent does</th></tr></thead>
+          <tbody>
+            <tr><td>“set up project brain”</td><td>Maps the repo once, asks the questions that shape the target, writes target + roadmap.</td></tr>
+            <tr><td>“continue” / “devam et”</td><td>Works the task queue until it is empty or blocked; commits each verified step.</td></tr>
+            <tr><td>a new request mid-way</td><td>Records it as a P1 task and completes it plus prerequisites; unrelated backlog waits.</td></tr>
+            <tr><td>“where were we?”</td><td>Boots read-only and reports state, focus and the next action.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Ground rules every agent follows</h3>
+      <ul class="rules">
+        <li>Never overwrite user work, force-push, or destructively reset.</li>
+        <li>Commits use <strong>your</strong> Git identity — no AI author, <code>Co-authored-by</code> or contributor credit.</li>
+        <li>Credentials stay outside the repository; Brain records only a non-sensitive reference.</li>
+        <li>Routing choices never authorize new scope, publishing or destructive actions.</li>
+      </ul>
+    </section>
+
+    <section id="limits" class="wrap section">
+      <h2>Honest limits</h2>
+      <p>Hashes establish freshness, not truth or product quality. Review records are not authenticated identity.
+        Process containment is not a filesystem/network sandbox. Percentage quotas cannot guarantee a token budget.
+        Reliable results still depend on the agent following the protocol. App-store publishing is out of scope.</p>
+      <p>Privacy: the skill runs locally, reads only the current repository and never reads or stores credential values.
+        See <a href="https://github.com/XPersPective/project-brain/blob/master/PRIVACY.md">PRIVACY.md</a>.</p>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    <p>MIT © XPersPective · <a href="https://github.com/XPersPective/project-brain">Project Brain Source</a> ·
+      <a href="https://github.com/XPersPective/cli-agent-pool">CLI Agent Pool</a> ·
+      <a href="https://github.com/XPersPective/project-brain/blob/master/CHANGELOG.md">Changelog</a> ·
+      <a href="https://github.com/XPersPective/project-brain/issues">Issues</a></p>
+  </footer>
+
+  <script>
+    for (const button of document.querySelectorAll("button.copy")) {
+      button.addEventListener("click", async () => {
+        const text = button.previousElementSibling.textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          button.textContent = "Copied";
+        } catch {
+          button.textContent = "Select & copy";
+        }
+        setTimeout(() => { button.textContent = "Copy"; }, 1600);
+      });
+    }
+  </script>
+</body>
+</html>

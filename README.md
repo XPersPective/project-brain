@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **3.5.1** — [changelog](CHANGELOG.md).
+Current release: **3.5.1** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
@@ -79,6 +79,7 @@ Requirements: Git and Python 3.8+ (stdlib only).
 | Codex | `codex plugin marketplace add XPersPective/project-brain` then `codex plugin add project-brain@project-brain` |
 | Any Agent Skills tool | `npx skills add XPersPective/project-brain` |
 | Manual | copy `skills/project-brain/` into your agent's skills directory (e.g. `~/.claude/skills/`, `~/.codex/skills/`, `~/.gemini/config/skills/`, `~/.agents/skills/`) |
+| CLI Agent Pool (optional, for `P-ALL`/`P-ML`/`P-L` multi-CLI pool modes) | `git clone https://github.com/XPersPective/cli-agent-pool.git && cd cli-agent-pool && npm ci --ignore-scripts && npm run setup` ([repo](https://github.com/XPersPective/cli-agent-pool) · [releases](https://github.com/XPersPective/cli-agent-pool/releases/latest)) |
 
 When you set up a project, `brain.py init` adds a short block to the project's `AGENTS.md` (and to an
 existing `CLAUDE.md` / `GEMINI.md`), so every agent that opens the repository loads the skill. For agents
@@ -92,7 +93,7 @@ read <path-to>/skills/project-brain/SKILL.md and follow it (first step: its boot
 
 ## Use
 
-Normal agent discovery and delegation connect to the separate CLI Agent Pool 1.1.0+
+Normal agent discovery and delegation connect to the separate [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool) 1.1.0+
 and start its local daemon if stopped. Configure high/medium/low pools and effort
 once in Pool; Brain honors that owner policy, preserves known quota reserves, and
 resumes interrupted jobs without replay. Plans, local research and quality evidence

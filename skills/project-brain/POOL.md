@@ -1,9 +1,18 @@
 # CLI Agent Pool integration (Project Brain 3.5.1)
 
-Project Brain and CLI Agent Pool are separate products and skills. Brain owns task
+Project Brain and [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool) are separate products and skills. Brain owns task
 specifications, local research, source evidence, review and recovery. Pool owns CLI
 discovery, native authentication, model catalogs, owner memberships, efforts,
 quota-based admission and process execution. Neither is copied into the other.
+
+Install CLI Agent Pool (`https://github.com/XPersPective/cli-agent-pool`, [releases](https://github.com/XPersPective/cli-agent-pool/releases/latest)) when using Pool modes (`P-ALL`, `P-ML`, `P-L`):
+
+```text
+git clone https://github.com/XPersPective/cli-agent-pool.git
+cd cli-agent-pool && npm ci --ignore-scripts && npm run setup
+```
+
+Without CLI Agent Pool, use `SOLO`, `NATIVE` or `--backend direct` with no external dependency.
 
 ## Normal use from any editor or agent
 
