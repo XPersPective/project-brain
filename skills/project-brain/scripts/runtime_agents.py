@@ -20,7 +20,6 @@ import urllib.request
 import runtime_verify as V
 
 DEFAULT_REGISTRY = Path.home() / ".project-brain" / "agents.json"
-STORE_AUTOMATION_MODELS = Path.home() / ".store-automation" / "models.json"
 ROLES = ("lead", "worker", "reviewer", "discovery")
 EFFORTS = ("low", "medium", "high", "xhigh", "default")
 
@@ -560,8 +559,8 @@ def probe_codex_info(exe_path, timeout=5):
 
 
 def _default_registry():
-    """Create initial registry, seeding benchmarks from ~/.store-automation/models.json if available."""
-    reg = {
+    """Create initial registry with built-in model benchmark estimates."""
+    return {
         "schema_version": 1,
         "updated_at": now_iso(),
         "benchmarks": {
@@ -573,19 +572,6 @@ def _default_registry():
         "models": {},
         "cli_agents": {},
     }
-    if STORE_AUTOMATION_MODELS.exists():
-        try:
-            sa = json.loads(STORE_AUTOMATION_MODELS.read_text(encoding="utf-8", errors="replace"))
-            sa_bm = ((sa.get("benchmarks") or {}).get("models") or {})
-            for k, v in sa_bm.items():
-                if isinstance(v, dict) and "quality" in v:
-                    reg["benchmarks"]["models"][norm_key(k)] = {
-                        "quality": v.get("quality"),
-                        "coding": v.get("coding"),
-                    }
-        except ValueError:
-            pass
-    return reg
 
 
 def _validate_registry(data):
@@ -1853,7 +1839,6 @@ def run_agents(B, args):
 
 FOREIGN_SYSTEMS = (
     ("project-brain-v0", ("PROJECT_BRAIN.md",)),
-    ("store-automation", (".store-automation",)),
     ("taskmaster", (".taskmaster/tasks/tasks.json", ".taskmaster")),
     ("Spec Kit", (".specify", "specs")),
     ("BMAD", ("_bmad", "_bmad-output", ".bmad-core")),
@@ -1883,14 +1868,14 @@ def detect_foreign(root):
 
 
 def _extract_foreign_tasks(root):
-    """Extract candidate tasks from .store-automation, .taskmaster, or markdown checklists."""
+    """Extract candidate tasks from .planning/tasks, .taskmaster, or markdown checklists."""
     root = Path(root)
     extracted = []
-    sa_tasks = root / ".store-automation" / "tasks"
-    if sa_tasks.is_dir():
-        for f in sorted(sa_tasks.glob("SA-*.md")):
+    plan_tasks = root / ".planning" / "tasks"
+    if plan_tasks.is_dir():
+        for f in sorted(plan_tasks.glob("*.md")):
             text = _read_safe(V.public_path(root, f.relative_to(root).as_posix())) or ""
-            title_m = re.search(r"^#\s+(?:SA-\d+\s*[—–-]\s*)?(.+)$", text, re.M)
+            title_m = re.search(r"^#\s+(?:[A-Z]+-\d+\s*[—–-]\s*)?(.+)$", text, re.M)
             title = title_m.group(1).strip() if title_m else f.stem
             if STORE_RELEASE_SKIP_RE.search(title) or STORE_RELEASE_SKIP_RE.search(text):
                 continue

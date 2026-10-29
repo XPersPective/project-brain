@@ -119,7 +119,7 @@
 - **Frontend UI & Backend/State Excellence Rubrics (`QUALITY.md`, `AGENTS_CLI.md`)**:
   - Mandatory Design System & Token Foundation (ADR + first UI milestone), UI Verification Triad (`[visual]`, `[interaction]`, `[accessibility]`), and blocking `QUALITY` review findings.
   - Backend Clean Architecture layer boundaries, explicit sealed state machines, boundary validation, idempotency, and up/down migration verification.
-- **Foreign Planning System Adoption (`brain.py legacy`)**: Detects and imports tasks from `.store-automation`, `.taskmaster`, `memory-bank`, `.kiro`, and flat checklists while filtering out store-publishing/distribution tasks.
+- **Foreign Planning System Adoption (`brain.py legacy`)**: Detects and imports tasks from `.planning`, `.taskmaster`, `memory-bank`, `.kiro`, and flat checklists while filtering out store-publishing/distribution tasks.
 
 ## 2.1.0 — 2026-10-08
 

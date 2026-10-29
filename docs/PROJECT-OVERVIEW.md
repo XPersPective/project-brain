@@ -41,5 +41,5 @@ Unknown quota requires an approved job cap; readings cannot reserve capacity aga
 other clients. OmniRoute coding work needs an explicit coding-agent adapter.
 Application store publishing remains outside scope.
 
-Store Automation adoption requires preview, reconciliation, verified archive and
+Foreign tracker adoption requires preview, reconciliation, verified archive and
 cleanup. No user projects were inspected or migrated for this release.

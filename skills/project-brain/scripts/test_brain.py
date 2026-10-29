@@ -637,10 +637,10 @@ def v3_checks():
     # 4. Foreign planning state adoption (`legacy`) filters out store-publishing tasks
     with tempfile.TemporaryDirectory(prefix="pb-legacy-") as tmp:
         root = Path(tmp)
-        write(root, ".store-automation/tasks/SA-001.md", "# SA-001 — Implement offline SQLite repository\nStatus: READY\n")
-        write(root, ".store-automation/tasks/SA-002.md", "# SA-002 — Upload to Google Play Store via Fastlane supply\nStatus: READY\n")
+        write(root, ".planning/tasks/TASK-001.md", "# TASK-001 — Implement offline SQLite repository\nStatus: READY\n")
+        write(root, ".planning/tasks/TASK-002.md", "# TASK-002 — Upload to Google Play Store via Fastlane supply\nStatus: READY\n")
         code, out = run(root, "legacy")
-        assert code == 0 and "FOREIGN store-automation" in out and "CANDIDATES: 1 open tasks" in out, out
+        assert code == 0 and "FOREIGN GSD" in out and "CANDIDATES: 1 open tasks" in out, out
         code, out = run(root, "legacy", "--apply")
         assert code == 0 and "ADOPTED: created 1 PLANNED tasks" in out, out
         tasks = B.list_tasks(root)

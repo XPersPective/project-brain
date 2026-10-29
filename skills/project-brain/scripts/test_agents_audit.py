@@ -179,7 +179,7 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="pb-adopt-audit-") as folder:
         root = Path(folder)
-        tasks = root / ".store-automation/tasks"
+        tasks = root / ".planning/tasks"
         tasks.mkdir(parents=True)
         original = "# SA-001 — Offline repository\nStatus: READY\n\n## Steps\n1. Preserve custom DB semantics.\n"
         (tasks / "SA-001.md").write_text(original, encoding="utf-8")
@@ -209,7 +209,7 @@ def main():
     # Import interrupted after scaffold creation resumes without losing the original spec.
     with tempfile.TemporaryDirectory(prefix="pb-import-retry-") as folder:
         root = Path(folder)
-        old = root / ".store-automation/tasks/SA-001.md"
+        old = root / ".planning/tasks/SA-001.md"
         old.parent.mkdir(parents=True)
         original = "# SA-001 — Shared title\nStatus: READY\n\n## Objective\nFirst source intent.\n"
         old.write_text(original, encoding="utf-8")

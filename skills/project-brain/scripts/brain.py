@@ -25,7 +25,7 @@
   changed  [root]   Domains changed since their Current checkpoints.
   validate [root]   Structural checks, executable-spec checks, UI/Backend quality checks, size budgets.
   migrate  [root] [--apply]   Convert a legacy Brain (schema <=3 or PROJECT_BRAIN.md); preview by default.
-  legacy   [root] [--apply]   Detect and adopt foreign planning systems (.store-automation, .taskmaster, etc.).
+  legacy   [root] [--apply]   Detect and adopt foreign planning systems (.taskmaster, .planning, etc.).
   doctor   [root]   Verify Python runtime, ProcessTree containment, Git, and CLI agent readiness.
 
 Exit: 0 ok, 1 warnings / pending review or user feedback, 2 errors / blocked, 3 no Project Brain.

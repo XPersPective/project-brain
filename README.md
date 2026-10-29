@@ -144,7 +144,7 @@ brain.py accept   <task> [root] [--as <alias>]
 brain.py changed  [root]   files and domains changed since their Current checkpoints
 brain.py validate [root]   structure, executable-spec checks, UI Triad checks, size budgets
 brain.py migrate  [root] [--apply]   convert a legacy Brain (schema <=3 or PROJECT_BRAIN.md)
-brain.py legacy   [root] [--apply]   detect and adopt foreign planning systems (.store-automation, .taskmaster, etc.)
+brain.py legacy   [root] [--apply]   detect and adopt foreign planning systems (.taskmaster, .planning, etc.)
 brain.py doctor   [root]   verify Python runtime, ProcessTree containment, Git, and CLI agent readiness
 ```
 

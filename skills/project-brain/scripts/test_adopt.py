@@ -40,9 +40,9 @@ def raises(call, fragment=None):
 
 def setup(root):
     (root / ".project-brain").mkdir()
-    (root / ".store-automation" / "tasks").mkdir(parents=True)
-    (root / ".store-automation" / "tasks" / "task.md").write_text("goal: preserve me\n", encoding="utf-8")
-    (root / ".store-automation" / "plan.md").write_text("plan\n", encoding="utf-8")
+    (root / ".planning" / "tasks").mkdir(parents=True)
+    (root / ".planning" / "tasks" / "task.md").write_text("goal: preserve me\n", encoding="utf-8")
+    (root / ".planning" / "plan.md").write_text("plan\n", encoding="utf-8")
     (root / "AGENTS.md").write_text("Keep this line.\n", encoding="utf-8")
     (root / "target.md").write_text("adopted intent\n", encoding="utf-8")
 
@@ -61,7 +61,7 @@ def main():
         assert trace["state"] == "PREPARED" and len(trace["sources"]) == 2
         raises(lambda: A.cleanup(Brain, root), "verified")
         raises(lambda: A.verify(Brain, root, "reviewed"), "every source")
-        assert (root / ".store-automation" / "plan.md").exists()
+        assert (root / ".planning" / "plan.md").exists()
         trace = A.status(Brain, root)
         map_all(trace)
         A._save(Brain, root, trace)
@@ -69,16 +69,16 @@ def main():
         assert verified["state"] == "VERIFIED"
         cleaned = A.cleanup(Brain, root)
         assert cleaned["state"] == "CLEANED"
-        assert not (root / ".store-automation").exists()
+        assert not (root / ".planning").exists()
         assert (root / "target.md").read_text(encoding="utf-8") == "adopted intent\n"
         assert (root / "AGENTS.md").read_text(encoding="utf-8") == "Keep this line.\n"
         archive = Path(cleaned["archive"]["path"])
         with zipfile.ZipFile(archive) as zf:
             assert set(zf.namelist()) == {
-                "sources/.store-automation/plan.md",
-                "sources/.store-automation/tasks/task.md",
+                "sources/.planning/plan.md",
+                "sources/.planning/tasks/task.md",
             }
-            assert zf.read("sources/.store-automation/tasks/task.md").decode().replace("\r\n", "\n") == "goal: preserve me\n"
+            assert zf.read("sources/.planning/tasks/task.md").decode().replace("\r\n", "\n") == "goal: preserve me\n"
         assert A.cleanup(Brain, root)["state"] == "CLEANED"
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -89,27 +89,27 @@ def main():
         A.verify(Brain, root, "reviewed")
         (root / "target.md").write_text("drift\n", encoding="utf-8")
         raises(lambda: A.cleanup(Brain, root), "destination changed")
-        assert (root / ".store-automation" / "plan.md").exists()
+        assert (root / ".planning" / "plan.md").exists()
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         root.mkdir(); setup(root)
         # A selected foreign folder containing application code is never cleaned.
-        (root / ".store-automation" / "tasks" / "code.py").write_text("print(1)\n", encoding="utf-8")
+        (root / ".planning" / "tasks" / "code.py").write_text("print(1)\n", encoding="utf-8")
         raises(lambda: A.prepare(Brain, root), "unsupported non-tracking")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         root.mkdir(); setup(root)
         for ext in ("html", "css", "png"):
-            (root / ".store-automation" / "tasks" / ("app." + ext)).write_text("app payload", encoding="utf-8")
+            (root / ".planning" / "tasks" / ("app." + ext)).write_text("app payload", encoding="utf-8")
         raises(lambda: A.prepare(Brain, root), "unsupported non-tracking")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         root.mkdir(); setup(root)
         source = root / "AGENTS.md"
-        pointer = "Before work, load the instructions in .store-automation/.\n"
+        pointer = "Before work, load the instructions in .planning/.\n"
         security = "Always protect credentials and never disable authorization checks.\n"
         source.write_text(pointer + security, encoding="utf-8")
         trace = A.prepare(Brain, root)
@@ -142,7 +142,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         root.mkdir(); setup(root)
-        foreign = root / ".store-automation" / "tasks" / "task.md"
+        foreign = root / ".planning" / "tasks" / "task.md"
         foreign.write_text("- send | response_unknown\n", encoding="utf-8")
         trace = A.prepare(Brain, root)
         for item in trace["sources"]:
@@ -178,7 +178,7 @@ def main():
                 pass
             else:
                 raise AssertionError("archive failure was not injected")
-        assert (root / ".store-automation" / "plan.md").exists()
+        assert (root / ".planning" / "plan.md").exists()
         assert A.status(Brain, root)["state"] == "VERIFIED"
         assert A.zipfile.ZipFile is original_zip
 
@@ -214,11 +214,11 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "repo"
         root.mkdir(); setup(root)
-        pointer = "Before work, load .store-automation/ instructions.\n"
+        pointer = "Before work, load .planning/ instructions.\n"
         rule = "Protect credentials.\n"
         agents = root / "AGENTS.md"
         agents.write_text(pointer + rule, encoding="utf-8")
-        (root / ".gitignore").write_text(".store-automation/\nkeep.txt\n", encoding="utf-8")
+        (root / ".gitignore").write_text(".planning/\nkeep.txt\n", encoding="utf-8")
         trace = A.prepare(Brain, root)
         map_all(trace)
         trace["instruction_removals"] = [{"path": "AGENTS.md", "text": pointer, "reason": "obsolete pointer"}]

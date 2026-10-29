@@ -19,7 +19,7 @@ INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}
 UNRESOLVED = re.compile(r"^\s*-\s*(?:(?P<op>[A-Za-z0-9_.:/-]+)\s*(?:\||:)\s*)?(?P<state>sent|response_unknown)\b", re.I | re.M)
 POINTER_CUE = re.compile(r"\b(load|read|use|follow|see|check|start with|continue in)\b", re.I)
 POINTER_RISK = re.compile(r"\b(security|credential|secret|token|permission|authorization|password|private key|must not|never|do not|don't)\b", re.I)
-TRACKER_NAMES = (".store-automation", ".taskmaster", "memory-bank", ".kiro", ".factory", "_bmad", "openspec", ".planning")
+TRACKER_NAMES = (".taskmaster", "memory-bank", ".kiro", ".factory", "_bmad", "openspec", ".planning")
 
 
 def trace_file(B, root):
@@ -274,7 +274,7 @@ def _is_old_pointer(text, sources):
         low = line.lower()
         if low in {f"<!-- {name.strip('.')} -->" for name in source_names}:
             continue
-        if re.fullmatch(r"#{1,3}\s+(store automation|taskmaster|memory bank|kiro|factory|bmad|openspec|planning)\s*", line, re.I):
+        if re.fullmatch(r"#{1,3}\s+(taskmaster|memory bank|kiro|factory|bmad|openspec|planning)\s*", line, re.I):
             continue
         if POINTER_RISK.search(line) or not POINTER_CUE.search(line):
             return False
