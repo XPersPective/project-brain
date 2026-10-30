@@ -1,5 +1,35 @@
 # Changelog
 
+## 3.6.1 — 2026-10-30
+
+- Align Pool 1.8 native file capabilities with request scopes. Distinguish effective
+  kinds from old catalog kinds and native permission denial from missing tools.
+- Include the 3.6 session, orientation, intake, continuity, compact reports and
+  migration changes in the published/local skill update.
+
+## 3.6.0 — 2026-10-30
+
+- Add metadata-only bounded `orient`, fresh-session choice reset and protocol-1
+  execution gates, with simple Pool/native/Solo resource names and separate
+  serial/parallel (1..32) and response/execute settings. Pool remains optional.
+- Add durable multipart `intake`, requirement/task mapping, question-safe focus
+  preservation and pending-intake handoff references.
+- Return compact Pool catalogs by default (`--full` for details), retain short
+  structured worker reports and prohibit owner-disabled automatic fallback.
+- Allow explicit Current architecture verification inputs and document authorized
+  architecture revisions without a blanket freeze. Preserve migration backups and
+  immutable old dispatches; no automatic worker replay.
+
+## 3.5.2 — 2026-10-30
+
+- Default new Pool implementation jobs to Pool 1.7 execute mode with compact JSON
+  file/check/research/blocker reports. Add response-only delegation and selection;
+  never infer implementation evidence from a text response.
+- Separate queue wait from worker/check timeout, surface review blockers promptly,
+  and handle task error strings as task data rather than transport error envelopes.
+- Preserve immutable pre-upgrade job requests and IDs through migration/readback;
+  verify 3.5.1 migration, no replay and real synthetic Brain-to-Pool execution.
+
 ## 3.5.1 — 2026-10-29
 
 - Make "no AI contributor credit" a core protocol rule: the director and every worker

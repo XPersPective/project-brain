@@ -15,6 +15,16 @@ remain readable; protocol-1 proof must be produced against the new inputs/intent
 Confirm Target in the user's words; choose EXEC/REV once. Then record one project
 secret decision, even when the answer is no secrets:
 
+Before implementation at a new top-level session: `PB orient`, then
+`PB boot --new-session`. Ask once for resource EXEC/REV, serial/parallel and
+response/execute; e.g. `agents mode --exec pool-medium --rev native --schedule parallel
+--max-parallel 4 --task-mode execute --note "User choice"`. Solo/native need no Pool.
+Later directives may update these settings without --new. Protocol-1 execution
+refuses missing choices; external editor writes outside Brain are not OS-enforced.
+Scheduling is the director/host contract: separate worktrees for concurrent edits,
+never two writers in the same checkout. Bootstrap is metadata-only, or one host-known
+free native orientation worker with bounded input; do not spend on Pool before choice.
+
 ```text
 PB security --ref none --note "User says this project needs no credentials"
 PB security --ref project-vault --note "User approved the external project store"

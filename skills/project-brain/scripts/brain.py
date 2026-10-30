@@ -45,7 +45,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.5.1"
+VERSION = "3.6.1"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -56,6 +56,8 @@ TIER_VALUES = ("L", "M", "H")
 EXEC_MODES = ("pool_mixed", "pool_med_low", "pool_low", "self_mixed", "self_and_lower", "solo")
 REV_MODES = EXEC_MODES
 MODE_ALIASES = {
+    "pool": "pool_mixed", "pool-all": "pool_mixed", "pool-medium": "pool_med_low",
+    "native": "self_mixed", "native-low": "self_and_lower",
     "p-all": "pool_mixed", "pool_all": "pool_mixed", "pool-mixed": "pool_mixed", "pool_mixed": "pool_mixed",
     "p-ml": "pool_med_low", "pool_ml": "pool_med_low", "pool-med-low": "pool_med_low", "pool_med_low": "pool_med_low",
     "p-l": "pool_low", "pool-low": "pool_low", "pool_low": "pool_low",
@@ -439,7 +441,7 @@ def session_modes_file(root):
 
 
 def get_session_modes(root):
-    out = {"exec": "", "rev": "", "note": ""}
+    out = {"exec": "", "rev": "", "note": "", "schedule": "serial", "max_parallel": 1, "task_mode": "execute"}
     if os.environ.get("PB_EXEC_MODE"):
         out["exec"] = normalize_mode(os.environ["PB_EXEC_MODE"], "exec")
     if os.environ.get("PB_REV_MODE"):
@@ -455,13 +457,19 @@ def get_session_modes(root):
                     if not out["rev"] and data.get("rev"):
                         out["rev"] = normalize_mode(str(data["rev"]), "rev")
                     out["note"] = str(data.get("note", ""))
+                    if data.get("schedule") in ("serial", "parallel"):
+                        out["schedule"] = data["schedule"]
+                    if type(data.get("max_parallel")) is int and 1 <= data["max_parallel"] <= 32:
+                        out["max_parallel"] = data["max_parallel"]
+                    if data.get("task_mode") in ("response", "execute"):
+                        out["task_mode"] = data["task_mode"]
         except (ValueError, OSError):
             pass
     return out
 
 
-def set_session_modes(root, exec_mode="", rev_mode="", note="", new=False):
-    cur = {"exec": "", "rev": "", "note": ""} if new else get_session_modes(root)
+def set_session_modes(root, exec_mode="", rev_mode="", note="", new=False, schedule=None, max_parallel=None, task_mode=None):
+    cur = {"exec": "", "rev": "", "note": "", "schedule": "serial", "max_parallel": 1, "task_mode": "execute"} if new else get_session_modes(root)
     cur["session_id"] = os.environ.get("PB_SESSION_ID", "")
     if exec_mode:
         cur["exec"] = normalize_mode(exec_mode, "exec")
@@ -471,12 +479,37 @@ def set_session_modes(root, exec_mode="", rev_mode="", note="", new=False):
         cur["rev"] = cur["exec"]
     if note:
         cur["note"] = note.strip()
+    if schedule is not None:
+        if schedule not in ("serial", "parallel"):
+            raise ValueError("schedule must be serial or parallel")
+        cur["schedule"] = schedule
+    if max_parallel is not None:
+        if type(max_parallel) is not int or not 1 <= max_parallel <= 32:
+            raise ValueError("max_parallel must be 1..32")
+        cur["max_parallel"] = max_parallel
+    if cur["schedule"] == "serial":
+        cur["max_parallel"] = 1
+    elif schedule == "parallel" and max_parallel is None and cur["max_parallel"] == 1:
+        cur["max_parallel"] = 4
+    if task_mode is not None:
+        if task_mode not in ("response", "execute"):
+            raise ValueError("task_mode must be response or execute")
+        cur["task_mode"] = task_mode
     p = session_modes_file(root)
     p.parent.mkdir(parents=True, exist_ok=True)
     if bp(root).is_dir() and not (bp(root) / ".gitignore").exists():
         write_atomic(bp(root) / ".gitignore", ".cache/\n")
     write_atomic(p, json.dumps(cur, indent=2, ensure_ascii=False))
     return cur
+
+
+def require_session(root, implementation=False):
+    modes = get_session_modes(root)
+    if not modes["exec"] or not modes["rev"]:
+        raise ValueError("SESSION_CHOICE_REQUIRED: choose EXEC, REV, serial/parallel and response/execute before implementation; use `agents mode`")
+    if implementation and modes["task_mode"] == "response":
+        raise ValueError("RESPONSE_ONLY: session permits analysis; switch task-mode to execute before implementation")
+    return modes
 
 
 def takeover_status(root, active, has_git, dirty_other):
@@ -1311,6 +1344,8 @@ def cmd_boot(root, maintain=True):
     print(gitline)
     import runtime_pool as P
     s_modes = get_session_modes(root)
+    print("SESSION_GATE: " + ("READY" if s_modes["exec"] and s_modes["rev"] else "ASK_USER_BEFORE_IMPLEMENTATION"))
+    print(f"WORK: {s_modes['task_mode']} | {s_modes['schedule']} | max_parallel={s_modes['max_parallel']}")
     if os.environ.get("PB_AGENTS_REGISTRY"):
         for line in P.summary(sys.modules[__name__], root):
             print(line)
@@ -1323,6 +1358,8 @@ def cmd_boot(root, maintain=True):
     print("PROTOCOL: " + ("1 (intent/input guards active)" if R.enabled(sys.modules[__name__], root) else "0 (legacy compatibility; run `protocol --enable` before new implementation)"))
     print("SECRETS: " + (S.policy(sys.modules[__name__], root).get("reference") or "ASK_ONCE: choose an external symbolic reference or none"))
     print(f"TAKEOVER_CHECK: {takeover_status(root, active, has_git, other)}")
+    import runtime_session as RS
+    RS.boot_summary(sys.modules[__name__], root)
     for n in notes:
         print(f"  ! {n}")
     tstat = target_status(root)
@@ -1641,6 +1678,8 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
         actor = agent_id(agent, "--agent")
         import runtime_protocol as R
         R.guard(sys.modules[__name__], root, task)
+        if R.enabled(sys.modules[__name__], root):
+            require_session(root, implementation=task.get("purpose") != "discovery")
         R.attempt_guard(sys.modules[__name__], root, task)
         policy = A.gate(sys.modules[__name__], task, actor, "start", agents_path, root=root) or {}
         all_tasks = list_tasks(root)
@@ -1946,6 +1985,16 @@ def main():
         parser.add_argument("root", nargs="?", default=".")
         if name == "boot":
             parser.add_argument("--read-only", action="store_true")
+            parser.add_argument("--new-session", action="store_true")
+
+    p = sub.add_parser("orient")
+    p.add_argument("root", nargs="?", default=".")
+    p = sub.add_parser("intake")
+    p.add_argument("root", nargs="?", default=".")
+    p.add_argument("--item", action="append", default=[])
+    p.add_argument("--relation", choices=("related", "question", "new-work", "cancel"), default="related")
+    p.add_argument("--task", default="")
+    p.add_argument("--resolve", default="")
 
     for name in ("protocol", "security"):
         p = sub.add_parser(name)
@@ -2041,6 +2090,8 @@ def main():
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("delegate")
+    p.add_argument("--mode", choices=("response", "execute"), default=None)
+    p.add_argument("--wait", type=int, default=3600)
     p.add_argument("--readback", action="store_true")
     p.add_argument("--backend", choices=("pool", "direct"), default=None)
     p.add_argument("--group", choices=("high", "medium", "low"), default="")
@@ -2078,10 +2129,12 @@ def main():
         sp.add_argument("--backend", choices=("pool", "direct"), default=None)
         sp.add_argument("root", nargs="?", default=".")
         sp.add_argument("--json", action="store_true")
+        sp.add_argument("--full", action="store_true")
         sp.add_argument("--registry", default=None)
         if ag_name == "scan":
             sp.add_argument("--no-quota", action="store_true")
     sp_sel = ag_sub.add_parser("select")
+    sp_sel.add_argument("--mode", choices=("response", "execute"), default=None)
     sp_sel.add_argument("--backend", choices=("pool", "direct"), default=None)
     sp_sel.add_argument("root", nargs="?", default=".")
     sp_sel.add_argument("--role", choices=A.ROLES, default="worker")
@@ -2102,6 +2155,9 @@ def main():
     sp_mode.add_argument("--exec", dest="exec_mode", default="")
     sp_mode.add_argument("--rev", dest="rev_mode", default="")
     sp_mode.add_argument("--note", default="")
+    sp_mode.add_argument("--schedule", choices=("serial", "parallel"), default=None)
+    sp_mode.add_argument("--max-parallel", type=int, default=None)
+    sp_mode.add_argument("--task-mode", choices=("response", "execute"), default=None)
     sp_mode.add_argument("--json", action="store_true")
 
     a = ap.parse_args(_reorder_argv(sys.argv[1:]))
@@ -2110,15 +2166,16 @@ def main():
     if a.cmd == "agents":
         if a.agents_cmd == "mode":
             root = Path(a.root).resolve()
-            if a.exec_mode or a.rev_mode or a.note or a.new:
+            if a.exec_mode or a.rev_mode or a.note or a.new or a.schedule or a.max_parallel is not None or a.task_mode:
                 with checkout_lock(root):
-                    modes = set_session_modes(root, a.exec_mode, a.rev_mode, a.note, new=a.new)
+                    modes = set_session_modes(root, a.exec_mode, a.rev_mode, a.note, new=a.new, schedule=a.schedule, max_parallel=a.max_parallel, task_mode=a.task_mode)
             else:
                 modes = get_session_modes(root)
             if a.json:
                 print(json.dumps(modes, indent=2, ensure_ascii=False))
             else:
                 print(f"SESSION_MODES: exec={modes['exec'] or 'ask'} rev={modes['rev'] or 'ask'}" + (f" ({modes['note']})" if modes.get("note") else ""))
+                print(f"WORK: {modes['task_mode']} | {modes['schedule']} | max_parallel={modes['max_parallel']}")
             return 0
         if a.agents_cmd in ("scan", "list", "quota", "select") and (a.backend == "pool" or a.backend is None and a.registry is None):
             import runtime_agent_pool as AP
@@ -2218,6 +2275,8 @@ def main():
                 return AP.delegate(B_mod, root, task, A.score_task(B_mod, root, task), a)
             if a.readback:
                 raise ValueError("Direct jobs use `agents session` and `agents settle` for readback; no worker launched")
+            if a.mode:
+                raise ValueError("--mode response/execute belongs to --backend pool; direct execution has its own contract")
             return A.delegate_task(
                 B_mod,
                 root,
@@ -2236,10 +2295,22 @@ def main():
         print(f"error: not a directory: {root}", file=sys.stderr)
         return 1
     if a.cmd == "boot":
+        if a.new_session:
+            if a.read_only:
+                raise ValueError("--new-session writes the session record; omit --read-only")
+            if brain_exists(root):
+                set_session_modes(root, new=True)
         if a.read_only:
             return cmd_boot(root, maintain=False)
         with checkout_lock(root):
             return cmd_boot(root)
+    if a.cmd in ("orient", "intake"):
+        import runtime_session as RS
+        if a.cmd == "orient":
+            return RS.orient(sys.modules[__name__], root)
+        with checkout_lock(root):
+            print(json.dumps(RS.intake(sys.modules[__name__], root, a.item, a.relation, a.task, a.resolve), ensure_ascii=False))
+        return 0
     if a.cmd == "new":
         return cmd_new(root, a.title, a.depends, a.risk, a.priority, a.tier)
     if a.cmd in ("migrate", "upgrade"):

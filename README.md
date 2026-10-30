@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **3.5.1** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
+Current release: **3.6.1** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
@@ -93,7 +93,7 @@ read <path-to>/skills/project-brain/SKILL.md and follow it (first step: its boot
 
 ## Use
 
-Normal agent discovery and delegation connect to the separate [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool) 1.1.0+
+Normal agent discovery and delegation connect to the separate [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool) 1.7.0+
 and start its local daemon if stopped. Configure high/medium/low pools and effort
 once in Pool; Brain honors that owner policy, preserves known quota reserves, and
 resumes interrupted jobs without replay. Plans, local research and quality evidence
@@ -101,6 +101,14 @@ remain Brain's responsibility. No skill is merged into the other.
 
 Use `agents scan --json`, `agents select --task PB-001 --json`, then
 `delegate PB-001 --dry-run` / `delegate PB-001`. See [the integration contract](skills/project-brain/POOL.md).
+
+At a new implementation session use `orient`, then `boot --new-session`; choose
+EXEC/REV plus serial/parallel and response/execute once. Example:
+`agents mode --exec pool-medium --rev native --schedule parallel --max-parallel 4 --task-mode execute --note "User choice"`.
+`pool-all`, `pool-medium`, `pool-low`, `native`, `native-low`, `solo` are the short
+resource names; task strength consistently means low/medium/high. `intake` preserves
+multipart requirements and the active task across questions. `agents scan` is compact
+by default; `--full` requests the full catalog. Solo/native require no Pool install.
 `--backend direct` or an explicit `--registry` retains the standalone CLI/native
 session approval workflow; there is no silent fallback between authorities.
 

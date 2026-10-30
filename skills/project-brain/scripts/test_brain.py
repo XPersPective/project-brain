@@ -670,6 +670,10 @@ if __name__ == "__main__":
     discovery_checks()
     from test_agent_pool import main as agent_pool_checks
     agent_pool_checks()
+    from test_pool_modes import main as pool_mode_checks
+    pool_mode_checks()
+    from test_session import main as session_checks
+    session_checks()
     from test_handoff_audit import main as handoff_checks
     handoff_checks()
     from test_production import main as production_checks

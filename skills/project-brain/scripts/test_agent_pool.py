@@ -28,13 +28,13 @@ def main():
         if tool == "pool_select":
             return {"selected": dict(model), "alternatives": []}
         if tool == "pool_get_policy":
-            return {"selectionMode": "manual"}
+            return {"selectionMode": "manual", "taskModes": ["response", "execute"]}
         if tool == "pool_list_models":
             return [dict(model)]
         if tool == "pool_submit":
             return {"id": "task-123"}
         if tool == "pool_get_task":
-            return {"id": "task-123", "state": "succeeded", "result": "checked", "effort": "high"}
+            return {"id": "task-123", "state": "succeeded", "result": "checked", "report": {"status": "completed", "summary": "Checked", "files": [], "checks": [], "research": [], "blockers": []}, "effort": "high"}
         raise AssertionError(tool)
 
     with tempfile.TemporaryDirectory(prefix="pb-agent-pool-") as directory:
@@ -143,7 +143,7 @@ def main():
         if tool == "pool_select":
             raise ValueError("Pool NO_ROUTE: empty")
         if tool == "pool_get_policy":
-            return {"selectionMode": "manual"}
+            return {"selectionMode": "manual", "taskModes": ["response", "execute"]}
         raise AssertionError("manual selection must never inspect an outside model")
     with patch.object(AP, "rpc", side_effect=missing):
         try:

@@ -53,8 +53,8 @@ def rpc(tool, arguments=None):
         value = json.loads(response.stdout)
     except ValueError:
         raise ValueError("Pool did not return JSON (exit %s); check installation/service" % response.returncode)
-    if response.returncode or isinstance(value, dict) and value.get("error"):
-        error = value.get("error", {}) if isinstance(value, dict) else {}
+    if response.returncode or isinstance(value, dict) and isinstance(value.get("error"), dict):
+        error = value.get("error", {}) if isinstance(value, dict) and isinstance(value.get("error"), dict) else {}
         raise ValueError("Pool %s: %s" % (error.get("code", response.returncode), error.get("message", "request failed")))
     return value
 
@@ -63,6 +63,21 @@ def status():
     return {"backend": "cli-agent-pool", "policy": rpc("pool_get_policy"),
             "pools": rpc("pool_list_pools"), "connections": rpc("pool_list_connections"),
             "models": rpc("pool_list_models")}
+
+
+def compact_catalog(value):
+    policy = value["policy"]
+    groups = []
+    for group in ("low", "medium", "high"):
+        members = [model for model in value["models"] if model.get("group") == group]
+        groups.append({"group": group, "total": len(members), "members": [
+            {key: model.get(key) for key in ("routeId", "id", "enabled", "fixedEffort", "kinds", "executionModes")}
+            for model in members[:12]], "omitted": max(0, len(members) - 12)})
+    digest = hashlib.sha256(json.dumps(value["models"], sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+    return {"backend": "cli-agent-pool", "catalog_digest": digest,
+            "policy": {key: policy.get(key) for key in ("selectionMode", "concurrency", "taskModes")},
+            "pools": groups, "model_count": len(value["models"]), "connection_count": len(value["connections"]),
+            "next": "Use agents select --task for admission; --full for omitted catalog details; scan does not prove login or execution"}
 
 
 def alias(model):
@@ -85,9 +100,15 @@ def remember(model, data=None):
     return key
 
 
-def select(tier="M", role="worker", route="", model="", effort="", group=""):
+def select(tier="M", role="worker", route="", model="", effort="", group="", mode=None):
+    mode = mode or ("response" if role in ("reviewer", "discovery") else "execute")
+    if mode not in ("response", "execute"):
+        raise ValueError("Pool mode must be response or execute")
+    policy = rpc("pool_get_policy")
+    if mode not in policy.get("taskModes", []):
+        raise ValueError("CLI Agent Pool 1.7+ with response/execute support is required for new dispatch; upgrade Pool, not an existing job request")
     group = group or GROUPS.get(tier, "medium")
-    request = {"kind": "write", "group": group,
+    request = {"kind": "write" if mode == "execute" else "read", "mode": mode, "group": group,
                "minRemainingPercent": 25 if role in ("lead", "reviewer") else 10}
     if route:
         request["routeId"] = route
@@ -98,11 +119,12 @@ def select(tier="M", role="worker", route="", model="", effort="", group=""):
     try:
         result = rpc("pool_select", request)
     except ValueError as exc:
-        if "NO_ROUTE" not in str(exc) or rpc("pool_get_policy")["selectionMode"] != "auto":
+        if "NO_ROUTE" not in str(exc) or policy["selectionMode"] != "auto":
             raise
         # ponytail: owner-unassigned automatic models use Pool's conservative name hints;
         # unknown capability stays unavailable until the owner assigns a strength pool.
         candidates = [m for m in rpc("pool_list_models") if m.get("enabled") and m.get("suggestedGroup") == group
+                      and (route or m.get("autoSelect", m.get("billing") != "paid_api"))
                       and (not route or m["routeId"] == route) and (not model or m["id"] == model)
                       and (m.get("billing") != "paid_api" or route or m.get("autoSelect"))]
         result = None
@@ -183,6 +205,29 @@ def journal_path(root, tid):
     return target
 
 
+def get_job(entry):
+    arguments = {"taskId": entry["taskId"], "after": 0}
+    if entry.get("request", {}).get("mode") in ("response", "execute"):
+        arguments["compact"] = True
+    return rpc("pool_get_task", arguments)
+
+
+def print_output(B, root, task, current):
+    import runtime_security as S
+    report = current.get("report")
+    text = json.dumps(report, ensure_ascii=False, separators=(",", ":")) if isinstance(report, dict) else str(current.get("result") or "")
+    text = S.sanitize(text)
+    limit = 6000 if isinstance(report, dict) else 1500
+    if len(text) <= limit:
+        print(text)
+        return
+    log_rel = f".project-brain/.cache/runs/{task['id']}-pool.log"
+    log_path = V.public_path(root, log_rel)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    B.write_atomic(log_path, text)
+    print(text[:limit] + f"\n[... truncated, full output in {log_rel}]")
+
+
 def delegate(B, root, task, score, args):
     """Persist one immutable request before send; resume never replays completed work."""
     import runtime_agents as A
@@ -194,9 +239,9 @@ def delegate(B, root, task, score, args):
         entry = R.read_json(journal_path(root, task["id"]))
         if not isinstance(entry.get("taskId"), str) or not entry["taskId"]:
             raise ValueError("READBACK_FIRST: no acknowledged task ID; resolve the saved idempotency key with Pool, never launch a changed request")
-        current = rpc("pool_get_task", {"taskId": entry["taskId"], "after": 0})
+        current = get_job(entry)
         print(S.sanitize(json.dumps({k: current.get(k) for k in ("id", "state", "error")}, ensure_ascii=False)))
-        print(S.sanitize(str(current.get("result") or ""))[:1500])
+        print_output(B, root, task, current)
         print("READBACK ONLY: source/spec were not checked and no work was submitted")
         return 0 if current.get("state") == "succeeded" else 1 if current.get("state") in ACTIVE else 2
     if task["status"] not in ("READY", "IN_PROGRESS") or B.task_errors(task) or score["must_split"]:
@@ -222,6 +267,9 @@ def delegate(B, root, task, score, args):
         raise ValueError("Tier H requires the lead; split the task or explicitly pass --force")
     if not 5 <= args.timeout <= 3600:
         raise ValueError("Pool timeout must be 5..3600 seconds")
+    wait = getattr(args, "wait", 3600)
+    if not 1 <= wait <= 86400:
+        raise ValueError("Pool wait must be 1..86400 seconds")
     with B.checkout_lock(root, timeout=0.1, name="delegate.lock"):
         file = journal_path(root, task["id"])
         entry = R.read_json(file) if file.exists() else None
@@ -230,23 +278,30 @@ def delegate(B, root, task, score, args):
             raise ValueError("Malformed Pool journal; inspect/read back the existing job before dispatch")
         if entry and entry["contract"] != B.contract(task):
             raise ValueError("task contract changed after dispatch; inspect the existing Pool job before creating another task")
+        requested_mode = getattr(args, "mode", None)
+        if entry and requested_mode and entry["request"].get("mode") != requested_mode:
+            raise ValueError("Existing Pool request is immutable; use --readback to inspect it instead of changing its mode")
         if not entry:
             R.attempt_guard(B, root, task)
             selected = select(score["effective_tier"], role="lead" if score["effective_tier"] == "H" else "worker", route=args.cli, model=args.model,
-                              effort=args.effort, group=args.group)
+                              effort=args.effort, group=args.group, mode=requested_mode or modes.get("task_mode", "execute"))
             print("POOL_SELECT " + json.dumps({k: selected[k] for k in ("alias", "strength", "request")}, ensure_ascii=False))
             if args.dry_run:
                 return 0
             actor = remember(selected["selected"])
-            if task.get("owner") and task["owner"] != actor:
+            if selected["request"]["mode"] == "execute" and task.get("owner") and task["owner"] != actor:
                 raise ValueError("task is owned by another model; explicit takeover required")
-            rc = B.cmd_start(root, task["id"], agent=actor)
-            if rc:
-                return rc
+            if selected["request"]["mode"] == "execute":
+                rc = B.cmd_start(root, task["id"], agent=actor)
+                if rc:
+                    return rc
             task = B.find_task(root, task["id"])
-            request = dict(selected["request"], prompt=A.build_worker_prompt(B, root, task, score) +
+            instruction = ("\nPool execute protocol takes precedence for the final response: return the required single JSON report with all changed paths, actual checks, research sources and blockers. Do not commit or publish."
+                           if selected["request"]["mode"] == "execute" else
+                           "\nRESPONSE ONLY: inspect and return analysis/research with paths, sources and blockers. Do not modify files, run PB check/progress, implement the task or claim completion. The director decides the next action.")
+            request = dict(selected["request"], prompt=A.build_worker_prompt(B, root, task, score) + instruction +
                            "\nYou are a Pool worker. Do not delegate or submit nested tasks.",
-                           workspace=str(Path(root).resolve()), kind="write", timeoutSeconds=args.timeout,
+                           workspace=str(Path(root).resolve()), timeoutSeconds=args.timeout,
                            idempotencyKey="pb-" + str(uuid.uuid4()))
             entry = {"contract": B.contract(task), "actor": actor, "strength": selected["strength"], "request": request}
             B.write_atomic(file, json.dumps(entry, ensure_ascii=False))
@@ -269,30 +324,29 @@ def delegate(B, root, task, score, args):
             entry["taskId"] = submitted["id"]
             B.write_atomic(file, json.dumps(entry, ensure_ascii=False))
         print("POOL_TASK " + entry["taskId"])
-        deadline = time.monotonic() + args.timeout + 15
+        deadline = time.monotonic() + wait
         while True:
-            current = rpc("pool_get_task", {"taskId": entry["taskId"], "after": 0})
+            current = get_job(entry)
             if current["state"] not in ACTIVE:
                 break
+            if current.get("queueReason") == "WORKSPACE_REVIEW_REQUIRED":
+                print("READBACK_FIRST: blocked by Pool review task " + str(current.get("blockedBy") or "unknown") + "; no replay or automatic quarantine clearing")
+                return 2
             if time.monotonic() >= deadline:
                 print("READBACK_FIRST: task still active; rerun delegate to resume polling without replay")
                 return 2
             time.sleep(1)
         print("POOL_RESULT " + S.sanitize(json.dumps({k: current.get(k) for k in ("id", "state", "modelId", "reportedModel", "effort", "error")}, ensure_ascii=False)))
-        res_text = S.sanitize(str(current.get("result") or ""))
-        if len(res_text) > 1500:
-            log_rel = f".project-brain/.cache/runs/{task['id']}-pool.log"
-            try:
-                log_path = V.public_path(root, log_rel)
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                B.write_atomic(log_path, res_text)
-                print(res_text[:1500] + f"\n[... truncated, full output in {log_rel}]")
-            except Exception:
-                print(res_text[:1500])
-        else:
-            print(res_text)
+        print_output(B, root, task, current)
         if current["state"] != "succeeded":
             print("READBACK_FIRST: inspect the failed/interrupted job; no automatic retry")
+            return 2
+        mode = entry["request"].get("mode")
+        if mode == "response":
+            print("RESPONSE_ONLY: no implementation verification or task acceptance inferred")
+            return 0
+        if mode == "execute" and (not isinstance(current.get("report"), dict) or current["report"].get("status") != "completed"):
+            print("READBACK_FIRST: missing completed execution report; inspect the existing job, never replay")
             return 2
         with B.checkout_lock(root):
             rc, lines = V.check(B, root, task["id"], timeout=args.timeout, actor=entry["actor"])
@@ -323,7 +377,8 @@ def agents(B, args):
             raise ValueError("No eligible Pool role/tier within the selected session mode; retain quality floors")
         if args.exclude:
             raise ValueError("--exclude is available with --backend direct; use Pool owner membership to exclude models")
-        value = select(tier, args.role, route=args.cli)
+        task_mode = getattr(args, "mode", None) or ("response" if args.role in ("reviewer", "discovery") else modes.get("task_mode", "execute"))
+        value = select(tier, args.role, route=args.cli, mode=task_mode)
         remember(value["selected"])
     else:
         value = status()
@@ -339,7 +394,9 @@ def agents(B, args):
         for model in value["models"]:
             remember(model, data)
         A.save(data)
-    print(json.dumps(value, indent=2, ensure_ascii=False))
+    if sub in ("scan", "list") and not getattr(args, "full", False):
+        value = compact_catalog(value)
+    print(json.dumps(value, indent=2 if getattr(args, "full", False) else None, ensure_ascii=False))
     return 0
 
 

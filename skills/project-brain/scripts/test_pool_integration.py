@@ -35,14 +35,21 @@ def main(entry):
             _project(project)
         fake = root / "worker.mjs"
         nested = "const nested=spawnSync(" + json.dumps(sys.executable) + "," + json.dumps([str(Path(B.__file__).resolve()), "delegate", "PB-001", "--backend", "direct"]) + ",{encoding:'utf8'});if(nested.status!==2||!(nested.stdout+nested.stderr).includes('recursively'))process.exit(10);"
-        fake.write_text("import{appendFileSync,writeFileSync}from'node:fs';import{spawnSync}from'node:child_process';process.stdin.resume();process.stdin.on('end',()=>{if(process.env.CLI_AGENT_POOL_WORKER!=='1')process.exit(9);" + nested + "appendFileSync('runs.txt','one\\n');writeFileSync('src/a.py','verified = True\\n');console.log('effort='+process.argv[2]);});", encoding="utf-8")
+        report = {"status": "completed", "summary": "effort=medium", "files": [
+            {"path": "src/a.py", "change": "Updated"}, {"path": "runs.txt", "change": "Created"}],
+            "checks": [], "research": [], "blockers": []}
+        fake.write_text("import{appendFileSync,writeFileSync}from'node:fs';import{spawnSync}from'node:child_process';"
+                        "if(process.argv.includes('login')){console.log('Logged in using ChatGPT')}else{let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{"
+                        "if(process.env.CLI_AGENT_POOL_WORKER!=='1'||!input.includes('Pool subagent protocol v1')||!process.argv.includes('model_reasoning_effort=\"medium\"'))process.exit(9);" + nested +
+                        "appendFileSync('runs.txt','one\\n');writeFileSync('src/a.py','verified = True\\n');"
+                        "console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:" + json.dumps(json.dumps(report)) + "}}));"
+                        "console.log(JSON.stringify({type:'turn.completed'}));});}", encoding="utf-8")
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         config = {"port": port, "workspaceRoots": [str(project)], "selectionMode": "manual", "routes": [{
-            "id": "synthetic", "adapter": "custom", "executable": node, "enabled": True,
-            "billing": "free", "trustedSettings": True, "promptStdin": True,
-            "argsTemplate": [str(fake), "{effort}"], "models": [{
+            "id": "synthetic", "adapter": "codex", "executable": str(fake), "enabled": True,
+            "billing": "subscription", "trustedSettings": True, "promptStdin": True, "models": [{
                 "id": "synthetic-1.0", "alias": "Synthetic test", "group": "unassigned",
                 "efforts": ["low", "medium", "high"], "kinds": ["write"],
                 "memberships": [{"group": "low", "effort": "medium"}]}]}]}
@@ -51,12 +58,14 @@ def main(entry):
                "PB_AGENT_POOL_COMMAND": json.dumps([node, str(Path(entry).resolve())])}
         try:
             with patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()) as output:
+                B.set_session_modes(project, "P-ALL", "P-ALL", new=True)
                 assert AP.rpc("pool_get_policy")["selectionMode"] == "manual"  # Starts from stopped.
                 assert (state / "daemon.pid").is_file()
                 time.sleep(0.3)
                 assert AP.rpc("pool_list_pools")["pools"][2]["members"][0]["id"] == "synthetic-1.0"  # Survives caller exit.
                 selected = AP.select("L")
                 assert selected["request"]["effort"] == "medium"
+                assert selected["request"]["mode"] == "execute"
                 args = argparse.Namespace(force=False, timeout=15, cli="", model="", effort="", group="", dry_run=False)
                 task = B.find_task(project, "PB-001")
                 score = A.score_task(B, project, task)
@@ -72,7 +81,7 @@ def main(entry):
             if pidfile.is_file():
                 os.kill(int(pidfile.read_text()), signal.SIGTERM)
                 time.sleep(0.5)
-    print("PASS: real daemon auto-start survives RPC exit; Brain -> MCP -> native worker -> evidence; fixed effort and no replay")
+    print("PASS: real daemon auto-start survives RPC exit; Brain -> execute -> MCP -> native worker -> compact report -> evidence; fixed effort and no replay")
 
 
 if __name__ == "__main__":

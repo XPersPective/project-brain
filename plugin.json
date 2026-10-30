@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "project-brain",
-  "version": "3.5.1",
+  "version": "3.6.1",
   "description": "Git-native project memory, UI/Backend quality enforcement, task complexity scoring, CLI agent discovery, quota management, and sub-agent delegation.",
   "author": {
     "name": "XPersPective",
@@ -27,7 +27,7 @@
       "interface": {
         "displayName": "Project Brain",
         "shortDescription": "Plan, delegate, verify, review, and resume projects with quota-aware CLI workers",
-        "longDescription": "Project Brain 3.5.1 keeps plans, architecture and verification evidence in Git. Its dependency-free Python runtime supports upfront session EXEC/REV mode selection (Pool, Self/Native, Solo) for unattended execution and review, smart takeover/digest deduplication, owner model pools, fixed effort, quota reserves and write recovery. Artifact and test evidence are required before claiming task completion.",
+        "longDescription": "Project Brain 3.6.1 keeps plans, architecture and verification evidence in Git. Its dependency-free Python runtime supports upfront session EXEC/REV mode selection (Pool, Self/Native, Solo) for unattended execution and review, smart takeover/digest deduplication, owner model pools, fixed effort, quota reserves and write recovery. Artifact and test evidence are required before claiming task completion.",
         "developerName": "XPersPective",
         "category": "Productivity",
         "websiteURL": "https://github.com/XPersPective/project-brain",

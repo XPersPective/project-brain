@@ -8,11 +8,11 @@ description: >-
   optional native/CLI delegation and quota protection. Excludes store publishing.
 license: MIT
 metadata:
-  version: 3.5.1
+  version: 3.6.1
   author: XPersPective
 ---
 
-# Project Brain 3.5.1
+# Project Brain 3.6.1
 
 **One plan, many agents, verified handoffs.** Keep enough intent, decisions,
 unfinished work and evidence in the repository for a zero-history model to resume.
@@ -64,7 +64,10 @@ pending; never invent one. Verification aliases are operational metadata, not cr
 
 ## 2. Boot and session choices
 
-Run `PB boot` first; use `PB boot --read-only` for questions/audits that must not
+At a new top-level implementation session run `PB orient`, then `PB boot --new-session`.
+Orientation uses metadata/manifests without model calls. Do not edit source before
+the session-choice gate is READY. Within that session use normal `PB boot` to resume.
+Use `PB boot --read-only` for questions/audits that must not
 modify tracking. For no Brain, `PB map` gives a cheap repository/command overview.
 A source repository that explicitly retired its own Brain plan stays retired.
 Protocol 1 is enabled on init/upgrade unless compatibility 0 was explicitly set;
@@ -100,33 +103,50 @@ mark still-open checkboxes after inspecting that evidence.
 
 ### 2.1 Ask once: EXEC and REV
 
-At a new top-level implementation session, briefly summarize state/next task/tier,
-then ask once for EXEC and REV unless the user has already supplied these choices.
+After orientation summarize the project, next task and unknowns, then ask ONE short
+question for EXEC, REV, serial/parallel and response/execute unless already supplied.
+Never silently reuse another session's preference. A new-session boot clears old
+choices; protocol-1 execution commands refuse a missing choice.
 Do not ask for a read-only answer or require consumer setup to maintain this skill's
-source. Do not start Pool or spawn bootstrap workers before the applicable choice.
+source. Before choices, do not start Pool, probe providers or spend on workers.
+If the host explicitly provides a free native subagent, one bounded read-only
+orientation worker may read orient output and at most five relevant manifests or
+entrypoints, returning at most 150 words with paths and unknowns. Unknown cost is
+not free. Otherwise use deterministic orientation directly. Do not duplicate scans.
 
 Use the same codes for execution and review:
 
 | Code | Resource boundary |
 |---|---|
-| P-ALL | CLI Agent Pool: L/M/H work at matching strength/effort. |
-| P-ML | Pool for L/M work; main lead handles H implementation. |
-| P-L | Pool for L work; main lead handles M/H implementation. |
-| S-ALL | Main agent and available native subagents matched to task needs. |
-| S-ML | Main agent and only cheaper native subagents. |
-| SOLO | Main agent executes; REV=SOLO permits explicit self-review. |
+| pool-all | Pool for low / medium / high work. |
+| pool-medium | Pool for low / medium; main lead handles high work. |
+| pool-low | Pool for low; main lead handles medium / high work. |
+| native | Main agent and native subagents; Pool not required. |
+| native-low | Main agent and only cheaper native subagents. |
+| solo | Main agent alone; REV=solo permits explicit self-review. |
 
-Record `PB agents mode --new --exec <code> --rev <code> --note "<user choice>"`.
+Example: `PB agents mode --new --exec pool-medium --rev native --schedule parallel --max-parallel 4 --task-mode execute --note "User choice"`.
+`serial` permits one worker; `parallel` permits independent tasks up to max-parallel
+(1..32), further bounded by host/Pool limits. One writer per checkout: concurrent
+edits need separate worktrees and one integration writer. Scheduling is a director
+contract, not an automatic worktree creator/host scheduler. `response` means analysis;
+`execute` means edits/tools/checks and a short report. Internal tiers L/M/H map to
+low/medium/high; effort stays separate. Old P-ALL/P-ML/P-L/S-ALL/S-ML/SOLO aliases work.
 A single user code applies to both. `--new` clears an earlier choice; use it only at
 session start, not on each boot. Hosts may set `PB_SESSION_ID` to isolate choices;
 without a host ID, a recorded choice is a previous preference to confirm for a new
 session, not proof of fresh authorization. Worker sessions inherit the director's
 choice and never repeat the interview. `PB_EXEC_MODE`/`PB_REV_MODE` are host overrides.
+An explicit mid-session user directive may update agents mode without --new;
+changes apply to subsequent work, never mutate or replay dispatched jobs.
 
-Connect via `PB agents scan --json` only if either choice is P-*. Read [POOL.md](POOL.md)
+Connect via `PB agents scan --json` only if either resource choice is pool-*. Read [POOL.md](POOL.md)
 for Pool policy. Explicit `--backend direct`/`--registry` uses the separate approval
 protocol in [AGENTS_CLI.md](AGENTS_CLI.md). Never silently upgrade paid models/efforts.
 Native modes require host support; unavailable capabilities become concrete blockers.
+Pool 1.7+ implementations default to execute mode and validated compact reports;
+`delegate --mode response` requests analysis only. Task modes do not replace the
+session EXEC/REV resource choices. Upgrades preserve immutable old dispatches.
 Resource caps never lower review quality/risk floors or independence. If no eligible
 reviewer exists within REV, record the blocker and continue independent authorized
 work. Do not invent a reviewer or silently switch to SOLO.
@@ -142,52 +162,21 @@ architecture change needs only a relevant check and authorized checkpoint. New
 non-trivial work: `PB new . "title" --priority P1` per verifiable piece. Continue
 requests work the queue; new input steers the active task unless it replaces it.
 Record new requirements before losing Next/Failing/Dirty context.
+Split a multipart message into complete concise items and record
+`PB intake --item "..." --item "..." --relation related|question|new-work|cancel`.
+The durable requests.json ledger retains every item and the active resume task.
+Link directives with `intake --resolve RQ-NNN --task PB-NNN`; resolve answered
+questions without a task link. Never silently drop an item. Questions do not replace
+the active task: answer briefly, then resume its saved Next. Queue unrelated work
+unless the user changes priority; only explicit cancellation stops the objective.
 After setup, `PB security --ref none|<alias> --note "<user decision>"` records the
 project secret choice without values or personal paths. Missing credential access
 blocks only secret-dependent checks; continue fixture-based implementation.
 
 Write a ≤80-line task for a zero-history smaller model:
 
-```markdown
-# PB-014 — Persist invoice status filter
-Status: READY
-Priority: P2
-Tier: M
-Risk: MEDIUM
-Owner:
-Depends: -
-Areas: `src/invoices/**`, `tests/invoices/**`
-Inputs: `shared/invoice-schema.json`
-Purpose: implementation
-Secrets: none
-Domains: invoices
+Use the executable template created by `PB new`: Objective, numbered Steps, typed Acceptance, Verify commands, Areas/Inputs, Purpose and Secrets. See [SCHEMAS.md](SCHEMAS.md) for the complete format.
 
-## Objective
-"Keep my selected status after reload" (user).
-
-## Steps
-1. Trace `src/invoices/filter.ts` callers and existing storage contract.
-2. Persist the selected status using that contract; handle invalid stored values.
-3. Add reload and invalid-value coverage in `tests/invoices/filter.test.ts`.
-
-## Acceptance
-- [ ] [machine] reload restores status; invalid values use the default
-- [ ] [visual] compact/wide filtered views keep hierarchy and have no overflow
-- [ ] [interaction] change status, reload, reset; visible results match selection
-- [ ] [accessibility] keyboard selection and focus remain usable
-
-## Verify
-- `npm test -- tests/invoices/filter.test.ts`
-
-## Escalate if
-- stored values require changing another user's data
-
-## Evidence
-
-## Review
-
-## Notes
-```
 
 READY requires objective, numbered steps with concrete paths/symbols, observable
 Acceptance and backticked Verify commands. Avoid vague instructions. Specify outcomes,
@@ -260,6 +249,11 @@ readback: <how>`; unresolved operations survive handoff. Owner is bookkeeping, n
 
 Revise wrong task specs in place with a dated reason; contract changes invalidate
 old evidence. For target/task-graph changes use an ADR and impact pass over open tasks.
+Architecture is editable: update Current to observed code; change design within the
+authorized Goal using a task and an ADR when appropriate. Expand Areas before editing
+another area, reconcile affected intent and refresh affected proof. An old ADR,
+Current map or "only the user changes Goal" is not a blanket architecture freeze.
+Ask only for an actual change to user intent, external authority or explicit constraints.
 On a meaningful Target/constraint change reconcile affected tasks again. An explicit
 unchanged-outcome `reconcile --keep-evidence` preserves proof for editorial changes
 only; contract/source/input changes still invalidate it. Only the user changes Goal. Escalate decisions outside authorized intent, security,

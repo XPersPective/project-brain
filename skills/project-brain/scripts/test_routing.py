@@ -16,6 +16,8 @@ import runtime_pool as P
 def _project(root, legacy=True):
     with contextlib.redirect_stdout(io.StringIO()):
         B.cmd_init(root)
+    if not legacy:
+        B.set_session_modes(root, "SOLO", "SOLO", new=True)
     if legacy:
         cfg = B.parse_config(root)
         cfg["protocol_version"] = "0"  # This fixture exercises legacy routing compatibility.

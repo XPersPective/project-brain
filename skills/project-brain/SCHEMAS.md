@@ -9,7 +9,7 @@ Stable policy only — never HEAD, active task, timestamps, model, or test resul
 
 ```yaml
 schema_version: 4
-skill_version: "3.5.1"
+skill_version: "3.6.1"
 protocol_version: "1"
 architecture:
   mode: single          # domains: current/<d>.md, optional target/<d>.md; target.md always holds Goal/Status
@@ -29,6 +29,17 @@ followed by `#` comments. Quoted `#` is literal. Lists, block scalars, deeper ne
 future schema versions are rejected with exit 2; convert them explicitly rather than losing values.
 
 # current.md
+
+Session settings (`.cache/session_modes.json`, never committed) also hold
+`schedule: serial|parallel`, `max_parallel: 1..32`, `task_mode: response|execute`.
+Defaults are serial/1/execute; EXEC and REV must be explicitly chosen. A new-session
+boot clears old resource choices, not tasks, requests or dispatched jobs.
+
+`requests.json` is a schema-1 project ledger containing requests with id RQ-NNN,
+relation related/question/new-work/cancel, separate bounded items, status
+open/linked/answered, linked task and saved resume_task. `intake` writes it; no entry
+is a completion receipt or new authorization. Open directives require task mapping.
+Current architecture documents may be explicit Areas/Inputs; evidence/cache cannot.
 
 ```markdown
 # Current Architecture

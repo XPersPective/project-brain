@@ -1,4 +1,8 @@
-# Verification guide — Project Brain 3.5.1
+# Verification guide — Project Brain 3.6.1
+
+3.6.1 adds the Pool 1.8 request/effective-capability terminology. Catalog metadata
+is distinct from native authorization and provider quota; legacy text-only imports
+do not remove coding CLI tools. Native denial is still a blocker, never bypassed.
 
 Maintained record of how this source is verified, which invariants the tests
 protect and which limits remain. It replaces the former per-release audit and
@@ -6,6 +10,23 @@ delivery reports (11–18 under `docs/design/`); those remain in Git history and
 not active work or authorization. Update this file instead of adding new reports.
 
 ## Repeatable checks
+
+3.6 verification covers Pool 1.7 response/execute, compact reports, independent wait,
+mandatory protocol-1 session choices and fresh-session resets, serial/parallel
+settings, metadata-only orientation, complete multipart intake/focus/handoff,
+editable Current architecture inputs, compact catalogs and immutable old jobs.
+The migration fixture upgrades 3.5.1 with raw backups and no dispatch replay.
+The synthetic live integration exercises Brain -> execute -> MCP -> worker edits
+-> compact report -> independent Verify. Solo/native remain independent of Pool.
+Python 3.8 grammar checks pass; provider token savings are not measured. Source
+scope/test reuse and smaller metadata/catalog output reduce repeated context,
+but a skill cannot OS-enforce an editor that writes outside the Brain commands.
+On the local installed catalog, the previous complete status serialized to 65,044
+characters and the default compact catalog to 4,313, with no model inference.
+This measures response size, not billed tokens or model reasoning consumption.
+Installed semantic skill files are hash-checked across 42 managed deployments;
+the legacy Antigravity CLI copy is backed up and junction-linked to that central
+skill so subsequent updates reach it. User projects are not batch-migrated.
 
 ```text
 python -B skills/project-brain/scripts/test_brain.py

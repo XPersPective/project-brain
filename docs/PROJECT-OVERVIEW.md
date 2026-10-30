@@ -1,4 +1,4 @@
-# Project Brain 3.5.1
+# Project Brain 3.6.1
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,
@@ -12,6 +12,9 @@ session schema 1.
 - `scripts/brain.py`: CLI, tasks, checkpoints and validation.
 - `scripts/runtime_protocol.py`, `runtime_security.py`: intent/input guards, bounded
   continuity, external access contracts and output checks.
+- `scripts/runtime_session.py`: bounded metadata orientation, durable multipart
+  intake and saved-focus continuity. Session settings live in the ignored cache;
+  requests.json is durable project intent, separate from proof.
 - `scripts/runtime_verify.py`: checks, evidence, review, acceptance and containment.
 - `scripts/runtime_agents.py`, `runtime_pool.py`, `runtime_discovery.py`:
   discovery, model approval, quotas and durable job accounting.

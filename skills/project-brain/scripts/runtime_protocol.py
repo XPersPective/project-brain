@@ -117,6 +117,7 @@ def guard(B, root, task):
     independent = data.get("independent") is True and task.get("purpose") == "discovery"
     if not independent and B.target_status(root) != "CONFIRMED":
         raise ValueError("TARGET_PENDING: implementation requires CONFIRMED Target")
+    B.require_session(root)
 
 
 def inputs(task):
@@ -135,9 +136,11 @@ def task_digest(B, root, task):
         V.public_path(root, probe)
         if V.PRIVATE.search(pattern):
             raise ValueError("Private verification input refused; use the approved external binding")
-        if pattern.startswith(B.BRAIN_DIR + "/") and not pattern.startswith(B.BRAIN_DIR + "/decisions/"):
+        architecture_input = pattern == B.BRAIN_DIR + "/current.md" or pattern.startswith(B.BRAIN_DIR + "/current/")
+        if pattern.startswith(B.BRAIN_DIR + "/") and not pattern.startswith(B.BRAIN_DIR + "/decisions/") and not architecture_input:
             raise ValueError("Brain state is bound separately; do not include mutable evidence/cache as verification input")
-    for pattern in task.get("inputs", []):
+    state_inputs = [pattern for pattern in task.get("areas", []) if pattern == B.BRAIN_DIR + "/current.md" or pattern.startswith(B.BRAIN_DIR + "/current/")]
+    for pattern in list(dict.fromkeys(task.get("inputs", []) + state_inputs)):
         for candidate in Path(root).glob(pattern):
             V.public_path(root, candidate.relative_to(root).as_posix())
             paths = candidate.rglob("*") if candidate.is_dir() else [candidate]
@@ -276,6 +279,10 @@ def handoff(B, root, task):
             "open_criteria": [i["id"] for i in task["items"] if not i["done"]],
             "readback_required": any(e.get("state") in ("sent", "response_unknown") for e in task.get("external", [])),
             "private_logs": "not exported; new environments must recheck when receipts are unavailable"}
+    import runtime_session as RS
+    pending = [row for row in RS.ledger(B, root)["requests"] if row["status"] == "open"]
+    if pending:
+        data["intake"] = {"path": B.BRAIN_DIR + "/requests.json", "pending": [row["id"] for row in pending]}
     try:
         value, count = task_digest(B, root, task)
         data.update(digest=value, files=count, checks_reusable_here=V.current_checks(B, root, task, value, B.contract(task)))

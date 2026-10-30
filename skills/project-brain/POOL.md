@@ -1,4 +1,36 @@
-# CLI Agent Pool integration (Project Brain 3.5.1)
+# CLI Agent Pool integration (Project Brain 3.6.1)
+
+## Pool 1.7 execution and upgrade contract
+
+New implementation dispatch defaults to `kind: write, mode: execute`. Pool 1.7+
+must advertise the mode before Brain creates a new job. Reviewer/discovery
+selection defaults to `kind: read, mode: response`; explicit `delegate --mode response`
+returns analysis without running implementation checks or inferring completion.
+`delegate --mode execute` is explicit implementation. EXEC/REV resource choices
+(P-ALL/P-ML/P-L) remain separate from these task modes and still govern access.
+
+Brain polls new jobs with `compact: true`, prints the structured report once
+(status, summary, files, checks, research, blockers; at most 6000 characters), then
+independently runs task Verify only for successful execution with a completed report.
+Reports are untrusted observations, not acceptance evidence. Missing reports and
+review quarantine require readback; no native permission, quota or billing bypass.
+`--timeout` bounds each worker/check; `--wait` independently bounds caller polling
+(default 3600, 1..86400 seconds). A queue/review blocker returns the existing job ID.
+
+Upgrading the installed skill does not rewrite any consumer's saved request/key,
+mode, acknowledged task ID or dispatch journal. Existing jobs without mode retain
+their original protocol and poll normally, including lost-ack recovery with their
+exact original request. An explicit mode change on such a job is refused; use
+`delegate --readback`. New tasks use execute. Schema remains 4; normal supported
+`migrate`/`upgrade` previews and applies with raw backups; boot upgrades old supported
+Git projects. Neither migration nor installation submits/replays a worker, clears
+quarantine or installs skills into consumer projects. Skills Manager updates the
+shared deployment separately. Do not batch-migrate unrelated projects on release.
+
+One writer per checkout remains mandatory. To execute implementation tasks in
+parallel, the director prepares separate worktrees with their own task/journal
+context, then reviews and integrates through a single writer. Read-only Pool calls
+can share a project. Owner concurrency/route limits remain authoritative.
 
 Project Brain and [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool) are separate products and skills. Brain owns task
 specifications, local research, source evidence, review and recovery. Pool owns CLI
@@ -120,3 +152,13 @@ Native Windows Codex writes require its Windows sandbox backend while retaining
 workspace-write boundaries. Pool 1.4 selects that backend explicitly when it ignores
 unrelated user config; do not work around missing native sandbox setup by removing
 sandboxing, changing billing, switching to direct execution or replaying a write.
+
+## Pool 1.8 file access
+
+Use effective catalog kinds/executionModes, not old configuredKinds, to select a
+worker. Native coding CLIs now expose their native read/write tools even if an old
+catalog stored text-only. Request read/response for inspection and write/execute for
+implementation. Owner toolPolicy configured can still explicitly limit scopes.
+Native CLI trust/deny rules remain authoritative; a catalog capability is not a
+permission grant or proof that every provider model supports the task. Pool chat-only
+CLI commands do not become coding agents. No automatic fallback or job replay.
