@@ -1,4 +1,12 @@
-# CLI Agent Pool integration (Project Brain 3.6.1)
+# CLI Agent Pool integration (Project Brain 3.7.0)
+
+## Opt-in durable runs
+
+`PB runs` uses the existing Pool select/submit/get/cancel RPC schema. It prepares
+isolated EXECUTE worktrees and stores exact requests transactionally before send.
+The legacy delegate path and its journal keys are unchanged. Pool remains the
+authentication/quota/billing/process authority; no Brain dependency is added to
+the Pool product. See [ORCHESTRATION.md](ORCHESTRATION.md) before using the new path.
 
 ## Pool 1.7 execution and upgrade contract
 

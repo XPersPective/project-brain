@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.7.0 — 2026-11-01
+
+- Harden origin session authority, immutable worker identities/contracts, commit
+  and destination hooks, safe readback-only restore and explicit candidate rebuild.
+- Validate default-protocol independent review and acceptance on Python 3.8/3.11,
+  real Pool daemon transport, and actual read-only Codex host lifecycle probes.
+- Add opt-in durable `runs` orchestration: transactional private run/request/event
+  accounting shared by linked worktrees, exact-key Pool recovery, native host
+  receipts, conservative ready-set admission and serial drain.
+- Add read-only task packets/search, bounded director report/event views, and
+  separate snapshot, candidate checks, existing acceptance gates and integration.
+- Preserve legacy delegate journals and Pool RPC schemas; no Pool source change
+  or provider permission/billing fallback. Add safe export, SQLite backup and
+  conservative managed-worktree cleanup.
+- Move detailed execution references to WORKFLOW.md and document the native host
+  bridge and its limits. Real provider token savings remain unmeasured.
+
 ## 3.6.1 — 2026-10-30
 
 - Align Pool 1.8 native file capabilities with request scopes. Distinguish effective

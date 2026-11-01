@@ -20,6 +20,7 @@ from unittest.mock import patch
 import brain as B
 import runtime_agents as A
 import runtime_agent_pool as AP
+import runtime_verify as V
 from test_routing import _project
 
 
@@ -76,6 +77,51 @@ def main(entry):
                 assert (project / "src/a.py").read_text() == "verified = True\n"
                 assert "effort=medium" in output.getvalue()
                 assert "[machine]" in task["text"] and "check `" in task["text"], output.getvalue()
+                # New opt-in runs use the unchanged real Pool RPC schema and an
+                # isolated workspace; no live model/provider is involved.
+                import runtime_orchestration as O
+                import runtime_runs as L
+                isolated = root / "orchestrated"
+                isolated.mkdir()
+                _project(isolated, legacy=False)
+                import runtime_protocol as R
+                B.write_atomic(B.bp(isolated) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nValidate default-protocol Pool execution and acceptance.\n")
+                fixture_task = B.find_task(isolated, "PB-001")
+                B.write_atomic(fixture_task["file"], B.read(fixture_task["file"]).replace("Areas: `src/**`", "Areas: `src/**`, `runs.txt`"))
+                B.set_session_modes(isolated, "pool-all", "pool-all")
+                R.reconcile(B, isolated, B.find_task(isolated, "PB-001"), "Synthetic Pool default-protocol fixture")
+                O.git(isolated, "init")
+                O.git(isolated, "config", "user.name", "Fixture Human")
+                O.git(isolated, "config", "user.email", "human@example.invalid")
+                O.git(isolated, "add", ".")
+                O.git(isolated, "commit", "-m", "Synthetic integration fixture")
+                B.set_session_modes(isolated, "pool-all", "pool-all")
+                directory = L.directory(B, isolated)
+                ledger = L.Ledger(directory / "runs.sqlite3")
+                try:
+                    run = O.prepare(B, isolated, ledger, directory, "PB-001", "EXECUTE", "pool")
+                    O.submit(B, isolated, ledger, directory, run["id"])
+                    deadline = time.monotonic() + 30
+                    while ledger.get(run["id"])["state"] in L.ACTIVE and time.monotonic() < deadline:
+                        time.sleep(.1)
+                        O.observe(B, isolated, ledger, directory, run["id"])
+                    assert ledger.get(run["id"])["state"] == "SUCCEEDED", O.summary(ledger.get(run["id"]))
+                    workspace = O.workspace(run, directory)
+                    assert (workspace / "src/a.py").read_text() == "verified = True\n"
+                    assert not (isolated / "runs.txt").exists()
+                    assert ledger.get(run["id"])["verification"] == "PENDING"
+                    checked = O.verify(B, isolated, ledger, directory, run["id"], "")
+                    assert checked["exit"] == 0, checked
+                    candidate = Path(checked["candidate"])
+                    candidate_task = B.find_task(candidate, "PB-001")
+                    assert candidate_task["owner"] == AP.alias(selected["selected"])
+                    B.write_atomic(candidate_task["file"], B.read(candidate_task["file"]).replace("- [ ] [machine]", "- [x] [machine]"))
+                    accepted, lines = V.accept(B, candidate, "PB-001", actor=candidate_task["owner"])
+                    assert accepted == 0, lines
+                    assert O.integrate(B, isolated, ledger, directory, run["id"])["integration"] == "MERGED"
+                    assert (isolated / "runs.txt").read_text() == "one\n"
+                finally:
+                    ledger.close()
         finally:
             pidfile = state / "daemon.pid"
             if pidfile.is_file():

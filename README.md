@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **3.6.1** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
+Current release: **3.7.0** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
@@ -14,6 +14,11 @@ writes target + task plan         commits each verified step         repairs pla
 ```
 
 ## Why
+
+3.7 adds opt-in [durable orchestration](skills/project-brain/ORCHESTRATION.md):
+isolated workers, transactional run accounting, exact-key recovery and compact
+director views, while existing task acceptance and legacy delegation stay in place.
+Native execution requires a host bridge; real token savings are not yet measured.
 
 Long projects outlive sessions: tokens run out, sessions crash, you switch models or vendors. Project
 Brain keeps the state where every agent can read it — in the repository — and holds every agent to one

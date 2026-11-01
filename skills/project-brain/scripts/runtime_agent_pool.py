@@ -96,7 +96,7 @@ def remember(model, data=None):
                            "roles": ["worker", "lead", "reviewer"], "tiers": ["L", "M", "H"],
                            "efforts": model.get("efforts", [])}
     if persist:
-        A.save(data)
+        A.register_model(key, data["models"][key])
     return key
 
 
@@ -169,7 +169,13 @@ def gate(B, task, spec, actor, action, root=None):
         strengths = [m.get("group") for m in matches if m.get("enabled") and m.get("group") in allowed]
         if not strengths and automatic:
             strengths = [m.get("suggestedGroup") for m in matches if m.get("enabled") and m.get("suggestedGroup") in allowed]
-        return {"poolStrength": min(strengths, key=levels.index)}
+        strength = min(strengths, key=levels.index)
+        if root is not None:
+            import runtime_runs as runs
+            bound = runs.implementation_strength(B, root, task["id"], actor)
+            if bound and levels.index(bound) > levels.index(strength):
+                strength = bound
+        return {"poolStrength": strength}
     if action == "review":
         import runtime_agents as A
         implementers = V.implementers(B, task)

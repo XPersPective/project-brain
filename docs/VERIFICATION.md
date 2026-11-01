@@ -1,4 +1,51 @@
-# Verification guide — Project Brain 3.6.1
+# Verification guide — Project Brain 3.7.0
+
+2026-11-01 final validation: full test_brain.py exited 0 under Windows Python
+3.8.20 and 3.11.15. Separate Pool 1.8.1 real-daemon/synthetic-CLI integration exited
+0. Python 3.8 grammar, local links, manifest versions and diff checks passed.
+The 64-file release ZIP passed CRC/SHA-256, extracted CLI and production-regression
+checks; two consecutive index-identical builds produced the same SHA-256.
+
+3.7 adds opt-in durable orchestration without changing legacy delegation. The
+production regressions in `test_orchestration_production.py` use protocol 1 with
+confirmed intent, immutable actual worker identity, a distinct native reviewer and
+the existing source/environment-bound check/review/accept gates. They are included
+in `test_brain.py` alongside `test_orchestration.py`.
+
+An independent read-only auditor reproduced launch-policy, candidate-contract,
+identity, commit-hook and destination-hook defects during development. These are
+fixed and covered by regressions. The final scoped independent review (including
+rejection from a linked worker after lost merge acknowledgement) found no
+reproducible release-blocking P1; that is not a universal correctness guarantee.
+
+Coverage includes two actual OS clients contending for capacity, serial drain of
+prepared/running jobs, immutable exact-key recovery, normalized same-model review
+rejection despite missing registry records, copied-session authority, candidate
+and destination mutation rejection, collected-task merge readback, retained bad
+candidates, rejection of inspected partial results without automatic retry,
+hash-checked log transfer, and readback-only restore into a different
+clean Git clone while the original job stays RUNNING.
+
+The separate real CLI Agent Pool 1.8.1 daemon test uses a synthetic CLI. It proves
+actual isolated edits plus default-protocol start/check/accept/integrate through
+the unchanged Pool RPC schema and actual selected model alias. It proves transport
+and artifact handling, not paid-provider model quality or quota availability.
+
+On 2026-11-01 the Codex collaboration host launched a real read-only native review
+worker against a temporary fixture, collected its structured report, and left the
+source unchanged. A second real worker was observed RUNNING, interrupted through
+the host, then observed INTERRUPTED before CANCELLED was recorded. State/result
+readback used new Python processes and the persisted ledger. A malformed first
+report was corrected as report formatting in the same job, without replaying work.
+The host did not report exact model identity or token counters; they remain unknown.
+Other hosts and arbitrary provider/model combinations are not certified by this test.
+
+The skill entry was reduced from 19,877 to 12,059 LF-normalized UTF-8 bytes by
+moving detailed rules to WORKFLOW.md. Applicable rules remain mandatory. This is
+not a billed-token/reasoning benchmark. `runs metrics` preserves failures/unknowns,
+rejects mismatched acceptance contracts, and does not claim the proposed 50% pilot
+target when real counters are absent. Token savings remain an unmeasured performance
+objective, not an advertised release guarantee.
 
 3.6.1 adds the Pool 1.8 request/effective-capability terminology. Catalog metadata
 is distinct from native authorization and provider quota; legacy text-only imports
@@ -47,8 +94,10 @@ Optional live Pool integration (fresh private data directory, synthetic worker):
 python -B skills/project-brain/scripts/test_pool_integration.py --pool-entry <Pool>/bin/pool.js
 ```
 
-All Python files must parse with Python 3.8 grammar. Runtime evaluation has been on
-Windows/Python 3.11; actual Python 3.8/POSIX execution is not claimed.
+All Python files must parse with Python 3.8 grammar. Windows runtime checks use
+Python 3.8.20 and 3.11.15. The private host-adapter fixture resolves the interpreter
+path to avoid an installation junction; runtime link rejection remains enforced.
+POSIX execution is not claimed without a separate actual POSIX run.
 
 ## Protected invariants
 
@@ -86,6 +135,14 @@ Windows/Python 3.11; actual Python 3.8/POSIX execution is not claimed.
 
 ## Limits
 
+Native receipts declare host observations, not authenticated identity or measured
+model strength. Unknown identity cannot authorize independent review. Literal
+search is paginated and scan-budgeted, not a semantic dependency graph. Conflicts
+need explicit repair/rebuild and fresh checks. Dirty worktrees and request keys
+are retained. Restore relocates private observations only: imported jobs cannot
+be submitted, cancelled, snapshotted, integrated or cleaned by the copy. No remote
+process-control transfer or distributed/network-filesystem scheduler is claimed.
+
 Hashes establish freshness, not truth or product quality. Review/approval records
 are not authenticated identity. ProcessTree is process containment, not a
 filesystem/network sandbox; host capability declarations do not install isolation.
@@ -107,8 +164,9 @@ first-pass acceptance and review findings; tune routing/effort from that data.
 1. Keep the version identical in `SKILL.md`, `SCHEMAS.md`, `brain.py`, both plugin
    manifests, `README.md`, `docs/PROJECT-OVERVIEW.md` and `CHANGELOG.md`.
 2. Run the checks above.
-3. Build `dist/project-brain-<version>.zip` (+ `.sha256`) from tracked files only;
-   `dist/` is ignored and holds only the current package. Smoke-test the extracted
-   `brain.py --version`.
+3. Stage reviewed source, then `python tools/build_release.py`. It builds
+   `dist/project-brain-<version>.zip` + `.sha256` from Git-index bytes only and
+   smoke-tests extracted version/CLI commands. Rebuild to check reproducibility.
+   `dist/` is ignored; preserve older user archives rather than deleting blindly.
 4. Commit with the human identity and push. Installed skill copies are refreshed
    separately (Skills Manager); no consumer project is migrated by a release.

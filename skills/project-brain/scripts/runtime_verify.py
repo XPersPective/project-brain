@@ -715,7 +715,10 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, s
             models = runtime_agents.load(registry).get("models", {}) if registry.exists() else {}
             if reviewer not in models:
                 raise ValueError("REVIEW_PROVENANCE_PENDING: independent reviewer must be registered; a different alias alone is not evidence")
-        runtime_agents.gate(B, task, reviewer, "review", agents_path, root=root)
+        policy = runtime_agents.gate(B, task, reviewer, "review", agents_path, root=root) or {}
+        report = policy.get("review_report")
+        if report is not None and (report["verdict"] != verdict or not set(report["findings"]).issubset(set(findings))):
+            raise ValueError("Review verdict/findings must retain the native worker's actual report")
     for f in findings:
         if any(ord(c) < 32 for c in f):
             raise ValueError("Finding must be one line without control characters")

@@ -649,6 +649,22 @@ def save(data, path=None):
     return p
 
 
+def register_model(alias, record):
+    """Merge one observed model under a registry-wide OS lock across projects."""
+    import brain as B
+    registry = registry_path().absolute()
+    key = hashlib.sha256(str(registry).encode("utf-8")).hexdigest()[:24]
+    root = Path(tempfile.gettempdir()) / "project-brain-registry-locks" / key
+    if any(V.is_link(p) for p in [root] + list(root.parents)):
+        raise ValueError("Linked registry lock refused")
+    (root / B.BRAIN_DIR).mkdir(parents=True, exist_ok=True)
+    with B.checkout_lock(root, name="registry.lock"):
+        data = load()
+        data["models"][alias] = record
+        save(data)
+    return alias
+
+
 def deep_merge(dst, src):
     for k, v in src.items():
         if isinstance(v, dict) and isinstance(dst.get(k), dict):
@@ -1203,6 +1219,11 @@ def gate(B, task, alias, action, path=None, root=None):
     data = load(p)
     selected = None
     spec = data.get("models", {}).get(alias)
+    if isinstance(spec, dict) and spec.get("native_orchestration"):
+        if root is None:
+            raise ValueError("Native orchestration actors require project-bound receipts")
+        import runtime_orchestration as O
+        return O.native_gate(B, root, task, alias, action)
     if action == "review" and task:
         implementers = V.implementers(B, task)
         backend_flags = [bool(data.get("models", {}).get(i, {}).get("pool_route")) or bool(re.fullmatch(r"pool/[0-9a-f]{24}", i)) for i in implementers]

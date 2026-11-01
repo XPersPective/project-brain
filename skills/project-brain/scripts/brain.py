@@ -40,12 +40,13 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 
-VERSION = "3.6.1"
+VERSION = "3.7.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -1979,6 +1980,8 @@ def main():
     ap = argparse.ArgumentParser(description="Project Brain planning and verification helper", epilog="See SKILL.md.")
     ap.add_argument("--version", action="version", version=f"project-brain {VERSION} (schema {SCHEMA})")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    import runtime_orchestration as O
+    O.add_parser(sub)
 
     for name in ("boot", "map", "init", "changed", "validate", "doctor"):
         parser = sub.add_parser(name)
@@ -2162,6 +2165,10 @@ def main():
 
     a = ap.parse_args(_reorder_argv(sys.argv[1:]))
     B_mod = sys.modules[__name__]
+
+    if a.cmd == "runs":
+        print(json.dumps(O.command(B_mod, a), ensure_ascii=False))
+        return 0
 
     if a.cmd == "agents":
         if a.agents_cmd == "mode":
@@ -2350,6 +2357,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, sqlite3.Error) as exc:
         print(f"FAIL {exc}", file=sys.stderr)
         sys.exit(2)

@@ -678,3 +678,7 @@ if __name__ == "__main__":
     handoff_checks()
     from test_production import main as production_checks
     production_checks()
+    from test_orchestration import main as orchestration_checks
+    orchestration_checks()
+    from test_orchestration_production import main as orchestration_production_checks
+    orchestration_production_checks()

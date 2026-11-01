@@ -1,4 +1,4 @@
-# Project Brain 3.6.1
+# Project Brain 3.7.0
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,
@@ -15,6 +15,11 @@ session schema 1.
 - `scripts/runtime_session.py`: bounded metadata orientation, durable multipart
   intake and saved-focus continuity. Session settings live in the ignored cache;
   requests.json is durable project intent, separate from proof.
+- `scripts/runtime_context.py`, `runtime_reports.py`: source-bound task packets,
+  literal read-only discovery, validated reports and bounded lead-agent views.
+- `scripts/runtime_runs.py`, `runtime_orchestration.py`: opt-in SQLite run/request/
+  event accounting, admission, isolated workspaces, Pool/native transport boundary,
+  candidate checks, acceptance-gated integration, export, backup and safe cleanup.
 - `scripts/runtime_verify.py`: checks, evidence, review, acceptance and containment.
 - `scripts/runtime_agents.py`, `runtime_pool.py`, `runtime_discovery.py`:
   discovery, model approval, quotas and durable job accounting.
@@ -30,6 +35,18 @@ session schema 1.
   release procedure.
 - [Evidence recovery](design/decisions/ADR-001.md).
 - [Architecture decision](design/decisions/ADR-003.md).
+- [Orchestration decision](design/decisions/ADR-004.md).
+
+## Orchestration development
+
+- [Orchestration roadmap](design/ORCHESTRATION-ROADMAP.md): requested future work
+  prioritizing the main agent's token consumption and end-to-end delivery time.
+  The opt-in implementation and executable checks are present. The roadmap keeps
+  release evidence and host limits explicit, including the real Codex read-only
+  lifecycle probe, relocated readback-only restore, and unknown provider counters. It is the single development ledger, not a revival
+  of the completed temporary `.project-brain/` plan.
+  [User protocol](../skills/project-brain/ORCHESTRATION.md) describes runnable
+  commands and conservative recovery boundaries.
 
 Superseded audits, prompts, completed plans and machine-specific notes remain in Git history.
 They are not active work or authorization. This source repository's temporary
@@ -42,6 +59,11 @@ Hashes establish freshness, not truth or product quality. Approval records are n
 authenticated identity. Process containment is not a filesystem/network sandbox.
 Unknown quota requires an approved job cap; readings cannot reserve capacity against
 other clients. OmniRoute coding work needs an explicit coding-agent adapter.
+Native launch/attach/cancel and counters depend on the calling host. This update
+was initially developed SOLO/SERIAL, then independently reviewed and exercised
+with real read-only Codex native workers on 2026-11-01. Other hosts/providers
+require their own validation; this is not blanket live-provider certification. Dirty worktrees and all dedup keys
+are retained; worktree isolation does not hide Brain or install a sandbox.
 Application store publishing remains outside scope.
 
 Foreign tracker adoption requires preview, reconciliation, verified archive and

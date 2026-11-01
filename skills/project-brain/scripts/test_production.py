@@ -254,8 +254,8 @@ def main():
             cmd = task["verify_cmds"][0]
             config = {"project": str(root.resolve()), "reference": "vault-alias",
                       "capabilities": ["credential_broker", "filesystem_isolation"],
-                      "commands": {cmd: [sys.executable, str(adapter)]},
-                      "scanner_argv": [sys.executable, str(scanner)]}
+                      "commands": {cmd: [str(Path(sys.executable).resolve()), str(adapter)]},
+                      "scanner_argv": [str(Path(sys.executable).resolve()), str(scanner)]}
             private.write_text(json.dumps(config), encoding="utf-8")
             with patch.dict(os.environ, {"PB_PRIVATE_BINDING": str(private)}):
                 assert V.check(B, root, task["id"])[0] == 0

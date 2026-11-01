@@ -69,6 +69,10 @@ def intake(B, root, items, relation="related", task="", resolve=""):
 
 
 def boot_summary(B, root):
+    import runtime_runs as runs
+    for row in runs.peek(B, root):
+        print("RUN_READBACK: " + json.dumps(row, separators=(",", ":")) +
+              " | inspect existing backend job before takeover; no replay")
     data = ledger(B, root)
     pending = [row for row in data["requests"] if row["status"] == "open"]
     if pending:

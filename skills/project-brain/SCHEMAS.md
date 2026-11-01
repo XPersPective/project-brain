@@ -1,5 +1,9 @@
 # Project Brain — Schemas (schema 4)
 
+Opt-in `runs` adds a separate private SQLite schema 1; consumer project schema
+remains 4 and legacy immutable dispatch journals are untouched. See
+[ORCHESTRATION.md](ORCHESTRATION.md) for run/receipt/backup boundaries.
+
 `brain.py init` and `brain.py new` write these templates; `brain.py migrate` converts older ones. Read this
 file to change a format, interpret a trailer, or understand a migration.
 
@@ -9,7 +13,7 @@ Stable policy only — never HEAD, active task, timestamps, model, or test resul
 
 ```yaml
 schema_version: 4
-skill_version: "3.6.1"
+skill_version: "3.7.0"
 protocol_version: "1"
 architecture:
   mode: single          # domains: current/<d>.md, optional target/<d>.md; target.md always holds Goal/Status
