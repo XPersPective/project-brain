@@ -46,7 +46,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.7.1"
+VERSION = "3.7.3"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -1987,7 +1987,7 @@ def main():
     import runtime_orchestration as O
     O.add_parser(sub)
 
-    for name in ("boot", "map", "init", "changed", "validate", "doctor"):
+    for name in ("boot", "brief", "map", "init", "changed", "validate", "doctor"):
         parser = sub.add_parser(name)
         parser.add_argument("root", nargs="?", default=".")
         if name == "boot":
@@ -2152,6 +2152,7 @@ def main():
     sp_sel.add_argument("--cli", default="")
     sp_sel.add_argument("--exclude", default="")
     sp_sel.add_argument("--json", action="store_true")
+    sp_sel.add_argument("--full", action="store_true")
     sp_sel.add_argument("--registry", default=None)
     sp_mrg = ag_sub.add_parser("merge")
     sp_mrg.add_argument("file")
@@ -2306,6 +2307,9 @@ def main():
     if not root.is_dir():
         print(f"error: not a directory: {root}", file=sys.stderr)
         return 1
+    if a.cmd == "brief":
+        import runtime_session as RS
+        return RS.brief(sys.modules[__name__], root)
     if a.cmd == "boot":
         if a.new_session and a.read_only:
             raise ValueError("--new-session writes the session record; omit --read-only")

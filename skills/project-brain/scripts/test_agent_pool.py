@@ -46,6 +46,46 @@ def main():
             assert selected["request"]["effort"] == "high"  # Owner effort beats task heuristic.
             assert selected["request"]["minRemainingPercent"] == 10
             assert AP.select("H", "reviewer")["request"]["minRemainingPercent"] == 25
+            modern_policy = {"entries": {"pools": [], "catalog": []}, "run": {}, "result": {}, "permissions": {}}
+            modern_row = {"routeId": "modern", "modelId": "m-1", "category": "low",
+                          "effort": "low", "efforts": ["low", "medium", "high"], "kinds": ["read"]}
+            def modern_rpc(tool, arguments=None):
+                if tool == "pool_get_policy": return modern_policy
+                if tool == "pool_select": return {"selected": dict(modern_row), "alternatives": 4}
+                raise AssertionError(tool)
+            with patch.object(AP, "rpc", side_effect=modern_rpc):
+                modern_selected = AP.select("L", route="modern", model="m-1", effort="high", mode="response")
+                assert modern_selected["selected"]["id"] == "m-1"
+                assert modern_selected["selected"]["group"] == "low"
+                assert modern_selected["selected"]["defaultEffort"] == "low"
+                assert modern_selected["request"]["effort"] == "high"
+                assert AP.compact_catalog({"policy": {}, "pools": {}, "catalog": {"total": 0}})["catalog"]["total"] == 0
+                assert AP.alternatives_count({"alternatives": 4}) == 4
+                assert AP.alternatives_count({"alternatives": [{}, {}]}) == 2
+            metadata_calls = []
+            def metadata_rpc(tool, arguments=None):
+                metadata_calls.append(tool)
+                return {"policy": 1} if tool == "pool_get_policy" else {"total": 0}
+            with patch.object(AP, "rpc", side_effect=metadata_rpc):
+                compact = AP.compact_catalog(AP.modern_status())
+                assert set(compact) >= {"policy", "pools", "catalog"}
+                assert metadata_calls == ["pool_get_policy", "pool_list_pools", "pool_catalog"]
+            with patch.object(AP, "rpc", return_value={"models": [], "nextOffset": None}) as metadata:
+                AP.modern_status(modern_policy, full=True)
+                assert metadata.call_args.args == ("pool_catalog", {"view": "models", "limit": 12})
+            assert not AP.normalize_model(dict(modern_row, hidden=True))["enabled"]
+            with patch.object(AP, "rpc", return_value=[]):
+                try:
+                    AP.targeted_models("modern", "m-1")
+                    raise AssertionError("malformed catalog accepted")
+                except ValueError as exc:
+                    assert "Malformed" in str(exc)
+            with patch.object(AP, "rpc", side_effect=lambda tool, arguments=None:
+                    {"selectionMode": "manual", "taskModes": ["response", "execute"]} if tool == "pool_get_policy"
+                    else {"selected": dict(model, efforts=["high"])}):
+                assert AP.select("L", effort="low")["request"]["effort"] == "high"
+            assert AP.normalize_model(dict(model))["fixedEffort"] == "high"
+            assert AP.select("L")["request"]["effort"] == "high"  # Legacy fixed-effort precedence remains.
             _project(root)
             B.set_session_modes(root, "P-ALL", "P-ALL", new=True)
             task = B.find_task(root, "PB-001")
@@ -101,6 +141,26 @@ def main():
                 raise AssertionError("self-review admitted")
             except ValueError as exc:
                 assert "different" in str(exc)
+            # Modern exact lookup pages are bounded, exact-filtered, and expand categories to memberships.
+            reviewer = dict(model, id="reviewer-modern", routeId="modern", group="low")
+            entry["taskId"], entry["strength"] = "task-123", "high"
+            B.write_atomic(AP.journal_path(root, task["id"]), json.dumps(entry))
+            def modern_gate_rpc(tool, arguments=None):
+                if tool == "pool_get_policy": return modern_policy
+                if tool == "pool_catalog":
+                    if arguments["offset"] == 0:
+                        return {"models": [{"routeId": "other", "modelId": "wrong", "categories": ["high"]}], "nextOffset": 12}
+                    return {"models": [{"routeId": "modern", "modelId": "reviewer-modern", "categories": ["medium"], "effort": "medium", "efforts": ["medium"]}]}
+                raise AssertionError(tool)
+            with patch.object(AP, "rpc", side_effect=modern_gate_rpc):
+                memberships = AP.targeted_models("modern", "reviewer-modern")
+                assert [m["group"] for m in memberships] == ["medium"]
+                AP.remember(reviewer)
+                try:
+                    AP.gate(B, task, A.load()["models"][AP.alias(reviewer)], AP.alias(reviewer), "review", root)
+                    raise AssertionError("weaker modern reviewer admitted")
+                except ValueError as exc:
+                    assert "below" in str(exc)
             # Review reads immutable dispatch strength, not the model's latest selection.
             entry["taskId"], entry["strength"] = "task-123", "high"
             B.write_atomic(AP.journal_path(root, task["id"]), json.dumps(entry))

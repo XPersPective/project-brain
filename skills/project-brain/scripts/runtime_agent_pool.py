@@ -59,13 +59,50 @@ def rpc(tool, arguments=None):
     return value
 
 
-def status():
-    return {"backend": "cli-agent-pool", "policy": rpc("pool_get_policy"),
+def status(policy=None):
+    return {"backend": "cli-agent-pool", "policy": policy if policy is not None else rpc("pool_get_policy"),
             "pools": rpc("pool_list_pools"), "connections": rpc("pool_list_connections"),
             "models": rpc("pool_list_models")}
 
 
+def modern(policy):
+    return isinstance(policy, dict) and isinstance(policy.get("entries"), dict) and "run" in policy
+
+
+def normalize_model(model):
+    """Map compact CAP metadata onto the stable Brain registry vocabulary."""
+    value = dict(model)
+    if "id" not in value and "modelId" in value:
+        value["id"] = value["modelId"]
+    if "group" not in value and "category" in value:
+        value["group"] = value["category"]
+    if "defaultEffort" not in value and "effort" in value:
+        value["defaultEffort"] = value["effort"]
+    if "enabled" not in value:
+        value["enabled"] = not value.get("disabled", False)
+    if value.get("disabled") or value.get("hidden"):
+        value["enabled"] = False
+    return value
+
+
+def alternatives_count(value):
+    alternatives = value.get("alternatives", [])
+    return alternatives if isinstance(alternatives, int) else len(alternatives)
+
+
+def modern_status(policy=None, full=False):
+    policy = policy if policy is not None else rpc("pool_get_policy")
+    pools = rpc("pool_list_pools")
+    catalog = rpc("pool_catalog", {"view": "models", "limit": 12} if full else {})
+    return {"backend": "cli-agent-pool", "policy": policy, "pools": pools,
+            "catalog": catalog, "models": [], "connections": []}
+
+
 def compact_catalog(value):
+    if value.get("catalog") is not None:
+        return {"backend": "cli-agent-pool", "policy": value["policy"],
+                "pools": value["pools"], "catalog": value["catalog"],
+                "next": "Use agents select --task for admission; catalog is a summary, not a login or execution check"}
     policy = value["policy"]
     groups = []
     for group in ("low", "medium", "high"):
@@ -105,7 +142,8 @@ def select(tier="M", role="worker", route="", model="", effort="", group="", mod
     if mode not in ("response", "execute"):
         raise ValueError("Pool mode must be response or execute")
     policy = rpc("pool_get_policy")
-    if mode not in policy.get("taskModes", []):
+    is_modern = modern(policy)
+    if not is_modern and mode not in policy.get("taskModes", []):
         raise ValueError("CLI Agent Pool 1.7+ with response/execute support is required for new dispatch; upgrade Pool, not an existing job request")
     group = group or GROUPS.get(tier, "medium")
     request = {"kind": "write" if mode == "execute" else "read", "mode": mode, "group": group,
@@ -119,7 +157,7 @@ def select(tier="M", role="worker", route="", model="", effort="", group="", mod
     try:
         result = rpc("pool_select", request)
     except ValueError as exc:
-        if "NO_ROUTE" not in str(exc) or policy["selectionMode"] != "auto":
+        if is_modern or "NO_ROUTE" not in str(exc) or policy.get("selectionMode") != "auto":
             raise
         # ponytail: owner-unassigned automatic models use Pool's conservative name hints;
         # unknown capability stays unavailable until the owner assigns a strength pool.
@@ -140,12 +178,24 @@ def select(tier="M", role="worker", route="", model="", effort="", group="", mod
                     raise
         if result is None:
             raise ValueError("No suitable model in %s pool; assign models in CLI Agent Pool" % group)
-    chosen = result["selected"]
+    chosen = normalize_model(result["selected"])
+    result["selected"] = chosen
     # Fixed effort wins. Otherwise pick the task effort only if the CLI supports it.
-    requested = chosen.get("fixedEffort") or (None if effort == "default" else effort) or chosen.get("defaultEffort")
+    explicit_supported = effort not in ("", "default") and effort in chosen.get("efforts", [])
+    if is_modern:
+        requested = effort if explicit_supported else chosen.get("defaultEffort")
+    else:
+        requested = chosen.get("fixedEffort") or (None if effort == "default" else effort) or chosen.get("defaultEffort")
+    if requested and chosen.get("efforts") and requested not in chosen["efforts"]:
+        if chosen.get("fixedEffort"):
+            raise ValueError("Pool returned an unsupported fixed effort")
+        requested = None
     if not requested and effort != "default":
         preferred = {"low": "low", "medium": "medium", "high": "high"}[group]
         requested = preferred if preferred in chosen.get("efforts", []) else None
+    supported_efforts = chosen.get("efforts", []) if is_modern else chosen.get("efforts", [effort])
+    if effort not in ("", "default") and effort not in supported_efforts and (is_modern or not chosen.get("fixedEffort")):
+        raise ValueError("Requested effort is not supported by the selected Pool model")
     request.update(routeId=chosen["routeId"], modelId=chosen["id"])
     if requested:
         request["effort"] = requested
@@ -153,14 +203,51 @@ def select(tier="M", role="worker", route="", model="", effort="", group="", mod
     return result
 
 
+def targeted_models(route, model_id):
+    """Read a bounded, exact model lookup without enumerating the provider catalog."""
+    rows = []
+    offset = 0
+    complete = False
+    for _ in range(4):
+        page = rpc("pool_catalog", {"view": "models", "query": model_id,
+                                    "routeId": route, "limit": 12, "offset": offset})
+        if not isinstance(page, dict) or not isinstance(page.get("models"), list):
+            raise ValueError("Malformed Pool catalog page; cannot prove model suitability")
+        models = page["models"]
+        for raw in models:
+            item = normalize_model(raw)
+            if item.get("routeId") != route or item.get("id") != model_id:
+                continue
+            cats = raw.get("categories")
+            if isinstance(cats, list):
+                rows.extend(dict(item, group=category) for category in cats)
+            else:
+                rows.append(item)
+        next_offset = page.get("nextOffset")
+        if next_offset is None:
+            complete = True
+            break
+        if not isinstance(next_offset, int) or next_offset <= offset:
+            break
+        offset = next_offset
+    if not complete:
+        raise ValueError("Pool targeted catalog lookup is incomplete; cannot prove model suitability")
+    return rows
+
+
 def gate(B, task, spec, actor, action, root=None):
     if action == "accept":
         return
-    models = rpc("pool_list_models")
-    matches = [m for m in models if m["routeId"] == spec["pool_route"] and m["id"] == spec["model_id"]]
+    policy = rpc("pool_get_policy")
+    is_modern = modern(policy)
+    if is_modern:
+        matches = targeted_models(spec["pool_route"], spec["model_id"])
+    else:
+        models = rpc("pool_list_models")
+        matches = [normalize_model(m) for m in models if m["routeId"] == spec["pool_route"] and m["id"] == spec["model_id"]]
     tier = __import__("runtime_agents").score_task(B, None, task)["effective_tier"]
     needed = GROUPS[tier]
-    automatic = rpc("pool_get_policy")["selectionMode"] == "auto"
+    automatic = policy.get("selectionMode") == "auto"
     levels = ["low", "medium", "high"]
     allowed = levels[levels.index(needed):]
     if not any(m.get("enabled") and (m.get("group") in allowed or automatic and m.get("suggestedGroup") in allowed) for m in matches):
@@ -371,7 +458,7 @@ def agents(B, args):
         raise ValueError("Select a Pool EXEC or REV mode before connecting to CLI Agent Pool")
     sub = args.agents_cmd
     if sub == "select":
-        tier = (args.tier or ("H" if args.role in ("lead", "reviewer") else "M")).upper()
+        tier = (args.tier or ("L" if args.role == "discovery" else "H" if args.role in ("lead", "reviewer") else "M")).upper()
         if args.task:
             task = B.find_task(Path(args.root).resolve(), args.task)
             if not task:
@@ -387,21 +474,32 @@ def agents(B, args):
         value = select(tier, args.role, route=args.cli, mode=task_mode)
         remember(value["selected"])
     else:
-        value = status()
+        policy = rpc("pool_get_policy")
+        value = modern_status(policy, full=getattr(args, "full", False)) if modern(policy) else status(policy)
         if sub == "quota":
             value["quotas"] = {}
-            for route in value["connections"]:
-                try:
-                    value["quotas"][route["id"]] = rpc("pool_get_quotas", {"routeId": route["id"]})
-                except ValueError as exc:
-                    value["quotas"][route["id"]] = {"status": "unknown", "error": str(exc)}
+            if modern(policy):
+                value["quota_note"] = "Use the Pool quota command for a targeted route; no provider-wide quota fan-out was performed"
+            else:
+                for route in value["connections"]:
+                    try:
+                        value["quotas"][route["id"]] = rpc("pool_get_quotas", {"routeId": route["id"]})
+                    except ValueError as exc:
+                        value["quotas"][route["id"]] = {"status": "unknown", "error": str(exc)}
         import runtime_agents as A
         data = A.load()
-        for model in value["models"]:
+        for model in value.get("models", []):
             remember(model, data)
         A.save(data)
     if sub in ("scan", "list") and not getattr(args, "full", False):
         value = compact_catalog(value)
+    elif sub == "select" and not getattr(args, "full", False):
+        value = {"alias": value.get("alias"), "strength": value.get("strength"),
+                 "request": value.get("request"),
+                 "selected": {key: value["selected"].get(key) for key in
+                              ("id", "routeId", "group", "fixedEffort")},
+                 "alternatives_count": alternatives_count(value),
+                 "next": "--full for candidate details; selection does not submit work"}
     print(json.dumps(value, indent=2 if getattr(args, "full", False) else None, ensure_ascii=False))
     return 0
 

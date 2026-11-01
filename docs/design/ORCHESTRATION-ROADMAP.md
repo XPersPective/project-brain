@@ -609,3 +609,69 @@ devamlılığı ve tekrar açılışın idempotentliği regresyonlarla doğrulan
 Plan tamamlanınca geçerli mimari kararlar ve destek sınırları overview, verification
 ve kabul edilmiş ADR'lere geçirilir. Geçici kart ayrıntıları Git'te kurtarılabilir
 biçimde kaldırılabilir; yeni oturumlar tamamlanmış bu yol haritasını aktif iş sanmaz.
+
+### Çalışma seçimi protokolü — tamamlanan bakım (2026-11-01)
+
+Kullanıcı talebi: Pool kategori/servis/effort bilgisini kendi skill'inden kısa
+olarak al; yöneticinin çalışma seçeneklerini kullanıcıya sun. Pool katalog/API
+tasarımı bu kapsamda değil. Native, en ucuz native ve yalnız yönetici korunur.
+İş: giriş ve ilgili oturum referanslarını tutarlı güncelle; sabit eski CLI
+kodlarını uyumluluk bilgisi olarak ayır; kısa giriş bütçesi/link/diff kontrolü
+ve kurulu becerinin güncellenmesi. Pool'a bu bakımda bağlanılmayacak.
+Sonuç: kısa çalışma sorusu/protokolü ve eski adaptör sınırları belgelendi;
+giriş bütçesi, referans ve diff kontrolleri geçti. Runtime değişmedi; katalog/API
+tasarımı veya canlı Pool bağlantısı yapılmadı. Bu bakımın açık uygulama işi yok.
+
+### Executor Selection Policy — tamamlanan netleştirme (2026-11-01)
+
+Kullanıcı talebi: kaynak adı açık yedi yürütücü seçeneği; kullanıcı tarafından
+seçilen native/CAP model listeleri; kalıcı seçim, açık değişiklik isteminde
+mevcut tercihlerin gösterilmesi ve ayrı seri/paralel kararı. Kararlaştırılmış
+sınırlar ile token ekonomisi zorunlu; sessiz kaynak/model değiştirme yok.
+Kapsam: kısa skill girişi ve oturum/Pool referansları, kayıt şablonu ve kurulu
+kopyalar. CAP'ın katalog/API tasarımı ve runtime adaptörünü yeniden yazmak kapsamda
+değil. Güncel CAP skill'i ve dört satırlık kompakt metadata sayfası okundu; iş
+başlatılmadı. Kontrol: giriş bütçesi, referanslar, diff ve dağıtım eşitliği.
+
+### ESP/SP ve güncel CAP uyumu — tamamlanan bakım (2026-11-01)
+
+Kullanıcı talebi: İngilizce Executor Selection Policy (ESP), Scheduling Policy
+(SP); Solo ana ajanın çalışmasıdır, yalnız alt ajan görevlendirmesi yoktur.
+Yeni implementation oturumunda yarım işi/çalışan job'ları koruyarak iki tercihi
+kısa teyit et; aynı oturumdaki soruda tekrar sorma. Token ekonomisi korunur.
+Gözlem: CAP güncel metadata formatında legacy policy.taskModes yok; selection
+modelId/category/effort ve alternatives sayısı dönüyor, list_models sayfalı nesne.
+Mevcut adaptör yeni modeli hatalı eski-sürüm mesajıyla reddediyor.
+İş: format uyumunu eski journal/kalite tabanlarını koruyarak düzelt; kompakt gerçek
+metadata smoke (job yok), hedefli/tam offline regresyon, giriş bütçesi ve kurulu
+kopya kontrolü. ESP/SP JSON'unu runtime uygulama özelliği gibi sunma.
+Sonuç: 3.7.3 kompakt CAP uyumu, ESP/SP adlandırması ve yeni oturum teyidi hazır.
+Canlı salt okunur seçim, hedefli/tam Python 3.11/3.8 regresyonları ve bağımsız
+native inceleme geçti. Sağlayıcıda iş başlatılmadı; otomatik ESP/SP policy parser
+bu bakımın parçası değildir. Güncel kapsam overview ve VERIFICATION.md'de.
+
+### Token ekonomisi — tamamlanan bakım (2026-11-01)
+
+Kullanıcı talebi: pahalı yöneticinin ilk tarama, bağlantı hazırlığı ve mekanik iş
+tüketimini azalt; araya giren sorularda bağlamı yeniden yükleme; kaliteyi koru.
+Mimari karar: önce deterministik araçlar, yetkili düşük seviye işçiye sınırlı keşif,
+yöneticiye yalnız mimari/kabul/istisna kararları. İşçi önerisi kanıt değildir;
+bekleyen talepler ve belirsiz dış işlemler tasarruf uğruna gizlenmez.
+
+Tamamlanan uygulama ve doğrulama işleri:
+- Giriş protokolünü kısalt; ucuz keşif, izin mirası, soru ve yükseltme sınırlarını
+  zorunlu kıl. Ayrıntılı kurallar ilgili referanslarda kalır.
+- Salt okunur, sınırlı `brief` devam görünümü ekle: FOCUS/Resume, talep sayıları,
+  dış işlem uyarıları; göç, oturum sıfırlama veya Pool çağrısı yok.
+- Pool discovery seçiminde varsayılan L; seçim çıktısı kısa, tam ayrıntı isteğe bağlı.
+  Görev/reviewer kalite tabanları ve mevcut yetki denetimleri korunur.
+- Soru/brief yan etkisizliği, taşan çıktı ve discovery/reviewer seçim regresyonları;
+  tam test_brain.py, Python 3.8 grameri ve bağımsız inceleme.
+- Kurulu becerilerde tekrar eden protokolleri yedekleyerek görünürlükten kaldır;
+  Project Brain güncellemesini yönetici üzerinden uygula. Ölçülmeyen token için
+  yüzde tasarruf iddiası üretme.
+
+Sonuç: 3.7.2 kaynak ve 42 kurulu dağıtım güncel; Python 3.11.15/3.8.20 tam paket,
+bağımsız native inceleme, gramer ve diff kontrolleri geçti. Aktif bakım kartı yok.
+Güncel sözleşme/ölçüm sınırları overview ve VERIFICATION.md'de; bu kayıt yeni
+oturumda tamamlanmış planı yeniden başlatma yetkisi değildir.

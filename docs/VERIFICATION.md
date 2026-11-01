@@ -1,4 +1,54 @@
-# Verification guide — Project Brain 3.7.1
+# Verification guide — Project Brain 3.7.3
+
+3.7.3 recognizes current CAP compact metadata (help-like policy, modelId/category/
+effort, alternative count and paginated model memberships) alongside the legacy
+format. Targeted checks cover overridable supported category defaults, preserved
+legacy fixed effort, exact bounded membership lookup, malformed/hidden metadata,
+review strength/identity, compact summaries and bounded --full detail. A real
+read-only low/discovery selection passed on 2026-11-01 without submitting a worker.
+New-session ESP/SP confirmation and continuation are protocol rules; there is no
+new runtime ESP/SP parser or automatic host-level model restriction.
+
+Validation: targeted test_agent_pool.py, test_pool_modes.py and test_session.py,
+Python 3.8 grammar, local links, entry budget and diff checks passed. Native
+independent review found and verified the opt-in detail fix; no remaining scoped
+findings. Complete offline test_brain.py passed under Windows Python 3.11.15 and
+3.8.20. This validates the adapter regressions, not live provider execution.
+
+3.7.2 adds a read-only question/continuity path and low-tier discovery defaults.
+`test_session.py` exercises CLI `brief` without Brain creation, migration, boot,
+mapping, Pool calls or session writes; source/task/ledger/session bytes stay intact.
+Large Unicode Resume and external fields remain valid JSON within 4096 UTF-8 bytes
+(including newline), with explicit omissions, pending/readback counts and private
+run sample lower bounds. IN_PROGRESS precedes REVIEW; READY scheduling is explicitly
+not evaluated. Malformed task/ledger state is surfaced rather than repaired.
+Selection tests preserve explicit task tiers/resource caps and reviewer H default,
+default discovery to L, and distinguish compact from `--full` output.
+
+The mandatory skill entry, including ESP and Scheduling Policy (SP), is 6,498
+LF-normalized UTF-8 bytes versus 12,366 at the starting revision (47.5% smaller);
+a 6,500-byte regression budget guards expansion.
+Detailed authority/session rules moved to relevant WORKFLOW sections, rather than
+being deleted. This is input size, not a measured reduction in billed/reasoning
+tokens. The protocol covers SOLO, repeated waves and intervening questions; host
+behavior outside Brain commands cannot be OS-enforced by a skill.
+
+Validation: complete offline test_brain.py passed under Windows Python 3.11.15
+and 3.8.20; Python 3.8 grammar, local reference links and diff checks passed.
+Skills Manager refreshed the installed copy; five principal skill/runtime files
+matched source SHA-256 across all 42 managed deployments. Scoped native independent review
+found and verified the fix for active-focus precedence; no remaining actionable
+findings in its scope. Runtime validation was offline; this adds no live-provider
+certification or measured model-quality/token claim.
+
+The subsequent ESP change is documentation only: actual Pool options
+come through Pool's own skill; no catalog/API schema is specified by Brain. Native,
+cheaper native, native pinned, solo, CAP category/catalog/pinned choices and
+separate scheduling have a director-maintained durable record and explicit change
+flow. Existing CLI does not parse that record; unsupported enforcement must not
+be claimed. Entry-budget, example JSON, links and diff checks passed. Runtime was
+unchanged. CAP's updated skill and a compact four-entry metadata page were read;
+no worker job was submitted.
 
 3.7.1 adds `test_startup.py` to the complete regression entry point. It covers
 automatic orientation/boot conversion without Git/HEAD, raw-byte backups, task

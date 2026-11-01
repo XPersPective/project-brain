@@ -209,3 +209,23 @@ a still-running worker, and never rejects work already merged into the target.
 This is local orchestration with safe observation relocation, not a distributed
 process-control service. Real token savings require real host counters and matched
 workloads; the release makes no unmeasured percentage guarantee.
+
+## Economy across waves
+
+Wave count (10, 20 or 100) does not change concurrency or resource permissions.
+Reuse existing ready-state calculations, packets, cursor/wait/status and evidence.
+Advance changed/completed/blocked jobs; do not restart orientation or load every
+worker transcript each wave. A status question uses current context or brief,
+without new dispatch, session reset or project-wide re-planning. The lead owns
+architecture, ambiguity, serious findings, integration and acceptance; sufficient
+planning/review effort remains required. SOLO never probes Pool or workers.
+
+## Scheduling Policy (SP) and session continuation
+
+ESP chooses executor resources; SP independently chooses Serial/Parallel and the
+maximum active workers. At a new implementation session, including "continue",
+read back unfinished jobs and confirm saved ESP/SP together before new dispatch.
+Recommend the saved parallel setting for unfinished parallel work. Already
+supplied current-session answers count; same-session questions never reopen it.
+Keep old jobs immutable and capacity-accounted. Serial changes drain existing
+jobs; do not cancel, replay or oversubscribe them just to fit a new choice.

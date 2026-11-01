@@ -1,8 +1,35 @@
-# Project Brain 3.7.1
+# Project Brain 3.7.3
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,
 session schema 1.
+
+## Token economy contract
+
+Deterministic work precedes bounded low-tier discovery. The lead retains
+architecture/planning, ambiguity and acceptance; risk, review and proof floors
+remain unchanged. Saved ESP/SP prefill a single new-session confirmation; current
+session answers and intervening questions never trigger repeated interviews.
+Intervening questions reuse active context rather than boot/history/skill reloads.
+The read-only `brief` CLI emits at most 4 KiB with explicit missing detail and
+pending/readback warnings, without migration, dispatch or session changes.
+Executor Selection Policy (ESP) names seven worker choices: Solo, Native, Native
+Cheapest, Native Pinned, CAP Categories, CAP Catalog, CAP Pinned. CAP explicitly
+means CLI Agent Pool. Scheduling Policy (SP) separately names Serial/Parallel and
+its maximum. Solo means main-agent work with tools and no subagent delegation.
+The director records both in `.project-brain/executor-policy.json`; new sessions
+(including continue) confirm saved ESP/SP; same-session questions reuse them.
+Before dispatch the director must check those bounds. This is a protocol record,
+not yet parsed by the runtime. The 3.7.3 adapter normalizes current compact CAP
+metadata and legacy response formats, supported effort defaults and alternatives
+counts. It retains L/M/H quality gates and immutable old jobs; custom ESP bounds
+must not be claimed as command-enforced. CAP owns its catalog. Existing discovery
+defaults to L/response, worker M, lead/reviewer H; `--full` is opt-in.
+Many waves reuse state/evidence/cursors; SOLO needs no provider connection.
+
+The protocol governs agent behavior and CLI gates, not a host's billed-token
+counter or editor actions outside Brain. Model capability and real savings still
+need measurement; smaller context is not a guarantee of lower billed usage.
 
 ## Source map
 

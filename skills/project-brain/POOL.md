@@ -1,4 +1,39 @@
-# CLI Agent Pool integration (Project Brain 3.7.1)
+# CLI Agent Pool integration (Project Brain 3.7.3)
+
+## Executor Selection Policy (ESP)
+
+CAP means **CLI Agent Pool**. Resource choices are Solo, Native, Native Cheapest,
+Native Pinned, CAP Categories, CAP Catalog, CAP Pinned. Native means host agents;
+CAP Categories uses actual user-selected CAP categories; CAP Catalog permits
+director model selection; CAP Pinned allows only exact user-selected CAP services.
+Do not label CAP resources as an unspecified catalog. The director remains
+responsible in every mode. Scheduling Policy (SP) separately selects Serial or Parallel with a maximum.
+Solo means the main agent performs work with tools without subagent delegation.
+
+Use CAP's current skill for compact categories, visible active services and
+efforts; reuse known IDs/pages. Current compact entry points are
+`pool_list_pools {}` for categories and `pool_catalog {}` for source counts;
+request one filtered model page only when needed. Brain neither defines CAP's API/catalog nor
+classifies it. Preserve supported memberships/efforts. A category effort is a default;
+caller-selected supported effort can override it.
+User-selected effort or authorized director effort must fit what CAP supports.
+No CAP call for explicit Solo/Native/no-CAP. No model job for metadata lookup.
+
+Persist choices in `.project-brain/executor-policy.json` as described in
+[WORKFLOW §2](WORKFLOW.md#2-session-and-boot-details). Each new implementation session, including "continue", shows saved ESP/SP
+and confirms both (unless already answered in this session). Explicit changes
+show the same keep/change summary. Same-session questions do not reopen selection.
+Preserve/read back old jobs; new choices never authorize replay/cancellation. Before dispatch, verify all saved
+bounds; never silently substitute models/categories/effort or change scheduling.
+Hidden/disabled/removed services are excluded. No quality/review/economy exception.
+
+**Compatibility:** 3.7.3 supports current compact CAP responses as well as the
+legacy transport below. The ESP/SP JSON record is still director-maintained;
+the CLI does not parse it. Legacy L/M/H routing is not the seven-choice ESP
+implementation. Arbitrary categories/catalog pins still need their Brain-side
+policy binding; CAP already exposes them. Never silently map unknown categories,
+force a category on catalog pins or claim unsupported command enforcement.
+
 
 ## Opt-in durable runs
 
@@ -56,7 +91,9 @@ Without CLI Agent Pool, use `SOLO`, `NATIVE` or `--backend direct` with no exter
 
 ## Normal use from any editor or agent
 
-Choose EXEC/REV once per top-level implementation session using SKILL.md §2.1.
+Choose EXEC/REV once per top-level implementation session using SKILL.md §2;
+use saved ESP/SP as the proposal and confirm both once per new implementation
+session unless already answered in that session; no repeated same-session interview.
 Native/SOLO choices do not connect to Pool. Modes limit resources, never risk or
 reviewer strength floors. If a qualified reviewer is unavailable inside the selected
 REV boundary, record the blocker and continue independent work; never invent a PASS.
@@ -70,7 +107,6 @@ bypass the user's selected resource cap. SOLO review needs an explicit audit and
 
 ```text
 python <skill>/scripts/brain.py agents mode --new --exec P-ML --rev P-ML --note "User selected Pool Medium & Low"
-python <skill>/scripts/brain.py agents scan --json
 python <skill>/scripts/brain.py agents select --task PB-001 --json
 python <skill>/scripts/brain.py delegate PB-001 --dry-run
 python <skill>/scripts/brain.py delegate PB-001
@@ -170,3 +206,14 @@ implementation. Owner toolPolicy configured can still explicitly limit scopes.
 Native CLI trust/deny rules remain authoritative; a catalog capability is not a
 permission grant or proof that every provider model supports the task. Pool chat-only
 CLI commands do not become coding agents. No automatic fallback or job replay.
+
+## Bounded discovery and selection
+
+For a known task tier select directly; a catalog scan is not a prerequisite.
+`agents select --role discovery` defaults to L/response; worker stays M and
+lead/reviewer H. Explicit task scoring and resource/review floors still win.
+Default selection emits the selected identity, request, strength and alternatives
+count; `--full` explicitly retrieves candidate details. Selection never submits.
+Use a reconciled discovery task with existing delegate for actual initial reading.
+A connection error needs one bounded diagnostic; no dashboard, login probe,
+scan-import, provider repair or paid/stronger fallback without applicable authority.

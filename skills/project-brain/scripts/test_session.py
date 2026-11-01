@@ -15,7 +15,122 @@ import runtime_session as RS
 from test_routing import _project
 
 
+def economy_checks():
+    import migrate
+    import runtime_agent_pool as AP
+    import runtime_runs as runs
+    assert len((Path(__file__).resolve().parents[1] / "SKILL.md").read_text(encoding="utf-8").encode("utf-8")) <= 6500
+
+    def capture(fn, *args):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            assert fn(*args) == 0
+        raw = output.getvalue()
+        assert len(raw.encode("utf-8")) <= 4096, len(raw.encode("utf-8"))
+        return json.loads(raw)
+
+    def snapshot(root):
+        return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+    with tempfile.TemporaryDirectory(prefix="pb-brief-") as directory:
+        root = Path(directory) / "project"
+        root.mkdir()
+        with patch.object(A, "DEFAULT_REGISTRY", Path(directory) / "registry.json"):
+            empty = snapshot(root)
+            with patch.object(sys, "argv", ["brain.py", "brief", str(root)]):
+                assert capture(B.main)["status"] == "no_brain"
+            assert snapshot(root) == empty
+            _project(root, legacy=False)
+            task_file = B.bp(root) / "tasks/PB-001.md"
+            B.set_headers(task_file, {"Status": "IN_PROGRESS"})
+            for i in range(6):
+                B.append_section(task_file, "Resume", "Next: " + chr(0x1f642) * 800)
+            for i in range(5):
+                B.append_section(task_file, "External",
+                                 "- response_unknown | readback%d %s" % (i, chr(0x1f642) * 500))
+            with contextlib.redirect_stdout(io.StringIO()):
+                for i in range(5):
+                    RS.intake(B, root, ["Directive %d" % i])
+            rows = [{"run": "run%d" % i, "task": "PB-001", "state": "UNKNOWN"} for i in range(8)]
+            before = snapshot(root)
+            with patch.object(AP, "rpc", side_effect=AssertionError("brief called Pool")), \
+                    patch.object(migrate, "startup", side_effect=AssertionError("brief migrated")), \
+                    patch.object(B, "cmd_boot", side_effect=AssertionError("brief booted")), \
+                    patch.object(B, "cmd_map", side_effect=AssertionError("brief scanned")), \
+                    patch.object(B, "set_session_modes", side_effect=AssertionError("brief reset session")), \
+                    patch.object(runs, "peek", return_value=rows):
+                info = capture(RS.brief, B, root)
+            assert snapshot(root) == before
+            assert info["observational"] and info["gate"] == "not_evaluated"
+            assert info["focus"]["id"] == "PB-001" and info["focus"]["resume_omitted"]
+            assert info["intake"]["pending_total"] == 5 and info["intake"]["omitted"] == 2
+            assert info["external"]["unresolved_total"] == 5 and info["external"]["omitted"] >= 2
+            assert info["external"]["sample_refs"][0]["op_truncated"]
+            assert info["readback_required"] and info["runs"]["total_unknown"]
+            assert info["runs"]["readback_count_lower_bound"] == 8
+
+            # Active implementation wins over an earlier ID in review. A brief
+            # never evaluates history/dependencies to schedule a READY task.
+            second = B.bp(root) / "tasks/PB-002.md"
+            second.write_text(task_file.read_text(encoding="utf-8").replace("PB-001", "PB-002"), encoding="utf-8")
+            B.set_headers(task_file, {"Status": "REVIEW"})
+            with patch.object(runs, "peek", return_value=[]):
+                assert capture(RS.brief, B, root)["focus"]["id"] == "PB-002"
+                assert RS.focus(B, root) == "PB-002"
+                B.set_headers(second, {"Status": "READY"})
+                assert capture(RS.brief, B, root)["focus"]["id"] == "PB-001"
+                B.set_headers(task_file, {"Status": "READY"})
+                ready = capture(RS.brief, B, root)
+                assert ready["focus"] is None and "READY selection not evaluated" in ready["focus_scope"]
+
+            # Malformed state is surfaced without repairing or authorizing it.
+            ledger_file = RS.ledger_path(B, root)
+            ledger_file.write_text('{"schema":99}', encoding="utf-8")
+            try:
+                capture(RS.brief, B, root)
+                raise AssertionError("malformed ledger hidden")
+            except ValueError:
+                pass
+
+            # Selected request/identity is enough; default output excludes catalogs.
+            B.set_session_modes(root, "pool-all", "pool-all", new=True)
+            model = {"id": "small", "routeId": "local", "enabled": True, "group": "low"}
+            response = {"selected": model, "alias": "pool/test", "strength": "low",
+                        "request": {"group": "low", "kind": "read"},
+                        "alternatives": [{"id": "candidate%d" % i} for i in range(100)]}
+            for role, tier in (("discovery", "L"), ("worker", "M"), ("lead", "H"), ("reviewer", "H")):
+                args = SimpleNamespace(root=str(root), agents_cmd="select", tier="", role=role,
+                                       task=None, cli="", exclude="", full=False, mode=None)
+                with patch.object(AP, "select", return_value=response) as selection, patch.object(AP, "remember"):
+                    view = capture(AP.agents, B, args)
+                assert selection.call_args.args[0] == tier
+                assert "alternatives" not in view and view["alternatives_count"] == 100
+                assert view["selected"]["id"] == "small"
+            args.role, args.tier, args.full = "discovery", "M", True
+            with patch.object(AP, "select", return_value=response) as selection, patch.object(AP, "remember"):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    AP.agents(B, args)
+                assert len(json.loads(output.getvalue())["alternatives"]) == 100
+                assert selection.call_args.args[0] == "M"
+            args.task, args.full = "PB-001", False
+            with patch.object(AP, "A_score", return_value={"effective_tier": "H"}), \
+                    patch.object(AP, "select", return_value=response) as selection, patch.object(AP, "remember"):
+                capture(AP.agents, B, args)
+                assert selection.call_args.args[0] == "H"
+            B.set_session_modes(root, "pool-low", "pool-low", new=True)
+            with patch.object(AP, "A_score", return_value={"effective_tier": "H"}), \
+                    patch.object(AP, "select", side_effect=AssertionError("resource cap bypassed")):
+                try:
+                    capture(AP.agents, B, args)
+                    raise AssertionError("high discovery task silently lowered")
+                except ValueError:
+                    pass
+    print("PASS: bounded read-only brief, unresolved-state retention, low discovery and compact/full selection")
+
+
 def main():
+    economy_checks()
     with tempfile.TemporaryDirectory(prefix='pb-session-') as directory:
         root = Path(directory) / 'project'
         root.mkdir()

@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.7.3 — 2026-11-01
+
+- Name Scheduling Policy (SP) alongside Executor Selection Policy (ESP); clarify
+  Solo as main-agent work without subagent delegation.
+- Confirm saved ESP/SP together in each new implementation session, including
+  continue; preserve unfinished jobs and reuse choices for same-session questions.
+- Support CAP compact category/catalog responses, normalized model identities,
+  overridable supported category effort defaults and integer alternative counts.
+- Preserve legacy requests, strength/review floors and fixed-effort compatibility;
+  use bounded exact membership lookups and opt-in paged catalog detail.
+
+
+## 3.7.2 — 2026-11-01
+
+- Name Executor Selection Policy (ESP): solo, native, native-cheap, native-pinned,
+  CAP category/catalog/pinned choices. Record bounds and separate scheduling;
+  explicit changes show saved choices, ordinary questions do not reopen them.
+  Keep catalog design with CAP and document current CLI enforcement limits.
+- Make deterministic work and bounded low-tier discovery the default protocol;
+  preserve architecture, quality, review and resource authorization gates.
+- Shorten the always-read skill entry; move detailed authority/session rules to
+  relevant workflow sections and reuse context for intervening questions.
+- Add read-only bounded `brief` continuity; retain pending/readback warnings.
+- Default Pool discovery selection to L, emit compact candidate identity and
+  keep complete selection details behind `--full`. No measured-token claim.
+
 ## 3.7.1 — 2026-11-01
 
 - Upgrade recognized old project tracking automatically on normal orient/boot,
