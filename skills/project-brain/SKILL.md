@@ -8,11 +8,11 @@ description: >-
   optional native/CLI delegation and quota protection. Excludes store publishing.
 license: MIT
 metadata:
-  version: 3.7.0
+  version: 3.7.1
   author: XPersPective
 ---
 
-# Project Brain 3.7.0
+# Project Brain 3.7.1
 
 **One plan, many agents, verified handoffs.** Keep enough intent, decisions,
 unfinished work and evidence in the repository for a zero-history model to resume.
@@ -67,23 +67,25 @@ pending; never invent one. Verification aliases are operational metadata, not cr
 At a new top-level implementation session run `PB orient`, then `PB boot --new-session`.
 Orientation uses metadata/manifests without model calls. Do not edit source before
 the session-choice gate is READY. Within that session use normal `PB boot` to resume.
-Use `PB boot --read-only` for questions/audits that must not
+Use `PB orient --read-only` and `PB boot --read-only` for questions/audits that must not
 modify tracking. For no Brain, `PB map` gives a cheap repository/command overview.
 A source repository that explicitly retired its own Brain plan stays retired.
 Protocol 1 is enabled on init/upgrade unless compatibility 0 was explicitly set;
 `PB protocol --enable` exits legacy mode. Read [PROTOCOL.md](PROTOCOL.md) for setup,
 revision decisions, private adapters, progress budgets and portable handoff limits.
 
-Normal boot upgrades supported older Brain state with raw-input backups and safely
-collects committed closed tasks. It refuses future schemas/versions and skips
-maintenance during merge/rebase. Legacy no-Git repositories require explicit
-`PB upgrade --apply`. Foreign trackers require the adoption/reconciliation process
+Normal orient/boot automatically upgrade recognized older Brain state before
+reading tasks, including single-file, no-Git and uncommitted repositories. No
+separate migration request is needed. Preserve raw-input backups; boot also safely
+collects committed closed tasks. Refuse future schemas/versions and unknown legacy
+shapes; skip maintenance during merge/rebase or explicit read-only startup.
+Never initialize Git or a missing Brain just to upgrade. Foreign trackers require the adoption/reconciliation process
 in §7; detection alone never authorizes deletion. No automatic installed-skill sync.
 
 | STATE | Next action |
 |---|---|
 | NO_BRAIN | Small request: do it. Substantial tracked project: §7, respecting repo rules. |
-| LEGACY | `PB upgrade` preview, then authorized `--apply`; preserve raw inputs. Boot again. |
+| LEGACY | Read-only/merge startup deferred conversion. Normal orient/boot upgrades automatically after that condition clears. Inspect unknown formats before explicit migration. |
 | RESUME / INTERRUPTED | Load FOCUS and Resume, compare actual diff, continue remaining work. |
 | READBACK_FIRST | Resolve sent/response_unknown external operations before any resend. |
 | DIRTY | Classify edits mine/user/generated/unknown; continue non-overlapping work. |

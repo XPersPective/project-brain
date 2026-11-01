@@ -1,6 +1,13 @@
-# Verification guide — Project Brain 3.7.0
+# Verification guide — Project Brain 3.7.1
 
-2026-11-01 final validation: full test_brain.py exited 0 under Windows Python
+3.7.1 adds `test_startup.py` to the complete regression entry point. It covers
+automatic orientation/boot conversion without Git/HEAD, raw-byte backups, task
+and Resume/External continuity, idempotency, read-only startup, deferred merge/
+rebase maintenance, future-version refusal before session reset, and unknown
+single-file refusal without initializing Brain. Startup conversion uses no model.
+The full offline suite passed on Windows Python 3.8.20 and 3.11.15.
+
+3.7.0 final validation (2026-11-01): full test_brain.py exited 0 under Windows Python
 3.8.20 and 3.11.15. Separate Pool 1.8.1 real-daemon/synthetic-CLI integration exited
 0. Python 3.8 grammar, local links, manifest versions and diff checks passed.
 The 64-file release ZIP passed CRC/SHA-256, extracted CLI and production-regression

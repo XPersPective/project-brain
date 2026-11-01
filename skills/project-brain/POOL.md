@@ -1,4 +1,4 @@
-# CLI Agent Pool integration (Project Brain 3.7.0)
+# CLI Agent Pool integration (Project Brain 3.7.1)
 
 ## Opt-in durable runs
 

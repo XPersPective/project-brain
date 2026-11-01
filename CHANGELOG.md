@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.7.1 — 2026-11-01
+
+- Upgrade recognized old project tracking automatically on normal orient/boot,
+  including single-file, no-Git and unborn-Git projects; preserve raw backups.
+- Upgrade before reading focus/resetting session choices. Keep read-only startup,
+  merge/rebase deferral, future-version refusal and unknown-format guards.
+- Add startup continuity/idempotency regressions; installed skill distribution
+  remains separate from per-project migration.
+
 ## 3.7.0 — 2026-11-01
 
 - Harden origin session authority, immutable worker identities/contracts, commit

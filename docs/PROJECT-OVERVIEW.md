@@ -1,4 +1,4 @@
-# Project Brain 3.7.0
+# Project Brain 3.7.1
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,
@@ -54,6 +54,12 @@ They are not active work or authorization. This source repository's temporary
 Consumer-project tracking remains part of the distributed skill.
 
 ## Limits
+
+Normal `orient` and `boot` upgrade recognized old project tracking on use, with
+raw-input backups, including no-Git and unborn-Git projects. Read-only startup and
+merge/rebase defer conversion; future versions and unknown legacy shapes stop
+without conversion. Project state migration does not download a new skill release.
+Installed skill updates remain the responsibility of the deployment manager.
 
 Hashes establish freshness, not truth or product quality. Approval records are not
 authenticated identity. Process containment is not a filesystem/network sandbox.

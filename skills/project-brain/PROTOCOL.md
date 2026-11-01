@@ -11,6 +11,10 @@ it when the old config has no explicit protocol version. Explicit `0` is legacy
 compatibility: boot prints a warning; use `PB protocol --enable` before new work.
 Migration never invents target confirmation, secret access or review. Old records
 remain readable; protocol-1 proof must be produced against the new inputs/intent.
+Normal orient/boot automatically convert recognized older project state, including
+no-Git and unborn-Git projects, after preserving raw backups. Use --read-only for
+observational startup; merge/rebase defers conversion. Future versions and unknown
+legacy shapes stop for inspection. This does not download installed-skill updates.
 
 Confirm Target in the user's words; choose EXEC/REV once. Then record one project
 secret decision, even when the answer is no secrets:

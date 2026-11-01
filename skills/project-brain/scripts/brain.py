@@ -46,7 +46,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.7.0"
+VERSION = "3.7.1"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -317,6 +317,21 @@ def checkout_lock(root, timeout=15.0, name="writer.lock"):
             else:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
         # Keep the inode: unlinking permits two processes to lock different files.
+
+
+@contextmanager
+def startup_lock(root):
+    """Validate before mutation; serialize even the first single-file upgrade."""
+    import migrate as M
+    import runtime_verify as V
+
+    M.require_supported(root)
+    if not merge_op(root):
+        M.require_known_legacy(root)
+        if legacy_kind(root) == "v0":
+            V.public_path(root, BRAIN_DIR).mkdir(parents=True, exist_ok=True)
+    with checkout_lock(root):
+        yield
 
 
 def norm_id(prefix, n):
@@ -1205,25 +1220,19 @@ def gc_brain(root, has_git=None, completed=None):
 
 # ── commands ──────────────────────────────────────────────────────────────
 
-def cmd_boot(root, maintain=True):
+def cmd_boot(root, maintain=True, new_session=False):
     import runtime_agents as A
     import runtime_verify as V
     import migrate as M
 
     has_git = git(root, "rev-parse", "--is-inside-work-tree") == "true"
-    auto_mig_notes = []
+    maintain = maintain and not merge_op(root)
+    auto_mig_notes = M.startup(root, maintain=maintain)
     legacy = legacy_kind(root)
-    if brain_exists(root):
-        M.require_supported(root)
-    maintain = maintain and not (has_git and merge_op(root))
-    if maintain and legacy and has_git and (git(root, "rev-parse", "--verify", "HEAD") or os.environ.get("PB_AUTO_MIGRATE") == "1"):
-        M.run(root, apply=True)
-        auto_mig_notes.append(f"VERSION_CHECK: auto-migrated {legacy} -> v{VERSION} (schema {SCHEMA})")
-        legacy = legacy_kind(root)
     if legacy == "v0":
         print("STATE: LEGACY")
         print(f"  ! {LEGACY_FILE} (single-file Brain) found")
-        print("NEXT: Route the user's request first; questions stay read-only. For authorized migration: `migrate` (preview), then `migrate --apply` (SKILL.md Migration).")
+        print("NEXT: Upgrade deferred by read-only startup or Git operation. Normal orient/boot upgrades recognized legacy state automatically when that condition clears.")
         return 0
     if not brain_exists(root):
         foreign = A.detect_foreign(root)
@@ -1239,14 +1248,9 @@ def cmd_boot(root, maintain=True):
             print(f"  ! foreign planning state detected: {fname} ({', '.join(fpaths)}) -> run `legacy` to preview adoption")
         print("NEXT: Substantial work -> SKILL.md Genesis (`map`, then `init`). Small request -> just do it.")
         return 0
+    if new_session and maintain:
+        set_session_modes(root, new=True)
     cfg = parse_config(root)
-    if maintain and not legacy:
-        old_ver = cfg.get("skill_version", "")
-        if old_ver != VERSION or M.has_pending_upgrade(root, force_all=False):
-            upgraded = M.auto_upgrade_v34(root, force_all=(old_ver != VERSION))
-            if upgraded:
-                auto_mig_notes.append(f"VERSION_CHECK: auto-upgraded project ({old_ver or 'pre-3.4'} -> v{VERSION}): {', '.join(upgraded[:6])}")
-            cfg = parse_config(root)
     every_ids, completed_ids = history_task_ids(root) if has_git else (set(), set())
     gc_removed = gc_brain(root, has_git=has_git, completed=completed_ids) if maintain and not legacy else []
     if gc_removed:
@@ -1275,7 +1279,7 @@ def cmd_boot(root, maintain=True):
         notes.append(f"DONE without Evidence: {', '.join(unproven)}: verify or reopen; these tasks remain unfinished")
     if legacy:
         state = "LEGACY"
-        notes.append(f"schema {legacy[1:]}: run `migrate --apply`")
+        notes.append(f"schema {legacy[1:]}: automatic upgrade deferred by read-only startup or Git operation")
     elif (Path(root) / LEGACY_FILE).exists():
         notes.append(f"legacy {LEGACY_FILE} still present: carry over anything unique, then delete it")
 
@@ -1484,7 +1488,7 @@ def cmd_boot(root, maintain=True):
 
     nxt = {
         "READBACK_FIRST": "Inspect unresolved external operations with their readback tool; record confirmed/failed before starting or retrying work.",
-        "LEGACY": "Route the user's request first; questions stay read-only. For authorized migration: `migrate` (preview), then `migrate --apply` and Plan audit.",
+        "LEGACY": "Normal orient/boot automatically upgrades recognized legacy state after read-only/Git-operation deferral clears. Inspect unknown formats before explicit migration.",
         "INVALID": "Run `validate`, fix the FAIL lines, then boot again (REFERENCE: Corrupt Brain).",
         "CONFLICTED": "Finish the Git operation first (REFERENCE: Conflicts). Start no task.",
         "DIRTY": "Classify each listed path: mine/user/generated/unknown. Never reset/clean/stash/checkout unknown work. Continue only on non-overlapping files.",
@@ -1992,6 +1996,7 @@ def main():
 
     p = sub.add_parser("orient")
     p.add_argument("root", nargs="?", default=".")
+    p.add_argument("--read-only", action="store_true")
     p = sub.add_parser("intake")
     p.add_argument("root", nargs="?", default=".")
     p.add_argument("--item", action="append", default=[])
@@ -2302,19 +2307,19 @@ def main():
         print(f"error: not a directory: {root}", file=sys.stderr)
         return 1
     if a.cmd == "boot":
-        if a.new_session:
-            if a.read_only:
-                raise ValueError("--new-session writes the session record; omit --read-only")
-            if brain_exists(root):
-                set_session_modes(root, new=True)
+        if a.new_session and a.read_only:
+            raise ValueError("--new-session writes the session record; omit --read-only")
         if a.read_only:
             return cmd_boot(root, maintain=False)
-        with checkout_lock(root):
-            return cmd_boot(root)
+        with startup_lock(root):
+            return cmd_boot(root, new_session=a.new_session)
     if a.cmd in ("orient", "intake"):
         import runtime_session as RS
         if a.cmd == "orient":
-            return RS.orient(sys.modules[__name__], root)
+            if a.read_only:
+                return RS.orient(sys.modules[__name__], root, maintain=False)
+            with startup_lock(root):
+                return RS.orient(sys.modules[__name__], root)
         with checkout_lock(root):
             print(json.dumps(RS.intake(sys.modules[__name__], root, a.item, a.relation, a.task, a.resolve), ensure_ascii=False))
         return 0

@@ -317,7 +317,7 @@ def migrate_checks():
         write(root, ".project-brain/current.md", "# Current\n\n## Domains\n### Publishing\nSources: `lib/**`\n")
         write(root, ".project-brain/target.md", "# Target\n\n## Objective\nship\n")
         write(root, ".project-brain/tasks/PB-004.md", V3_TASK)
-        assert "STATE: LEGACY" in run(root, "boot")[1]
+        assert "STATE: LEGACY" in run(root, "boot", "--read-only")[1]
         out = run(root, "migrate")[1]
         assert out.startswith("PREVIEW") and "READY — waiting" in (root / ".project-brain/tasks/PB-004.md").read_text(encoding="utf-8")
         run(root, "migrate", "--apply")
@@ -355,7 +355,7 @@ def migrate_checks():
     try:
         # single-file PROJECT_BRAIN.md -> .project-brain/
         write(root, "PROJECT_BRAIN.md", V0_FILE)
-        assert "STATE: LEGACY" in run(root, "boot")[1]
+        assert "STATE: LEGACY" in run(root, "boot", "--read-only")[1]
         run(root, "migrate", "--apply")
         b = root / ".project-brain"
         assert not (b / "tasks/PB-001.md").exists()  # closed tasks stay in history
@@ -674,6 +674,8 @@ if __name__ == "__main__":
     pool_mode_checks()
     from test_session import main as session_checks
     session_checks()
+    from test_startup import main as startup_checks
+    startup_checks()
     from test_handoff_audit import main as handoff_checks
     handoff_checks()
     from test_production import main as production_checks

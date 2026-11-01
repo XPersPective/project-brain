@@ -598,6 +598,14 @@ Kapanış ve sonraki bakım için devam kaydı:
   iki ardışık build için aynı hash kontrolü geçti. Yerel yayın paketi hazırdır.
   GitHub/store yayını ve kullanıcı projelerini topluca göç ettirme bu işin parçası değildir.
 
+### Kullanımda otomatik yükseltme — 3.7.1
+
+Kullanıcı talebi: eski proje kayıtlarını ayrı migration istemeden açılışta yükselt.
+Uygulama ve doğrulama: ortak startup converter; orient/boot girişleri; Git olmayan
+ve henüz commit almamış projeler; ham yedek ve kesintiden toparlanma; salt okunur,
+merge/rebase, gelecekteki sürüm ve tanınmayan biçim korumaları. Görev/Resume/External
+devamlılığı ve tekrar açılışın idempotentliği regresyonlarla doğrulanacak.
+
 Plan tamamlanınca geçerli mimari kararlar ve destek sınırları overview, verification
 ve kabul edilmiş ADR'lere geçirilir. Geçici kart ayrıntıları Git'te kurtarılabilir
 biçimde kaldırılabilir; yeni oturumlar tamamlanmış bu yol haritasını aktif iş sanmaz.

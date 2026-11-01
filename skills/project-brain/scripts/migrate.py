@@ -8,6 +8,8 @@ Handles two legacy shapes:
 Nothing is deleted. The model finishes the semantic part (Map, Sources, Steps) via SKILL.md Migration.
 """
 
+import contextlib
+import io
 import re
 import shutil
 from pathlib import Path
@@ -466,6 +468,45 @@ def auto_upgrade_v34(root, force_all=None):
             if old_ver != B.VERSION:
                 actions.append(f"config.yaml (skill_version {old_ver or 'pre-3.4'} -> {B.VERSION})")
     return actions
+
+
+def require_known_legacy(root):
+    """Automatic conversion requires a recognized source, not just a filename."""
+    kind = B.legacy_kind(root)
+    if kind == "v0":
+        sections = v0_sections(B.read(Path(root) / B.LEGACY_FILE) or "")
+        expected = {"1": "GOAL", "3": "CURRENT", "5": "TASKS"}
+        if not all(key in sections and word in sections[key]["title"].upper()
+                   for key, word in expected.items()):
+            raise ValueError("Unrecognized legacy PROJECT_BRAIN.md; inspect before explicit migration")
+    elif kind:
+        schema = str(B.parse_config(root).get("schema_version", ""))
+        if schema not in ("1", "2", "3"):
+            raise ValueError("Unrecognized legacy Brain schema; inspect before explicit migration")
+
+
+def startup(root, maintain=True):
+    """Upgrade project state only. Caller holds the checkout startup lock."""
+    require_supported(root)
+    if not maintain or B.merge_op(root):
+        return []
+    kind = B.legacy_kind(root)
+    notes = []
+    if kind:
+        require_known_legacy(root)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            run(root, apply=True)
+        notes.append("VERSION_CHECK: auto-migrated %s -> v%s (schema %s)" % (kind, B.VERSION, B.SCHEMA))
+        notes.extend(line for line in output.getvalue().splitlines() if line.startswith("TODO "))
+    if B.brain_exists(root) and not B.legacy_kind(root):
+        old = B.parse_config(root).get("skill_version", "")
+        if old != B.VERSION or has_pending_upgrade(root, force_all=False):
+            actions = auto_upgrade_v34(root, force_all=(old != B.VERSION))
+            if actions:
+                notes.append("VERSION_CHECK: auto-upgraded project (%s -> v%s): %s" %
+                             (old or "pre-3.4", B.VERSION, ", ".join(actions[:6])))
+    return notes
 
 
 def require_supported(root):

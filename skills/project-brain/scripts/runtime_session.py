@@ -80,7 +80,9 @@ def boot_summary(B, root):
         print("INTAKE_LOAD: .project-brain/requests.json; map every requirement to a task or an answer; retain active FOCUS")
 
 
-def orient(B, root):
+def orient(B, root, maintain=True):
+    import migrate
+    maintenance = migrate.startup(root, maintain=maintain)
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         B.cmd_map(root)
@@ -88,7 +90,7 @@ def orient(B, root):
     selected = [line for line in lines if line.startswith(("FILES:", "ROOT FILES:", "EXTENSIONS:", "INSTRUCTION/DOC FILES:", "CMDS:"))]
     selected.extend(line for line in lines if line.startswith("  ") and not line.startswith("    "))
     modes = B.get_session_modes(root)
-    result = {"orientation": [line[:240] for line in selected[:15]], "focus": focus(B, root) if B.brain_exists(root) else "",
+    result = {"orientation": [line[:240] for line in selected[:15]], "maintenance": maintenance[:8], "focus": focus(B, root) if B.brain_exists(root) else "",
               "session": {key: modes[key] for key in ("exec", "rev", "schedule", "max_parallel", "task_mode")}, "implementation_gate": "ready" if modes["exec"] and modes["rev"] else "ask-user",
               "next": "Metadata only. Inspect at most 5 relevant manifests/entrypoints, then ask once for EXEC, REV, serial/parallel and response/execute. No model/provider call was made."}
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
