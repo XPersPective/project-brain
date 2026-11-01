@@ -118,6 +118,13 @@ def brief(B, root):
                                          for r in rows[:2]],
                          "omitted_from_sample": max(0, len(rows) - 2), "details": "PB runs status"}
         value["readback_required"] = bool(external or rows)
+        import runtime_executor_policy as E
+        import runtime_quota_recovery as Q
+        if E.load(B, root):
+            value["policy"] = E.summary(B, root)
+        recovery = Q.status(B, root)
+        if recovery["status"] != "NONE":
+            value["quota_recovery"] = recovery
     def encode():
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     raw = encode()
@@ -142,6 +149,12 @@ def brief(B, root):
 
 def boot_summary(B, root):
     import runtime_runs as runs
+    import runtime_executor_policy as E
+    import runtime_quota_recovery as Q
+    print("POLICY: " + json.dumps(E.summary(B, root), separators=(",", ":")))
+    recovery = Q.status(B, root)
+    if recovery["status"] != "NONE":
+        print("QUOTA_RECOVERY: " + json.dumps(recovery, separators=(",", ":")))
     for row in runs.peek(B, root):
         print("RUN_READBACK: " + json.dumps(row, separators=(",", ":")) +
               " | inspect existing backend job before takeover; no replay")

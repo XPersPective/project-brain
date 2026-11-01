@@ -92,7 +92,8 @@ mark still-open checkboxes after inspecting that evidence.
 
 ESP is the named, binding choice of worker resources. The director remains the
 director in every option, so labels do not repeatedly say director + something.
-Keep Executor Selection Policy (ESP), Scheduling Policy (SP), and their canonical
+Keep Executor Selection Policy (ESP), Scheduling Policy (SP), Quota Recovery Policy
+(QRP), and their canonical
 labels in English; explanations can use the user's language:
 
 | Choice | Scope |
@@ -114,13 +115,13 @@ needs clarification before dispatch, never a guessed alias.
 **Intake:** in each NEW implementation session, including a new-session
 "continue", load the unfinished task/Resume and saved ESP/SP. First read back
 already running/uncertain operations without replay. Then show one compact
-proposal, for example: "ESP: Native Cheapest; SP: Parallel (2). Keep both or
-change either?" Confirm BOTH before new execution/dispatch. Explicit ESP/SP
+proposal, for example: "ESP: Native Cheapest; SP: Parallel (2); QRP: disabled.
+Keep these or change?" Confirm all three before new execution/dispatch. Explicit ESP/SP
 answers already supplied in the current session satisfy the corresponding question.
 Do not infer new-session confirmation from "continue" alone or a saved preference.
 This replaces the earlier standing-policy/no-confirmation shortcut.
 
-Same-session questions/status requests reuse both choices without re-interview,
+Same-session questions/status requests reuse all three choices without re-interview,
 history reload or fresh boot. A read-only answer does not need implementation
 setup. Source repositories that retired their own Brain remain exempt from
 consumer setup; do not initialize tracking merely to ask these questions.
@@ -165,7 +166,8 @@ explicit user choices, not defaults or a new CAP payload:
     "models": ["host/another-exact-model-id"],
     "effort": {"selector": "director"}
   },
-  "scheduling": {"mode": "parallel", "max_parallel": 2}
+  "scheduling": {"mode": "parallel", "max_parallel": 2},
+  "quota_recovery": {"enabled": false, "threshold_percent": 10}
 }
 ```
 
@@ -174,13 +176,24 @@ cap-pinned. CAP selections record category IDs under categories and exact return
 route/model identities under models as applicable. Store any user exclusions or
 cost limits too. Omit irrelevant fields; do not invent choices, model identities,
 effort or cost data. A record alone is not evidence of an actual worker or review.
-This is a director-maintained protocol record; the current CLI does not parse it.
+The CLI now validates this record and enforces it on worker dispatch. Save with
+`PB policy --file <project-relative-json> --confirm --note "<user choices>"`.
+The example's disabled QRP and threshold are example choices, never defaults to
+silently invent. Ask enabled/disabled and threshold every new session; a current
+session answer counts. `policy --full` displays exact saved choices; `policy --confirm`
+binds unchanged bytes to this session. Changed policy, host session or a new-session
+boot invalidates confirmation. Unknown fields/unsupported cost limits fail closed.
+
+QRP is director-only opt-in recovery; read [RECOVERY.md](RECOVERY.md) before using
+host alarms. Disabled means no automatic wake. Every new session shows ESP/SP/QRP
+together in one compact keep/change question, including new-session continue.
+Cancellation never confirms unrelated unconfirmed ESP/SP.
 
 **Change:** recognize change ESP / Executor Selection Policy / agent selection,
 and change SP / Scheduling Policy / serial-parallel, including local-language
 equivalents. Show current ESP/SP and ask what to keep/change. A later explicit selection dialog
 also offers keep/change using saved choices. A fresh implementation session reads
-the durable ESP/SP and confirms both; an ordinary same-session question/status
+the durable ESP/SP/QRP and confirms all three; an ordinary same-session question/status
 request does not open a choice dialog,
 reload history or reset policy. A policy change affects subsequent undispatched
 work. Never rewrite/replay/cancel a running job just to make it match a new choice.
@@ -195,35 +208,42 @@ identity/effort; an unknown host identity cannot prove a pinned restriction.
 Required review/quality and token-economy rules remain mandatory in every mode.
 No policy can OS-enforce an editor or host action outside Brain; do not claim that.
 
-### 2.2 Current CLI compatibility
+### 2.2 Runtime and legacy compatibility
 
-The conversation protocol above does not add a new Pool API or implement arbitrary
-categories in the current adapter. That adapter still accepts these legacy mode codes:
-pool-all (Pool L/M/H), pool-medium (Pool L/M; director H), pool-low (Pool L;
-director M/H), native, native-low, solo. Its task-tier mapping to low/medium/high
-is legacy transport behavior, not a catalog contract for future categories.
-Do not turn an unknown category such as free into one of these aliases or claim
-a custom service/effort preference was enforced by an unsupported command.
-Retain the user's choice and report the concrete adapter gap for that dispatch.
-Do not encode pinned/cheapest-only ESP as a broader legacy alias and then ignore
-its extra bounds. Legacy native-low is not proof of actual host-model cost.
+Saved ESP/SP/QRP is authoritative over legacy modes/environment. `boot --new-session`
+preserves durable policy and unfinished jobs, rotates the confirmation nonce and
+requires the three explicit choices. Old projects must choose them at their first
+new-session boot; missing-policy legacy APIs remain readable for compatibility.
+A policy file does not prove actual worker identity; native host observations and
+CAP readback still matter. Unsupported constraints are rejected, not ignored.
 
-For compatible choices:
-`PB agents mode --new --exec <code> --rev <code> --schedule serial|parallel
---max-parallel <n> --task-mode response|execute --note "<user choice>"`.
-Use --new once, not every boot. New-session boot clears cached choices; saved ESP/SP supply the proposal,
-not confirmation. Ask once for both unless already answered in this session. Worker sessions inherit.
-Host PB_SESSION_ID isolates sessions; PB_EXEC_MODE/PB_REV_MODE are host overrides.
-Later explicit changes apply to subsequent work, never mutate/replay old jobs.
+CAP category IDs are opaque; catalog pins omit group. For new saved-policy workers use `runs prepare/submit`: its shared ledger enforces
+SP capacity. Legacy delegate supports existing-job readback only under a saved
+policy, rather than offering a second scheduler.
 
-Serial permits one worker; parallel permits independent work within host/runtime
-limits (currently 1..32). One writer per checkout; concurrent edits need separate
-worktrees and one integration writer. Wave count is independent of concurrency.
-Response is analysis; execute is edits/checks. Never lower risk/review floors to
-fit resources. Unavailable qualified review is a blocker; do not invent PASS or
-silently change to solo. After selection continue authorized work without repeated
-permission questions. Scope, required user feedback and external permissions remain
-real gates. Direct backend/registry uses [AGENTS_CLI.md](AGENTS_CLI.md).
+Before first use, the
+director records a reasoned exact-model fit assessment using
+`PB qualify --route <id> --model <id> --tier L|M|H --note "<basis>"`.
+Category names, including free, do not assign strength. This cache is routing
+metadata, not evidence/review PASS. Unknown qualification blocks dispatch; no
+silent lower model or provider fallback. Native cheapest requires an observed
+cheaper candidate while retaining the task quality floor. Pinned/effort-constrained
+native preparation requires exact host/model/effort before the host launch request:
+`PB runs prepare --task PB-001 --backend native --host <host> --model <model>
+--effort <effort> [--cheaper]`. Host receipts must match that immutable candidate.
+
+The deterministic dispatcher enforces exact model/category/effort and SP bounds.
+Internal verification worktrees inherit confirmed policy only from the validated
+same-repository origin. Copied/exported state never gains old-job control authority.
+Readback remains allowed under changed policy; new launches use current choices.
+For active old work use observe/readback, never re-submit to satisfy new settings.
+
+Without durable policy, the old mode aliases remain supported for compatibility;
+they do not accept custom categories or pin sets. Do not use those paths to bypass
+a saved policy. No local file authenticates the human or OS-sandboxes host actions.
+Independent qualified review, existing evidence and native/provider restrictions
+remain required. Direct backend/registry uses [AGENTS_CLI.md](AGENTS_CLI.md);
+the seven ESP sources do not authorize an unrelated direct CLI route.
 
 ## 3. Intake and task contracts
 

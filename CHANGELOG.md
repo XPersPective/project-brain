@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.8.0 — 2026-11-01
+
+- Enforce durable Executor Selection Policy (ESP), Scheduling Policy (SP) and
+  explicit director Quota Recovery Policy (QRP) through session-bound confirmation.
+- Route CAP category/catalog/pinned choices locally from bounded current metadata;
+  separate exact-model task-fit assessment from category labels and acceptance.
+- Bind native launch identity/effort and cheaper-model observations before launch;
+  preserve serial drain, same-origin internal verification and old-job readback.
+- Add opt-in account/policy/checkpoint-bound recovery intents and one-shot renewal
+  checks. Host same-chat automation creates the wake; local cancellation revokes
+  authority before host deletion. No account changes or quota-credit use.
+- Maintain the compact entry budget, dependency-free Python 3.8+ runtime and
+  existing source-bound quality/review gates. Runtime cannot sandbox host actions
+  or guarantee uninterrupted execution, provider quality or billed-token savings.
+
+
 ## 3.7.3 — 2026-11-01
 
 - Name Scheduling Policy (SP) alongside Executor Selection Policy (ESP); clarify

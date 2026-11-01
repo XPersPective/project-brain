@@ -132,6 +132,10 @@ def remember(model, data=None):
                            "pool_route": model["routeId"], "available": model["enabled"],
                            "roles": ["worker", "lead", "reviewer"], "tiers": ["L", "M", "H"],
                            "efforts": model.get("efforts", [])}
+    if model.get("pool_effort"):
+        data["models"][key]["pool_effort"] = model["pool_effort"]
+    if model.get("pool_category"):
+        data["models"][key]["pool_category"] = model["pool_category"]
     if persist:
         A.register_model(key, data["models"][key])
     return key
@@ -203,6 +207,216 @@ def select(tier="M", role="worker", route="", model="", effort="", group="", mod
     return result
 
 
+QUALIFICATION_LIMIT = 65536
+QUALITY_LEVELS = ("low", "medium", "high")
+QUALITY_TIERS = {"L": "low", "M": "medium", "H": "high"}
+
+
+def _qualification_path(B, root):
+    return V.public_path(root, B.BRAIN_DIR + "/.cache/model-qualifications.json")
+
+
+def _qualification_rows(B, root):
+    path = _qualification_path(B, root)
+    if not path.exists():
+        return []
+    with path.open("rb") as stream:
+        raw = stream.read(QUALIFICATION_LIMIT + 1)
+    if len(raw) > QUALIFICATION_LIMIT:
+        raise ValueError("Malformed model qualification registry: exceeds 64 KiB")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise ValueError("Malformed model qualification registry") from exc
+    if (not isinstance(value, dict) or set(value) != {"schema", "models"}
+            or type(value.get("schema")) is not int or value["schema"] != 1
+            or not isinstance(value.get("models"), list) or len(value["models"]) > 128):
+        raise ValueError("Malformed model qualification registry")
+    seen = set()
+    for row in value["models"]:
+        if (not isinstance(row, dict) or set(row) != {"routeId", "modelId", "tier", "note"}
+                or not all(isinstance(row.get(k), str) and row[k] and row[k] == row[k].strip()
+                           and len(row[k]) <= limit and not any(ord(c) < 32 for c in row[k])
+                           for k, limit in (("routeId", 256), ("modelId", 256), ("note", 512)))
+                or row.get("tier") not in ("L", "M", "H")):
+            raise ValueError("Malformed model qualification registry")
+        key = (row["routeId"], row["modelId"])
+        if key in seen:
+            raise ValueError("Malformed model qualification registry: duplicate model")
+        seen.add(key)
+    return value["models"]
+
+
+def qualify(B, root, route, model, tier, note):
+    """Store a bounded director fit assessment; this is not verification evidence."""
+    import runtime_security as S
+    if not B.brain_exists(root):
+        raise ValueError("Initialize Brain before qualifying a Pool model")
+    for label, value, limit in (("route", route, 256), ("model", model, 256), ("note", note, 512)):
+        if (not isinstance(value, str) or not value or value != value.strip()
+                or len(value) > limit or any(ord(ch) < 32 for ch in value)):
+            raise ValueError("Model qualification requires exact IDs and a clean nonempty note")
+        S.require_clean(value, "model qualification " + label)
+    if tier not in ("L", "M", "H"):
+        raise ValueError("Model qualification tier must be L, M, or H")
+    rows = _qualification_rows(B, root)
+    key = (route, model)
+    row = {"routeId": route, "modelId": model, "tier": tier, "note": note}
+    replaced = False
+    for index, old in enumerate(rows):
+        if (old["routeId"], old["modelId"]) == key:
+            rows[index] = row
+            replaced = True
+            break
+    if not replaced:
+        if len(rows) >= 128:
+            raise ValueError("Model qualification registry is full")
+        rows.append(row)
+    payload = json.dumps({"schema": 1, "models": rows}, ensure_ascii=False, indent=2)
+    if len((payload + "\n").encode("utf-8")) > QUALIFICATION_LIMIT:
+        raise ValueError("Model qualification registry exceeds 64 KiB")
+    B.write_atomic(_qualification_path(B, root), payload)
+    return row
+
+
+def model_qualification(B, root, route, model):
+    for row in _qualification_rows(B, root):
+        if row["routeId"] == route and row["modelId"] == model:
+            return row["tier"]
+    return None
+
+
+def _candidate_rows(source, selector, kind):
+    found = {}
+    if source == "cap-pinned":
+        for pin in selector["models"]:
+            for row in targeted_models(pin["routeId"], pin["modelId"]):
+                found[(row["routeId"], row["id"])] = row
+        return list(found.values())
+    if source == "cap-category":
+        queries = [("pool_list_pools", {"group": category, "limit": 12, "offset": 0}, category)
+                   for category in selector["categories"]]
+    else:
+        queries = [("pool_catalog", {"view": "models", "kind": kind, "limit": 12, "offset": 0}, None)]
+    pages_left = 8
+    for tool, initial, category in queries:
+        offset = 0
+        complete = False
+        while pages_left:
+            pages_left -= 1
+            page = rpc(tool, dict(initial, offset=offset))
+            if not isinstance(page, dict):
+                raise ValueError("Malformed Pool catalog page; routing is blocked")
+            rows = page.get("models", page.get("items", page.get("entries", [])))
+            if not isinstance(rows, list):
+                raise ValueError("Malformed Pool catalog models; routing is blocked")
+            for raw in rows:
+                item = normalize_model(raw)
+                if category is not None:
+                    memberships = raw.get("categories", [])
+                    if not isinstance(memberships, list):
+                        continue
+                    if category not in memberships and raw.get("category") != category:
+                        continue
+                    item["categories"] = memberships
+                    item["selectedCategory"] = category
+                found[(item.get("routeId"), item.get("id"))] = item
+            next_offset = page.get("nextOffset")
+            if next_offset is None:
+                complete = True
+                break
+            if type(next_offset) is not int or next_offset <= offset:
+                break
+            offset = next_offset
+        if not complete:
+            raise ValueError("Pool metadata page limit reached; cannot prove eligible model choices")
+    return list(found.values())
+
+
+def select_policy(B, root, tier="M", role="worker", route="", model="", effort="", group="", mode=None):
+    """Select locally from the confirmed ESP allowlist; never ask Pool to route around it."""
+    import runtime_executor_policy as E
+    selector = E.guard(B, root, role, "pool")
+    if selector is None:
+        return select(tier, role, route=route, model=model, effort=effort, group=group, mode=mode)
+    source = selector["source"]
+    task_tier = tier.upper() if tier.upper() in QUALITY_TIERS else "M"
+    quality_needed = QUALITY_LEVELS.index(QUALITY_TIERS[task_tier])
+    selected_effort = effort if effort not in ("", "default") else None
+    bounds = selector.get("effort", {})
+    if selected_effort is None and bounds.get("selector") == "user":
+        selected_effort = bounds["value"]
+    category = group if source == "cap-category" and group else None
+    if source == "cap-category" and category and category not in selector["categories"]:
+        raise ValueError("Category is outside saved executor bounds")
+    E.guard(B, root, role, "pool", category=category, effort=selected_effort)
+    mode = mode or ("response" if role in ("reviewer", "discovery") else "execute")
+    if mode not in ("response", "execute"):
+        raise ValueError("Pool mode must be response or execute")
+    kind = "write" if mode == "execute" else "read"
+    rows = _candidate_rows(source, selector, kind)
+    pins = {(p["routeId"], p["modelId"]) for p in selector.get("models", [])}
+    candidates = []
+    for row in rows:
+        row = normalize_model(row)
+        identity = (row.get("routeId"), row.get("id"))
+        if not all(isinstance(v, str) and v for v in identity):
+            continue
+        if route and identity[0] != route or model and identity[1] != model:
+            continue
+        if source == "cap-pinned" and identity not in pins:
+            continue
+        if row.get("enabled") is not True or row.get("hidden") or row.get("removed"):
+            continue
+        if row.get("billing") == "paid_api" and source != "cap-pinned":
+            continue
+        if kind not in row.get("kinds", []):
+            continue
+        qualification = model_qualification(B, root, *identity)
+        if qualification is None or QUALITY_LEVELS.index(QUALITY_TIERS[qualification]) < quality_needed:
+            continue
+        memberships = row.get("categories", [])
+        actual_category = row.get("selectedCategory") if source == "cap-category" else None
+        if source == "cap-category" and (not actual_category or actual_category not in selector["categories"]
+                                          or actual_category not in memberships):
+            continue
+        supported = row.get("efforts", [])
+        effective_effort = selected_effort
+        if effective_effort is None:
+            default = row.get("defaultEffort")
+            if bounds.get("selector") == "default":
+                effective_effort = default
+            elif bounds.get("allowed"):
+                effective_effort = default if default in bounds["allowed"] else next(
+                    (item for item in bounds["allowed"] if item in supported), None)
+            else:
+                effective_effort = default
+        if effective_effort is not None and effective_effort not in supported:
+            continue
+        actual = dict(row, effort=effective_effort)
+        try:
+            E.guard(B, root, role, "pool", model=actual,
+                    category=actual_category, effort=effective_effort)
+        except ValueError:
+            continue
+        candidates.append((actual, qualification, actual_category))
+    if not candidates:
+        ids = sorted({row.get("routeId", "") + "/" + row.get("id", "") for row in rows})[:12]
+        raise ValueError("MODEL_QUALIFICATION_REQUIRED or no eligible ESP candidate; qualify a suitable exact model. Candidates: " + ", ".join(ids))
+    chosen, qualification, actual_category = sorted(candidates, key=lambda item: (item[0]["routeId"], item[0]["id"]))[0]
+    request = {"kind": kind, "mode": mode, "routeId": chosen["routeId"], "modelId": chosen["id"],
+               "minRemainingPercent": 25 if role in ("lead", "reviewer") else 10}
+    if actual_category is not None:
+        request["group"] = actual_category
+    if chosen.get("effort") is not None:
+        request["effort"] = chosen["effort"]
+    chosen["pool_effort"] = chosen.get("effort")
+    chosen["pool_category"] = actual_category
+    chosen["category"] = actual_category
+    return {"selected": chosen, "request": request, "alternatives": len(candidates),
+            "alias": alias(chosen), "strength": QUALITY_TIERS[qualification]}
+
+
 def targeted_models(route, model_id):
     """Read a bounded, exact model lookup without enumerating the provider catalog."""
     rows = []
@@ -220,7 +434,10 @@ def targeted_models(route, model_id):
                 continue
             cats = raw.get("categories")
             if isinstance(cats, list):
-                rows.extend(dict(item, group=category) for category in cats)
+                if cats:
+                    rows.extend(dict(item, group=category) for category in cats)
+                else:
+                    rows.append(item)
             else:
                 rows.append(item)
         next_offset = page.get("nextOffset")
@@ -238,6 +455,51 @@ def targeted_models(route, model_id):
 def gate(B, task, spec, actor, action, root=None):
     if action == "accept":
         return
+    import runtime_executor_policy as E
+    saved = E.load(B, root) if root is not None else None
+    if saved is not None:
+        role = "reviewer" if action == "review" else "worker"
+        matches = targeted_models(spec["pool_route"], spec["model_id"])
+        live = next((m for m in matches if m.get("enabled") is True and not m.get("hidden") and not m.get("removed")), None)
+        if live is None:
+            raise ValueError("Pool model is unavailable or no longer visible")
+        file = journal_path(root, task["id"]) if action == "review" else None
+        entry = json.loads(file.read_text(encoding="utf-8")) if file is not None and file.exists() else {}
+        category = spec.get("pool_category") or (entry.get("request") or {}).get("group")
+        effort = spec.get("pool_effort") or (entry.get("request") or {}).get("effort") or live.get("defaultEffort")
+        live["effort"] = effort
+        E.guard(B, root, role, "pool", model=live,
+                category=category if saved["execution"]["source"] == "cap-category" or saved["review"]["source"] == "cap-category" else None,
+                effort=effort)
+        tier = __import__("runtime_agents").score_task(B, None, task)["effective_tier"]
+        needed = GROUPS[tier]
+        levels = ["low", "medium", "high"]
+        qualification = model_qualification(B, root, spec["pool_route"], spec["model_id"])
+        if qualification is None:
+            raise ValueError("MODEL_QUALIFICATION_REQUIRED: qualify this exact model before use")
+        strength = QUALITY_TIERS[qualification]
+        if action == "start":
+            if levels.index(strength) < levels.index(needed):
+                raise ValueError("Pool model qualification is below the task strength floor")
+            import runtime_runs as runs
+            bound = runs.implementation_strength(B, root, task["id"], actor)
+            if bound and levels.index(bound) > levels.index(strength):
+                strength = bound
+            return {"poolStrength": strength}
+        if action == "review":
+            import runtime_agents as A
+            implementers = V.implementers(B, task)
+            if A.canonical_identity(actor) in {A.canonical_identity(i) for i in implementers}:
+                raise ValueError("reviewer must be a different agent/model")
+            records = B.start_records(task)
+            worker_groups = [r["strength"] for r in records if r.get("strength")]
+            if any(not r.get("strength") for r in records) or not worker_groups:
+                raise ValueError("review requires task-bound implementation strength; inspect legacy/mixed-backend work")
+            if entry.get("strength"):
+                worker_groups.append(entry["strength"])
+            if any(group in levels and levels.index(strength) < levels.index(group) for group in worker_groups):
+                raise ValueError("reviewer strength is below the implementer pool")
+            return
     policy = rpc("pool_get_policy")
     is_modern = modern(policy)
     if is_modern:
@@ -375,8 +637,12 @@ def delegate(B, root, task, score, args):
         if entry and requested_mode and entry["request"].get("mode") != requested_mode:
             raise ValueError("Existing Pool request is immutable; use --readback to inspect it instead of changing its mode")
         if not entry:
+            B.require_session(root, implementation=(requested_mode or modes.get("task_mode", "execute")) == "execute")
+            import runtime_executor_policy as E
+            if E.load(B, root) is not None:
+                raise ValueError("Saved ESP/SP workers require runs prepare/submit for shared capacity enforcement; legacy delegate is readback-only")
             R.attempt_guard(B, root, task)
-            selected = select(score["effective_tier"], role="lead" if score["effective_tier"] == "H" else "worker", route=args.cli, model=args.model,
+            selected = select_policy(B, root, score["effective_tier"], role="lead" if score["effective_tier"] == "H" else "worker", route=args.cli, model=args.model,
                               effort=args.effort, group=args.group, mode=requested_mode or modes.get("task_mode", "execute"))
             print("POOL_SELECT " + json.dumps({k: selected[k] for k in ("alias", "strength", "request")}, ensure_ascii=False))
             if args.dry_run:
@@ -471,7 +737,7 @@ def agents(B, args):
         if args.exclude:
             raise ValueError("--exclude is available with --backend direct; use Pool owner membership to exclude models")
         task_mode = getattr(args, "mode", None) or ("response" if args.role in ("reviewer", "discovery") else modes.get("task_mode", "execute"))
-        value = select(tier, args.role, route=args.cli, mode=task_mode)
+        value = select_policy(B, args.root, tier, args.role, route=args.cli, mode=task_mode)
         remember(value["selected"])
     else:
         policy = rpc("pool_get_policy")

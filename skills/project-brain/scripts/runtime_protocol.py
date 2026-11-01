@@ -103,6 +103,8 @@ def reconcile(B, root, task, note, independent=False, keep_evidence=False):
 
 
 def guard(B, root, task):
+    import runtime_executor_policy as E
+    E.require_confirmed(B, root)
     if not enabled(B, root):
         return
     from runtime_security import policy_guard

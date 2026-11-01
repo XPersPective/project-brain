@@ -1,4 +1,39 @@
-# Verification guide — Project Brain 3.7.3
+# Verification guide — Project Brain 3.8.0
+
+3.8.0 adds validated seven-source ESP, independent SP and explicit director QRP.
+Tests cover strict bounded policy JSON, exact native/CAP identities, opaque
+categories, user/default effort constraints, fresh-session policy-byte receipts,
+environment/legacy override resistance, unknown cost/quality blockers and bounded
+qualification metadata. No category name is treated as a capability score.
+
+Native candidates are bound before launch; receipts must match. Tests exercise
+serial capacity/drain, changed-policy PREPARED rejection, old-job readback and
+same-origin internal worktree inheritance. New saved-policy workers use the
+durable runs scheduler; legacy delegate is readback-only for them, preventing a
+second capacity path. Missing-policy legacy APIs remain compatible; explicit
+new-session boot requires all three choices, including for existing projects.
+
+QRP tests cover actual saved handoff, idempotent PREPARED/ARMED state, account and
+limit hashes, policy/checkpoint mutation, early/unknown quota, demonstrable window
+renewal, cancellation before host deletion, late callbacks and one-shot consumption.
+CLI regressions prove cancelling does not confirm unrelated pending ESP/SP and
+response discovery cannot escape quota waiting. Main-agent quota differs from
+worker quota/context-token capacity.
+
+The actual Codex host supplied quota/account metadata. A paused same-chat
+heartbeat was created then deleted to check host acknowledgement; no active test
+alarm remains. The user subsequently cancelled QRP for this release session.
+CAP current help/category/catalog readback is verified separately before publish;
+no provider worker is needed to prove metadata compatibility. Portable host wake
+and native identity remain host-dependent; uninterrupted coding is not guaranteed.
+
+Validation: complete offline test_brain.py passed under Windows Python 3.11.15
+and 3.8.20, including every new policy/control/orchestration and 14 QRP checks.
+Python 3.8 grammar, local links, version and diff checks passed. Current CAP help,
+category summary and catalog summary returned successfully with zero submitted
+workers. The skill entry is 6,493 LF-normalized UTF-8 bytes (budget 6,500).
+Independent scoped review found cancellation-confirmation, response-wait and
+provider-default-effort issues; all fixed with regressions.
 
 3.7.3 recognizes current CAP compact metadata (help-like policy, modelId/category/
 effort, alternative count and paginated model memberships) alongside the legacy
@@ -25,8 +60,8 @@ not evaluated. Malformed task/ledger state is surfaced rather than repaired.
 Selection tests preserve explicit task tiers/resource caps and reviewer H default,
 default discovery to L, and distinguish compact from `--full` output.
 
-The mandatory skill entry, including ESP and Scheduling Policy (SP), is 6,498
-LF-normalized UTF-8 bytes versus 12,366 at the starting revision (47.5% smaller);
+At 3.7.3 the skill entry was 6,498 LF-normalized UTF-8 bytes versus
+12,366 at the starting revision (47.5% smaller);
 a 6,500-byte regression budget guards expansion.
 Detailed authority/session rules moved to relevant WORKFLOW sections, rather than
 being deleted. This is input size, not a measured reduction in billed/reasoning

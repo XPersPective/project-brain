@@ -224,7 +224,7 @@ planning/review effort remains required. SOLO never probes Pool or workers.
 
 ESP chooses executor resources; SP independently chooses Serial/Parallel and the
 maximum active workers. At a new implementation session, including "continue",
-read back unfinished jobs and confirm saved ESP/SP together before new dispatch.
+read back unfinished jobs and confirm saved ESP/SP/QRP together before new dispatch.
 Recommend the saved parallel setting for unfinished parallel work. Already
 supplied current-session answers count; same-session questions never reopen it.
 Keep old jobs immutable and capacity-accounted. Serial changes drain existing

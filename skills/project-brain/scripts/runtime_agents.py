@@ -1504,6 +1504,8 @@ def _delegate_task(B, root, tid, cli_filter="", model_override="", effort_overri
     if not B.brain_exists(root):
         print("NO_BRAIN")
         return 3
+    import runtime_executor_policy as E
+    E.guard(B, root, "exec", "direct")
     task = B.find_task(root, tid)
     if not task:
         print(f"FAIL {tid}: task not found")

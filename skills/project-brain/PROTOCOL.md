@@ -19,15 +19,17 @@ legacy shapes stop for inspection. This does not download installed-skill update
 Confirm Target in the user's words; choose EXEC/REV once. Then record one project
 secret decision, even when the answer is no secrets:
 
-Before implementation: `PB orient`, then `PB boot --new-session`; read the durable
-Executor Selection Policy (ESP) and Scheduling Policy (SP) from
+Before implementation: `PB orient`, then `PB boot --new-session`; read durable
+Executor Selection Policy (ESP), Scheduling Policy (SP) and Quota Recovery Policy (QRP) from
 `.project-brain/executor-policy.json`. On EVERY new implementation session,
-including "continue", show saved choices and confirm both before new execution;
+including "continue", show saved choices and confirm all three before new execution;
 current-session explicit answers count. Preserve unfinished work and read back
 old jobs first, never replay them. Offer: Solo, Native, Native Cheapest, Native Pinned, CAP Categories,
 CAP Catalog, or CAP Pinned. Native is the host; CAP is CLI Agent Pool. Resolve
 exact allowed models/categories/effort and separately serial/parallel scheduling.
-Record supplied choices, including different review bounds if requested.
+Record supplied choices including different review bounds if requested and QRP
+enabled/disabled plus threshold. See [RECOVERY.md](RECOVERY.md) for director-only
+checkpoint, host wake, same-account renewal and cancellation guards.
 ESP/SP changes or a new-session selection dialog show saved settings and ask
 what to keep/change. Same-session questions never reset/reopen them.
 Solo means the main agent performs work using tools without subagents.
@@ -35,7 +37,7 @@ SP names Serial or Parallel with a confirmed maximum; recommend saved parallel
 settings for unfinished work. Changes apply to new dispatches; drain old jobs. Every dispatch must
 stay within source/model/category/effort/scheduling bounds; no silent fallback.
 [WORKFLOW §2](WORKFLOW.md#2-session-and-boot-details) defines the compact record
-and current CLI limits; that record is director-maintained, not a new runtime parser.
+and current CLI limits; the CLI validates the record and enforces its dispatch bounds.
 
 For CAP choices, use its skill for compact current categories/catalog/efforts.
 Do not invent category names or design CAP's API. Explicit solo/native/no-CAP skips

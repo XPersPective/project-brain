@@ -46,7 +46,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.7.3"
+VERSION = "3.8.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -481,6 +481,8 @@ def get_session_modes(root):
                         out["task_mode"] = data["task_mode"]
         except (ValueError, OSError):
             pass
+    import runtime_executor_policy as E
+    out.update(E.settings(sys.modules[__name__], root))
     return out
 
 
@@ -520,6 +522,11 @@ def set_session_modes(root, exec_mode="", rev_mode="", note="", new=False, sched
 
 
 def require_session(root, implementation=False):
+    import runtime_executor_policy as E
+    E.require_confirmed(sys.modules[__name__], root)
+    import runtime_quota_recovery as Q
+    if Q.status(sys.modules[__name__], root)["status"] in ("PREPARED", "ARMED"):
+        raise ValueError("QRP_WAIT: read back/resume or cancel director recovery before new work")
     modes = get_session_modes(root)
     if not modes["exec"] or not modes["rev"]:
         raise ValueError("SESSION_CHOICE_REQUIRED: choose EXEC, REV, serial/parallel and response/execute before implementation; use `agents mode`")
@@ -1250,6 +1257,8 @@ def cmd_boot(root, maintain=True, new_session=False):
         return 0
     if new_session and maintain:
         set_session_modes(root, new=True)
+        import runtime_executor_policy as E
+        E.begin_session(sys.modules[__name__], root)
     cfg = parse_config(root)
     every_ids, completed_ids = history_task_ids(root) if has_git else (set(), set())
     gc_removed = gc_brain(root, has_git=has_git, completed=completed_ids) if maintain and not legacy else []
@@ -1349,7 +1358,13 @@ def cmd_boot(root, maintain=True, new_session=False):
     print(gitline)
     import runtime_pool as P
     s_modes = get_session_modes(root)
-    print("SESSION_GATE: " + ("READY" if s_modes["exec"] and s_modes["rev"] else "ASK_USER_BEFORE_IMPLEMENTATION"))
+    import runtime_executor_policy as E
+    try:
+        E.require_confirmed(sys.modules[__name__], root)
+        policy_ready = True
+    except ValueError:
+        policy_ready = False
+    print("SESSION_GATE: " + ("READY" if s_modes["exec"] and s_modes["rev"] and policy_ready else "CONFIRM_ESP_SP_QRP"))
     print(f"WORK: {s_modes['task_mode']} | {s_modes['schedule']} | max_parallel={s_modes['max_parallel']}")
     if os.environ.get("PB_AGENTS_REGISTRY"):
         for line in P.summary(sys.modules[__name__], root):
@@ -1931,6 +1946,7 @@ def cmd_doctor(root):
 
 
 BOOLEAN_FLAGS = {
+    "--confirm", "--rearm", "--full", "--cheaper", "--new-session",
     "--apply", "--write", "--json", "--dry-run", "--force", "--no-quota", "--new", "--refresh", "--user-confirmed", "--prepare", "--verify", "--cleanup", "--self-review", "--read-only", "--enable", "--goal-independent", "--keep-evidence", "--rerun", "--scan", "--readback", "-h", "--help", "--version"
 }
 
@@ -1986,6 +2002,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     import runtime_orchestration as O
     O.add_parser(sub)
+    import runtime_control as CT
+    CT.add_parser(sub)
 
     for name in ("boot", "brief", "map", "init", "changed", "validate", "doctor"):
         parser = sub.add_parser(name)
@@ -2172,6 +2190,9 @@ def main():
     a = ap.parse_args(_reorder_argv(sys.argv[1:]))
     B_mod = sys.modules[__name__]
 
+    if a.cmd in ("policy", "quota", "qualify"):
+        print(json.dumps(CT.command(B_mod, a), ensure_ascii=False))
+        return 0
     if a.cmd == "runs":
         print(json.dumps(O.command(B_mod, a), ensure_ascii=False))
         return 0
@@ -2179,6 +2200,9 @@ def main():
     if a.cmd == "agents":
         if a.agents_cmd == "mode":
             root = Path(a.root).resolve()
+            import runtime_executor_policy as E
+            if E.load(B_mod, root) and (a.exec_mode or a.rev_mode or a.new or a.schedule or a.max_parallel is not None):
+                raise ValueError("Saved ESP/SP is authoritative; update/confirm it with policy, not legacy mode overrides")
             if a.exec_mode or a.rev_mode or a.note or a.new or a.schedule or a.max_parallel is not None or a.task_mode:
                 with checkout_lock(root):
                     modes = set_session_modes(root, a.exec_mode, a.rev_mode, a.note, new=a.new, schedule=a.schedule, max_parallel=a.max_parallel, task_mode=a.task_mode)

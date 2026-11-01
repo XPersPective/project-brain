@@ -11,6 +11,7 @@ import tempfile
 import time
 
 import runtime_context as C
+import runtime_executor_policy as E
 import runtime_reports as Q
 import runtime_runs as L
 import runtime_security as S
@@ -81,6 +82,7 @@ def candidate_contract(B, root, candidate, row):
 
 def modes(B, root, kind, backend):
     B.require_session(root, implementation=kind == "EXECUTE")
+    E.guard(B, root, "review" if kind == "REVIEW" else "exec", backend)
     value = B.get_session_modes(root)
     mode = value["rev" if kind == "REVIEW" else "exec"]
     if mode == "solo" or (backend == "pool") != mode.startswith("pool_"):
@@ -93,6 +95,92 @@ def session_modes(B, root, db, kind, backend):
     if not origin.is_dir() or L.canonical(B, origin) != L.canonical(B, root):
         raise ValueError("Origin session is unavailable; explicitly rebind after recovery")
     return modes(B, origin, kind, backend)
+
+
+def inherit_session(B, origin, candidate, db, settings):
+    """Internal worktrees inherit confirmed choices, never exported control authority."""
+    origin, candidate = Path(origin).resolve(), Path(candidate).resolve()
+    if (db.origin(origin).resolve() != origin or not origin.is_dir()
+            or L.canonical(B, origin) != L.canonical(B, candidate)
+            or db.path.resolve().parent != L.directory(B, origin, create=False).resolve()):
+        raise ValueError("Policy inheritance requires the authoritative same-repository origin")
+    policy = E.require_confirmed(B, origin)
+    if origin == candidate:
+        return
+    if policy is not None:
+        name = B.BRAIN_DIR + "/executor-policy.json"
+        source, target = V.public_path(origin, name), V.public_path(candidate, name)
+        raw = source.read_text(encoding="utf-8")
+        # The policy has just been validated; retain all exact selected values.
+        B.write_atomic(target, raw)
+        E.require_confirmed(B, origin)
+        E.confirm(B, candidate, "Inherited confirmed origin choices for internal verification")
+    # Routing assessments are not evidence/acceptance. Copy only from the same
+    # validated origin; do not leave stale child assessments when origin has none.
+    name = B.BRAIN_DIR + "/.cache/model-qualifications.json"
+    source, target = V.public_path(origin, name), V.public_path(candidate, name)
+    if source.exists():
+        with source.open("rb") as stream:
+            raw = stream.read(65537)
+        if len(raw) > 65536:
+            raise ValueError("Model qualifications exceed 64 KiB")
+        try:
+            text = raw.decode("utf-8")
+            json.loads(text)
+        except (UnicodeError, ValueError, RecursionError) as error:
+            raise ValueError("Malformed model qualifications") from error
+        S.require_clean(text, "model qualifications")
+        E.require_confirmed(B, origin)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".model-qualifications.", suffix=".tmp", dir=str(target.parent))
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    elif target.exists():
+        target.unlink()
+    B.set_session_modes(candidate, settings["exec"], settings["rev"], schedule=settings["schedule"],
+                        max_parallel=settings["max_parallel"], task_mode=settings.get("task_mode", "execute"))
+
+
+def native_candidate(B, origin, kind, candidate):
+    role = "review" if kind == "REVIEW" else "exec"
+    selected = E.selector(B, origin, role)
+    bounded = selected and (selected["source"] in ("native-pinned", "native-cheap")
+                           or selected.get("effort", {}).get("selector") == "user"
+                           or "allowed" in selected.get("effort", {}))
+    if candidate is None:
+        if bounded:
+            raise ValueError("Known native host/model candidate required before launch")
+        E.guard(B, origin, role, "native")
+        return None
+    if (not isinstance(candidate, dict) or set(candidate) - {"host", "model", "effort", "cheaper"}
+            or any(not isinstance(candidate.get(key), str) or not candidate[key].strip()
+                   or candidate[key] != candidate[key].strip() or len(candidate[key]) > 256
+                   or candidate[key].lower() == "unknown" or any(ord(c) < 32 or c in "*?[]" for c in candidate[key])
+                   for key in ("host", "model"))):
+        raise ValueError("Native candidate requires exact known host/model identity")
+    if "effort" in candidate and (not isinstance(candidate["effort"], str) or not candidate["effort"].strip()
+                                  or len(candidate["effort"]) > 256 or any(ord(c) < 32 for c in candidate["effort"])):
+        raise ValueError("Native candidate effort must be bounded nonempty text")
+    if "cheaper" in candidate and type(candidate["cheaper"]) is not bool:
+        raise ValueError("Native candidate cheaper observation must be boolean")
+    S.require_clean(json.dumps(candidate), "native candidate")
+    E.guard(B, origin, role, "native", model=candidate, effort=candidate.get("effort"),
+            cheaper=candidate.get("cheaper"))
+    return dict(candidate)
+
+
+def tier_cap(B, origin, kind, mode):
+    selected = E.selector(B, origin, "review" if kind == "REVIEW" else "exec")
+    if selected and selected["source"] == "native-cheap":
+        return "H"  # A cheaper observation never lowers the task quality floor.
+    return {"pool_low": "L", "pool_med_low": "M", "self_and_lower": "L"}.get(mode, "H")
 
 
 def native_actor(host, model):
@@ -165,14 +253,20 @@ def native_gate(B, root, task_value, actor, action):
         db.close()
 
 
-def prepare(B, root, db, directory, tid, kind, backend, resources=(), tiers=None):
+def prepare(B, root, db, directory, tid, kind, backend, resources=(), tiers=None, candidate=None):
     value = B.find_task(root, tid)
     if not value or B.task_errors(value):
         raise ValueError("Executable task required")
     settings, mode = session_modes(B, root, db, kind, backend)
+    if backend != "native" and candidate is not None:
+        raise ValueError("Host candidates require the native backend")
+    origin = db.origin(root)
+    if Path(root).resolve() != origin.resolve():
+        inherit_session(B, origin, root, db, settings)
+    candidate = native_candidate(B, origin, kind, candidate) if backend == "native" else None
     import runtime_agents as A
     tier = A.score_task(B, root, value)["effective_tier"]
-    cap = {"pool_low": "L", "pool_med_low": "M", "self_and_lower": "L"}.get(mode, "H")
+    cap = tier_cap(B, origin, kind, mode)
     eligible = tiers or list("LMH"[:"LMH".index(cap) + 1])
     if not eligible or any(x not in "LMH" or len(x) != 1 or "LMH".index(x) > "LMH".index(cap) for x in eligible):
         raise ValueError("Task tier is outside the explicit permitted tier set")
@@ -201,6 +295,8 @@ def prepare(B, root, db, directory, tid, kind, backend, resources=(), tiers=None
             "base": packet["base"], "workspace": str(Path(root).resolve()), "packet": packet,
             "tier": selected_tier, "task_tier": tier, "tiers": eligible, "mode": mode, "session": settings,
             "common": str(common), "isolation": "worktree, procedural access boundary"}
+    if candidate is not None:
+        spec["native_candidate"] = candidate
     row = db.prepare(spec)
     workspace = Path(directory) / "workspaces" / row["id"]
     if kind == "EXECUTE":
@@ -221,7 +317,6 @@ def submit(B, root, db, directory, rid):
     row = db.get(rid)
     require_control(db, rid)
     value = task(B, root, row)
-    session_modes(B, root, db, row["kind"], row["spec"]["backend"])
     if row["state"] == "PREPARED":
         current_intent(B, root, row)
         settings, mode = session_modes(B, root, db, row["kind"], row["spec"]["backend"])
@@ -229,11 +324,15 @@ def submit(B, root, db, directory, rid):
         executing = db.db.execute("SELECT COUNT(*) FROM runs WHERE id!=? AND state IN ('SUBMITTING','RUNNING','CANCEL_REQUESTED','UNKNOWN')", (rid,)).fetchone()[0]
         if executing >= db.policy()["cap"]:
             raise ValueError("CAPACITY: drain dispatched jobs before launching a prepared run")
-        cap = {"pool_low": "L", "pool_med_low": "M", "self_and_lower": "L"}.get(mode, "H")
+        cap = tier_cap(B, db.origin(root), row["kind"], mode)
         if "LMH".index(row["spec"]["tier"]) > "LMH".index(cap):
             raise ValueError("Prepared run exceeds the current session tier cap")
+        if row["spec"]["backend"] == "native":
+            native_candidate(B, db.origin(root), row["kind"], row["spec"].get("native_candidate"))
+    elif row["state"] not in ("SUBMITTING", "UNKNOWN"):
+        return observe(B, root, db, directory, rid)
     path = workspace(row, directory)
-    if row["kind"] == "REVIEW" and (git(path, "rev-parse", "HEAD") != row["spec"]["base"] or
+    if row["state"] == "PREPARED" and row["kind"] == "REVIEW" and (git(path, "rev-parse", "HEAD") != row["spec"]["base"] or
             C.packet(B, path, value, "REVIEW")["source"] != row["spec"]["source"]):
         raise ValueError("REVIEW requires the exact prepared content snapshot")
     if not path.is_dir():
@@ -247,14 +346,21 @@ def submit(B, root, db, directory, rid):
         return {"run": rid, "host_action": "launch_once", "workspace": str(path),
                 "request_key": row["spec"]["idempotencyKey"], "packet": row["spec"]["packet"],
                 "model_tier": row["spec"]["tier"], "permitted_tiers": row["spec"]["tiers"],
+                "candidate": row["spec"].get("native_candidate"),
+                "policy_bounds": E.selector(B, db.origin(root), "review" if row["kind"] == "REVIEW" else "exec"),
                 "capabilities": {"automatic_launch": False, "attach": "host-dependent", "token_counter": "unknown"}}
     saved = db.db.execute("SELECT payload FROM requests WHERE run=?", (rid,)).fetchone()
     if saved:
         request = json.loads(saved[0])
+        if row["state"] == "PREPARED":
+            E.guard(B, db.origin(root), "review" if row["kind"] == "REVIEW" else "exec", "pool",
+                    model=dict(request, categories=[request["group"]] if request.get("group") else []),
+                    category=request.get("group"), effort=request.get("effort"))
     else:
         if row["state"] != "PREPARED":
             raise ValueError("Missing immutable request; recover backend before any resend")
-        selected = P.select(row["spec"]["tier"], role="reviewer" if row["kind"] == "REVIEW" else "worker")
+        selected = P.select_policy(B, db.origin(root), row["spec"]["tier"],
+                                   role="reviewer" if row["kind"] == "REVIEW" else "worker")
         actor = P.remember(selected["selected"])
         request = dict(selected["request"], prompt=C.prompt(row["spec"]["packet"]), workspace=str(path),
                        timeoutSeconds=300, idempotencyKey=row["spec"]["idempotencyKey"])
@@ -323,6 +429,10 @@ def native_receipt(db, rid, receipt):
     model = receipt.get("model")
     if not isinstance(model, str) or not model.strip() or receipt.get("tier") is None:
         raise ValueError("Host receipt requires actual model (or unknown) and classified tier")
+    candidate = row["spec"].get("native_candidate")
+    if candidate and any(receipt.get(key) != expected or type(receipt.get(key)) is not type(expected)
+                         for key, expected in candidate.items()):
+        raise ValueError("Host receipt differs from immutable native candidate")
     actor = native_actor(receipt["host"], model)
     previous = [json.loads(v[0]) for v in db.db.execute("SELECT data FROM events WHERE run=?", (rid,))]
     if any(v.get("actor") and (v["actor"] != actor or v.get("host") != receipt["host"] or
@@ -331,6 +441,8 @@ def native_receipt(db, rid, receipt):
     S.require_clean(json.dumps(receipt, ensure_ascii=False), "host receipt")
     observation = {"host": receipt["host"], "model": model, "actor": actor, "tier": receipt["tier"],
                    "usage": Q.usage(receipt.get("usage"))}
+    if candidate:
+        observation.update({key: candidate[key] for key in ("effort", "cheaper") if key in candidate})
     import runtime_agents as A
     A.register_model(actor, {"model_id": model, "cli": "native-host", "native_orchestration": True,
                              "available": True, "roles": ["worker", "lead", "reviewer"], "tiers": ["L", "M", "H"]})
@@ -430,8 +542,7 @@ def verify(B, root, db, directory, rid, actor):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(str(src), str(dest))
         settings = B.get_session_modes(root)
-        B.set_session_modes(candidate, settings["exec"], settings["rev"], schedule=settings["schedule"],
-                            max_parallel=settings["max_parallel"], task_mode="execute")
+        inherit_session(B, db.origin(root), candidate, db, settings)
     if git(candidate, "diff", "--name-only", "--diff-filter=U"):
         raise ValueError("Candidate has unresolved merge conflicts; repair and recheck")
     live = candidate_contract(B, root, candidate, row)
@@ -489,8 +600,7 @@ def integrate(B, root, db, directory, rid):
             return summary(db.get(rid))
         raise ValueError("TARGET_ADVANCED: preserve candidate and rebuild with fresh evidence")
     live = candidate_contract(B, root, candidate, row)
-    B.set_session_modes(candidate, settings["exec"], settings["rev"], schedule=settings["schedule"],
-                        max_parallel=settings["max_parallel"], task_mode=settings["task_mode"])
+    inherit_session(B, db.origin(root), candidate, db, settings)
     if live["status"] != "DONE":
         raise ValueError("Candidate must pass existing PB evidence/review/accept before merge")
     # Re-run the authoritative acceptance gate against current candidate source,
@@ -728,7 +838,7 @@ def reject(B, root, db, rid, note):
             "next": "Explicit prepare may create a new attempt; advance never retries rejected work"}
 
 
-def advance(B, root, db, directory, backend, tiers):
+def advance(B, root, db, directory, backend, tiers, candidate=None):
     """One bounded scheduling tick. No LLM calls for unchanged process status."""
     rows = db.select("state IN ('PREPARED','SUBMITTING','RUNNING','CANCEL_REQUESTED','UNKNOWN')")
     for r in rows:
@@ -745,7 +855,7 @@ def advance(B, root, db, directory, backend, tiers):
     started, blocked = [], []
     for tid in candidates:
         try:
-            r = prepare(B, root, db, directory, tid, "EXECUTE", backend, tiers=tiers)
+            r = prepare(B, root, db, directory, tid, "EXECUTE", backend, tiers=tiers, candidate=candidate)
             result = submit(B, root, db, directory, r["id"])
             started.append(result)
             # A native host needs exactly one launch request at a time to avoid
@@ -771,6 +881,10 @@ def add_parser(sub):
     parser.add_argument("--backend", choices=("pool", "native"), default="native")
     parser.add_argument("--resource", action="append", default=[])
     parser.add_argument("--tiers", default="")
+    parser.add_argument("--host", default="")
+    parser.add_argument("--model", default="")
+    parser.add_argument("--effort", default="")
+    parser.add_argument("--cheaper", action="store_const", const=True, default=None)
     parser.add_argument("--after", type=int, default=0)
     parser.add_argument("--seconds", type=int, default=30)
     parser.add_argument("--file", default="")
@@ -835,8 +949,11 @@ def command(B, args):
                 time.sleep(min(1, max(0, until - time.monotonic())))
             return dict(result, wait_expired=True)
         with effect_lock(directory):
+            candidate = {key: getattr(args, key) for key in ("host", "model", "effort", "cheaper")
+                         if getattr(args, key, None) not in (None, "")}
             if args.action == "advance":
-                return advance(B, root, db, directory, args.backend, list(args.tiers) if args.tiers else None)
+                return advance(B, root, db, directory, args.backend, list(args.tiers) if args.tiers else None,
+                               candidate=candidate or None)
             if args.action == "cleanup":
                 return cleanup(B, root, db, directory, args.run)
             if args.action == "rebuild":
@@ -845,7 +962,7 @@ def command(B, args):
                 return reject(B, root, db, args.run, args.note)
             if args.action == "prepare":
                 return summary(prepare(B, root, db, directory, args.task, args.kind, args.backend,
-                                       args.resource, list(args.tiers) if args.tiers else None))
+                                       args.resource, list(args.tiers) if args.tiers else None, candidate=candidate or None))
             if args.action == "submit":
                 return submit(B, root, db, directory, args.run)
             if args.action == "observe":

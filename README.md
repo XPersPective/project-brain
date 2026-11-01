@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **3.7.3** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
+Current release: **3.8.0** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
@@ -99,23 +99,33 @@ read <path-to>/skills/project-brain/SKILL.md and follow it (first step: its boot
 ## Use
 
 Normal agent discovery and delegation connect to the separate [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool) 1.7.0+
-and start its local daemon if stopped. Configure high/medium/low pools and effort
-once in Pool; Brain honors that owner policy, preserves known quota reserves, and
+and start its local daemon if stopped. Configure categories/models and supported effort
+in CAP; Brain reads its current procedure, preserves quota reserves, and
 resumes interrupted jobs without replay. Plans, local research and quality evidence
 remain Brain's responsibility. No skill is merged into the other.
 
-Use `agents scan --json`, `agents select --task PB-001 --json`, then
-`delegate PB-001 --dry-run` / `delegate PB-001`. See [the integration contract](skills/project-brain/POOL.md).
+At a new implementation session use `orient`, then `boot --new-session`.
+Confirm the saved **Executor Selection Policy (ESP)**, **Scheduling Policy (SP)**
+and **Quota Recovery Policy (QRP)** together in one short keep/change question.
+Solo means the main agent works with tools and no subagent delegation.
+ESP supports native, cheapest/pinned native, and CAP category/catalog/pinned
+models; SP independently selects serial or parallel and its maximum.
 
-At a new implementation session use `orient`, then `boot --new-session`; choose
-EXEC/REV plus serial/parallel and response/execute once. Example:
-`agents mode --exec pool-medium --rev native --schedule parallel --max-parallel 4 --task-mode execute --note "User choice"`.
-`pool-all`, `pool-medium`, `pool-low`, `native`, `native-low`, `solo` are the short
-resource names; task strength consistently means low/medium/high. `intake` preserves
-multipart requirements and the active task across questions. `agents scan` is compact
-by default; `--full` requests the full catalog. Solo/native require no Pool install.
-`--backend direct` or an explicit `--registry` retains the standalone CLI/native
-session approval workflow; there is no silent fallback between authorities.
+Save explicit choices using `policy --file <project-relative-json> --confirm
+--note "<user choices>"`. See the [record example](skills/project-brain/WORKFLOW.md#21-executor-selection-policy-esp).
+Saved policy is enforced; old mode aliases/environment cannot widen it.
+New worker jobs use `runs prepare` / `runs submit`, preserving shared SP capacity.
+CAP categories are dynamic and do not prove model strength: a reasoned exact-model
+qualification precedes use. [CAP integration](skills/project-brain/POOL.md) explains
+bounded metadata selection; no full catalog is needed at every task.
+
+Opted-in QRP checkpoints before the chosen director quota threshold and prepares a
+host same-chat wake intent. Account/policy/checkpoint binding and verified renewal
+guard one-shot resume; cancellation revokes locally before host deletion.
+[Recovery](skills/project-brain/RECOVERY.md) covers supported host tools and limits.
+No uninterrupted-execution or measured billed-token guarantee is claimed.
+Same-session questions preserve choices/context; new-session continue confirms
+saved settings while retaining unfinished jobs. Solo/native require no Pool.
 
 | You say | The agent does |
 |---|---|

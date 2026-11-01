@@ -1,4 +1,4 @@
-# Project Brain 3.7.3
+# Project Brain 3.8.0
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,
@@ -19,12 +19,22 @@ means CLI Agent Pool. Scheduling Policy (SP) separately names Serial/Parallel an
 its maximum. Solo means main-agent work with tools and no subagent delegation.
 The director records both in `.project-brain/executor-policy.json`; new sessions
 (including continue) confirm saved ESP/SP; same-session questions reuse them.
-Before dispatch the director must check those bounds. This is a protocol record,
-not yet parsed by the runtime. The 3.7.3 adapter normalizes current compact CAP
-metadata and legacy response formats, supported effort defaults and alternatives
-counts. It retains L/M/H quality gates and immutable old jobs; custom ESP bounds
-must not be claimed as command-enforced. CAP owns its catalog. Existing discovery
-defaults to L/response, worker M, lead/reviewer H; `--full` is opt-in.
+The runtime parses and validates the policy, binds session confirmation to its
+bytes, and enforces source/model/category/effort/SP bounds before new dispatch.
+First new-session boot requires ESP/SP/QRP choices on old projects too.
+Saved-policy workers use the shared durable runs scheduler; legacy delegate is
+readback-only, preventing a parallel capacity bypass. CAP
+category labels never qualify model strength; an exact-model task-fit record is
+required, separate from acceptance evidence. Native constrained launch candidates
+and receipts must agree. Legacy missing-policy APIs remain compatibility paths,
+never authority to bypass an existing policy. CAP owns its current procedure.
+
+Quota Recovery Policy (QRP) is opt-in and director-only: checkpoint before a chosen
+quota threshold, prepare an idempotent host wake intent, acknowledge its ID, and
+consume it once after same-account verified quota renewal. Account switch, cancel,
+changed policy/checkpoint or unknown observations prevent automatic coding.
+The host creates/removes the actual same-chat alarm; Python installs no scheduler.
+This session's user cancelled its alarm; no active release-task alarm remains.
 Many waves reuse state/evidence/cursors; SOLO needs no provider connection.
 
 The protocol governs agent behavior and CLI gates, not a host's billed-token
@@ -39,6 +49,8 @@ need measurement; smaller context is not a guarantee of lower billed usage.
 - `scripts/brain.py`: CLI, tasks, checkpoints and validation.
 - `scripts/runtime_protocol.py`, `runtime_security.py`: intent/input guards, bounded
   continuity, external access contracts and output checks.
+- `scripts/runtime_executor_policy.py`, `runtime_quota_recovery.py`, `runtime_control.py`:
+  validated ESP/SP/QRP, exact bounds, session receipts and host wake guards.
 - `scripts/runtime_session.py`: bounded metadata orientation, durable multipart
   intake and saved-focus continuity. Session settings live in the ignored cache;
   requests.json is durable project intent, separate from proof.
@@ -63,6 +75,7 @@ need measurement; smaller context is not a guarantee of lower billed usage.
 - [Evidence recovery](design/decisions/ADR-001.md).
 - [Architecture decision](design/decisions/ADR-003.md).
 - [Orchestration decision](design/decisions/ADR-004.md).
+- [Executor/recovery decision](design/decisions/ADR-005.md).
 
 ## Orchestration development
 

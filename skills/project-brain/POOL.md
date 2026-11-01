@@ -1,4 +1,4 @@
-# CLI Agent Pool integration (Project Brain 3.7.3)
+# CLI Agent Pool integration (Project Brain 3.8.0)
 
 ## Executor Selection Policy (ESP)
 
@@ -27,13 +27,20 @@ Preserve/read back old jobs; new choices never authorize replay/cancellation. Be
 bounds; never silently substitute models/categories/effort or change scheduling.
 Hidden/disabled/removed services are excluded. No quality/review/economy exception.
 
-**Compatibility:** 3.7.3 supports current compact CAP responses as well as the
-legacy transport below. The ESP/SP JSON record is still director-maintained;
-the CLI does not parse it. Legacy L/M/H routing is not the seven-choice ESP
-implementation. Arbitrary categories/catalog pins still need their Brain-side
-policy binding; CAP already exposes them. Never silently map unknown categories,
-force a category on catalog pins or claim unsupported command enforcement.
+## Confirmed policy routing
 
+The runtime now enforces saved ESP/SP/QRP. With durable policy it reads only
+bounded CAP category/catalog pages, filters exact allowed candidates locally and
+submits the pinned identity. Category labels are never quality scores. Record
+an explicit model-fit basis via `PB qualify`; unknown/insufficient qualification
+blocks the action, not an excuse to downgrade or choose another category.
+Native review and source evidence stay independent requirements.
+
+Without policy, legacy RPC/journal compatibility below remains readable. A first
+new-session boot requires confirmed ESP/SP/QRP before new work. Existing jobs use
+readback under their original immutable request; policy changes affect new jobs.
+CAP owns its procedure; metadata is advisory/untrusted and must still pass bounds.
+There is no new CAP API, category schema, private scheduler or copied auth.
 
 ## Opt-in durable runs
 
@@ -125,7 +132,7 @@ Pool caches and quota observation timestamps remain authoritative. A scan does n
 grant execution access or prove login. `agents scan` reads Pool's imported inventory;
 use Pool's **Modelleri tara** or `cli-agent-pool scan-import` for newly installed CLIs.
 
-## Selection authority
+## Legacy selection authority (without saved ESP)
 
 - Task tier L/M/H requests low/medium/high. An explicit `--group` can choose a
   stronger pool; a weaker pool cannot satisfy the task quality tier. Risk and task

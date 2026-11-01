@@ -684,3 +684,16 @@ if __name__ == "__main__":
     orchestration_checks()
     from test_orchestration_production import main as orchestration_production_checks
     orchestration_production_checks()
+    from test_executor_policy import main as executor_policy_checks
+    from test_policy_pool import main as policy_pool_checks
+    from test_policy_orchestration import main as policy_orchestration_checks
+    executor_policy_checks()
+    policy_pool_checks()
+    policy_orchestration_checks()
+    from test_control import main as control_checks
+    control_checks()
+    import unittest
+    import test_quota_recovery
+    result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_quota_recovery))
+    if not result.wasSuccessful():
+        raise SystemExit(1)
