@@ -1,4 +1,4 @@
-# Project Brain 3.8.0
+# Project Brain 3.9.0
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,
@@ -37,6 +37,13 @@ The host creates/removes the actual same-chat alarm; Python installs no schedule
 This session's user cancelled its alarm; no active release-task alarm remains.
 Many waves reuse state/evidence/cursors; SOLO needs no provider connection.
 
+Baton Relay Policy (BRP) is opt-in and separate from QRP: at the user's threshold
+the director checkpoints, starts the next listed CAP route with quota as the new
+director and stops; the successor takes a one-time token, cancels a still-running
+predecessor task and continues. Boot shows the active director with UTC times;
+only the token holder may implement, delegate or orchestrate, so a project is not
+run twice. Logins stay in CAP; `relay stop` ends circulation and cancels its tasks.
+
 The protocol governs agent behavior and CLI gates, not a host's billed-token
 counter or editor actions outside Brain. Model capability and real savings still
 need measurement; smaller context is not a guarantee of lower billed usage.
@@ -51,6 +58,8 @@ need measurement; smaller context is not a guarantee of lower billed usage.
   continuity, external access contracts and output checks.
 - `scripts/runtime_executor_policy.py`, `runtime_quota_recovery.py`, `runtime_control.py`:
   validated ESP/SP/QRP, exact bounds, session receipts and host wake guards.
+- `scripts/runtime_relay.py`, `RELAY.md`: optional BRP director circulation, baton
+  tokens, single-director gate and CAP successor start/cancel.
 - `scripts/runtime_session.py`: bounded metadata orientation, durable multipart
   intake and saved-focus continuity. Session settings live in the ignored cache;
   requests.json is durable project intent, separate from proof.

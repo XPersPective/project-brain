@@ -404,8 +404,11 @@ def select_policy(B, root, tier="M", role="worker", route="", model="", effort="
         ids = sorted({row.get("routeId", "") + "/" + row.get("id", "") for row in rows})[:12]
         raise ValueError("MODEL_QUALIFICATION_REQUIRED or no eligible ESP candidate; qualify a suitable exact model. Candidates: " + ", ".join(ids))
     chosen, qualification, actual_category = sorted(candidates, key=lambda item: (item[0]["routeId"], item[0]["id"]))[0]
+    import runtime_relay as RL
+    # While relay circulation is on, workers also need quota above the relay threshold.
+    reserve = max(25 if role in ("lead", "reviewer") else 10, RL.worker_reserve(B, root, E.load(B, root)))
     request = {"kind": kind, "mode": mode, "routeId": chosen["routeId"], "modelId": chosen["id"],
-               "minRemainingPercent": 25 if role in ("lead", "reviewer") else 10}
+               "minRemainingPercent": reserve}
     if actual_category is not None:
         request["group"] = actual_category
     if chosen.get("effort") is not None:
@@ -586,7 +589,8 @@ def print_output(B, root, task, current):
 def delegate(B, root, task, score, args):
     """Persist one immutable request before send; resume never replays completed work."""
     import runtime_agents as A
-    if os.environ.get("CLI_AGENT_POOL_WORKER"):
+    import runtime_relay as RL
+    if os.environ.get("CLI_AGENT_POOL_WORKER") and not RL.authorized(B, root):
         raise ValueError("Pool workers cannot delegate recursively")
     if getattr(args, "readback", False):
         import runtime_protocol as R

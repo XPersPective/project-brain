@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.9.0 — 2026-11-04
+
+- Add the optional Baton Relay Policy (BRP): at a user-chosen quota threshold the
+  director checkpoints, starts the next listed CAP route with quota as director and
+  stops; successors circulate the same way until `relay complete`.
+- One-time hashed baton tokens: takeover verifies policy and checkpoint, cancels a
+  still-running predecessor CAP task (never its login) and voids old tokens; a lost
+  submit retry cannot produce two directors.
+- Single-director gate and boot line with UTC timestamps; only the baton holder may
+  implement, delegate or orchestrate inside a CAP worker. `relay stop` cancels tasks.
+- While BRP is enabled CAP workers require quota above its threshold. Policies
+  without `relay`, QRP and existing ESP/SP behavior are unchanged.
+
+
 ## 3.8.0 — 2026-11-01
 
 - Enforce durable Executor Selection Policy (ESP), Scheduling Policy (SP) and

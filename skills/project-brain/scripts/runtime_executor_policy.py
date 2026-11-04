@@ -97,7 +97,7 @@ def _selector(value):
 
 
 def _validate(value):
-    _keys(value, ("schema", "execution", "scheduling", "quota_recovery"), ("review", "note"))
+    _keys(value, ("schema", "execution", "scheduling", "quota_recovery"), ("review", "note", "relay"))
     if type(value["schema"]) is not int or value["schema"] != 1:
         raise ValueError("Unsupported executor policy schema")
     result = {"schema": 1, "execution": _selector(value["execution"])}
@@ -115,6 +115,9 @@ def _validate(value):
             or not 1 <= recovery["threshold_percent"] <= 50):
         raise ValueError("Quota recovery requires explicit enabled and threshold_percent 1..50")
     result["quota_recovery"] = dict(recovery)
+    if "relay" in value:
+        import runtime_relay as RL
+        result["relay"] = RL.validate_policy(value["relay"])
     if "note" in value:
         result["note"] = _text(value["note"], 1000)
     require_clean(_canonical(result), "executor policy")
@@ -340,4 +343,5 @@ def summary(B, root):
     return {"schema": 1, "execution": {"source": value["execution"]["source"]},
             "review": {"source": value["review"]["source"]},
             "scheduling": value["scheduling"], "quota_recovery": value["quota_recovery"],
+            **({"relay": {k: value["relay"][k] for k in ("enabled", "threshold_percent")}} if "relay" in value else {}),
             "confirmed": confirmed(B, root)}

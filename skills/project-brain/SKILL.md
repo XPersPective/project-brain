@@ -6,11 +6,11 @@ description: >-
   planning, resumption or audits. Excludes store publishing.
 license: MIT
 metadata:
-  version: 3.8.0
+  version: 3.9.0
   author: XPersPective
 ---
 
-# Project Brain 3.8.0
+# Project Brain 3.9.0
 
 `PB` = `python <this-skill>/scripts/brain.py` (Python 3.8+, stdlib).
 
@@ -22,7 +22,7 @@ owns architecture, planning, ambiguity, serious findings and acceptance. Spend
 enough reasoning there; never lower risk/quality/review floors to save tokens.
 Read this entry once and only relevant references. No whole-chat forks, broad
 preloading, duplicate scans, summary-of-summary calls, unchanged polling/retests.
-Solo uses tools without subagents/CAP probes. Trivial answers need no orchestration.
+Trivial answers need no orchestration.
 
 User/platform/repo rules govern; source reality beats stale Brain. Preserve user
 work, requirements and uncertain operations. Routing grants resources, not scope,
@@ -50,12 +50,13 @@ English names; localized explanations.
 
 Scheduling Policy (SP): Serial or Parallel with a confirmed maximum. Waves are
 not concurrency. Quota Recovery Policy (QRP): enabled/disabled, plus threshold
-if enabled (suggest 10% remaining). Director provider quota only, not worker
-quota or context-token capacity.
+if enabled (suggest 10% remaining); director quota only. Baton Relay Policy
+(BRP), optional: circulate director across CAP routes? threshold (suggest 10%)?
+[RELAY](RELAY.md).
 
 Each new implementation session, including "continue": `PB orient`, then
-`PB boot --new-session`. Read back unfinished jobs; show saved ESP/SP/QRP and
-ask ONE keep/change question covering all three. Current-session explicit answers
+`PB boot --new-session`. Read back unfinished jobs; show saved ESP/SP/QRP/BRP and
+ask ONE keep/change question covering them. Current-session explicit answers
 count. Recommend saved parallel settings for unfinished work. Never reset/replay
 old jobs; changes govern new dispatch, with safe serial drain.
 Save explicit choices: `PB policy --file <project-relative-json> --confirm
@@ -85,7 +86,7 @@ code only on RESUMED. Account switch, cancelled/changed policy/checkpoint or
 unrenewed quota blocks auto-work. Delete old heartbeat before continuing; repeat
 at later limits. "Cancel alarm"/"disable QRP": `quota cancel` revokes locally first,
 then delete/read back host alarm. Unknown host capability blocks auto-resume,
-not unrelated authorized work. No reset-credit use or account switching.
+not unrelated authorized work. No reset credits; QRP never switches accounts.
 [RECOVERY](RECOVERY.md) gives host steps/limits; never promise continuous execution.
 
 Same-session questions reuse context then resume Next: no boot/reset, history or
@@ -93,7 +94,7 @@ skill reload, dispatch/tests merely for a question. Missing focus: `PB brief`
 is read-only ≤4 KiB with explicit omissions/readback warnings, not execution
 authority. Record new directives with intake; preserve objective unless cancelled.
 Discovery uses tools then the cheapest suitable allowed worker: ≤5 entrypoints or
-bounded query, ≤150 words. Do not duplicate scans or reorient at every wave.
+bounded query, ≤150 words. Do not reorient at every wave.
 
 ## 4. Work and proof
 

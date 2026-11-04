@@ -1,4 +1,13 @@
-# Verification guide — Project Brain 3.8.0
+# Verification guide — Project Brain 3.9.0
+
+3.9.0 adds the optional Baton Relay Policy (BRP). 11 offline checks cover strict
+optional policy JSON, threshold and model-scoped quota windows, circular candidate
+choice skipping exhausted/unknown accounts, hash-only tokens, the single-director
+gate and boot line, handoff/takeover with predecessor CAP task cancellation, lost-
+submit retry that voids the earlier successor, policy/checkpoint mutation blocking,
+stop/complete authority, max_handoffs and damaged-record refusal. Policies without
+`relay` validate unchanged. No Pool, provider or account was contacted by these
+checks; real circulation depends on CAP accounts the user signed in once.
 
 3.8.0 adds validated seven-source ESP, independent SP and explicit director QRP.
 Tests cover strict bounded policy JSON, exact native/CAP identities, opaque

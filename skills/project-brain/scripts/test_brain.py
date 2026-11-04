@@ -697,3 +697,7 @@ if __name__ == "__main__":
     result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_quota_recovery))
     if not result.wasSuccessful():
         raise SystemExit(1)
+    import test_relay
+    result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_relay))
+    if not result.wasSuccessful():
+        raise SystemExit(1)

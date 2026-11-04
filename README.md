@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **3.8.0** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
+Current release: **3.9.0** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode, OmniRoute or
 another — can recover a project's recorded goal, architecture and task plan from the repository.

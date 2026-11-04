@@ -167,9 +167,14 @@ explicit user choices, not defaults or a new CAP payload:
     "effort": {"selector": "director"}
   },
   "scheduling": {"mode": "parallel", "max_parallel": 2},
-  "quota_recovery": {"enabled": false, "threshold_percent": 10}
+  "quota_recovery": {"enabled": false, "threshold_percent": 10},
+  "relay": {"enabled": false, "threshold_percent": 10}
 }
 ```
+
+Optional `relay` is the Baton Relay Policy (BRP): director circulation across listed
+CAP routes at a threshold. Omit it when unused; [RELAY](RELAY.md) defines questions,
+candidates and commands.
 
 Source values: solo, native, native-cheap, native-pinned, cap-category, cap-catalog,
 cap-pinned. CAP selections record category IDs under categories and exact returned

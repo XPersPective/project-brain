@@ -13,7 +13,7 @@ Stable policy only — never HEAD, active task, timestamps, model, or test resul
 
 ```yaml
 schema_version: 4
-skill_version: "3.8.0"
+skill_version: "3.9.0"
 protocol_version: "1"
 architecture:
   mode: single          # domains: current/<d>.md, optional target/<d>.md; target.md always holds Goal/Status

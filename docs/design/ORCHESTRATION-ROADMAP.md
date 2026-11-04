@@ -675,3 +675,42 @@ Sonuç: 3.7.2 kaynak ve 42 kurulu dağıtım güncel; Python 3.11.15/3.8.20 tam 
 bağımsız native inceleme, gramer ve diff kontrolleri geçti. Aktif bakım kartı yok.
 Güncel sözleşme/ölçüm sınırları overview ve VERIFICATION.md'de; bu kayıt yeni
 oturumda tamamlanmış planı yeniden başlatma yetkisi değildir.
+
+## 10. Gelecekte tartışılacak konu — çoklu abonelik ve kota yaklaşırken devretme
+
+Bu kayıt, ajan havuzu tamamlandıktan sonraki bir fikir jimnastiği ve karar konusu
+olarak eklenmiştir. Henüz uygulanacak görev, kabul edilmiş mimari karar veya
+kesintisiz çalışma vaadi değildir.
+
+Kullanıcı hedefi: Aynı kişi/kuruluşun AntiGravity, Codex veya benzeri hizmetlerde
+birden fazla aboneliği/hesabı varsa, bunların güvenli ve yetkili biçimde havuza
+kaynak olarak entegre edilip edilemeyeceğini değerlendirmek. Bir oturumun kota
+sınırına yaklaşması önceden algılanabiliyorsa, yönetici mevcut işi toparlayıp
+durum/kanıt/devam bilgisini kaydederek kullanıcının seçtiği model veya efor
+seviyesine sahip uygun başka bir oturuma/ajana devretmeyi önerebilir ya da
+yetkili akışta tetikleyebilir. Devralan ajan da aynı protokolle kendi kotası
+yaklaşırken işi başka bir uygun alıcıya devredebilir; kota penceresi yenilenirse
+aynı hesapta devam seçeneği de değerlendirilebilir.
+
+Bir sonraki havuz oturumunda önce şu kararlar tartışılmalıdır:
+
+- Çoklu abonelik/hesap kimlikleri Pool katalog ve kaynak/admission katmanına mı,
+  yoksa ayrı bir host adaptörüne mi ait olmalı; Brain hangi sınırda kalmalı?
+- Kota okuma, yaklaşan tükenmeyi tahmin etme, güvenli checkpoint ve devretme için
+  hangi gerçek host/CAP yetenekleri mevcut; hangileri yalnızca bilinmeyen olarak
+  raporlanmalı?
+- Kullanıcının seçtiği model/efor, hesap ve maliyet sınırları nasıl korunacak;
+  hesap değiştirme, kimlik doğrulama, sır saklama, onay ve sağlayıcı koşulları
+  nasıl açıkça yetkilendirilecek?
+- Zincirleme devretmede döngü, sonsuz devir, duplicate çalışma, kayıp ACK,
+  eşzamanlı yazıcı, kota yenilenmeden devam ve kanıtın geçerliliği nasıl
+  engellenecek? Hangi noktada otomasyon durup kullanıcı kararı isteyecek?
+- Bu davranış için mevcut session handoff/recovery, Pool admission, native host
+  adaptörü veya yeni bir modülün hangisi doğru sınırdır; önce küçük bir ölçüm/
+  simülasyon prototipi gerekir mi?
+
+Kapsam dışı varsayım: Bu kayıt yeni hesap açma, gizli kimlik bilgisi toplama,
+sağlayıcı kota/limitlerini aşma, otomatik hesap değiştirme veya kesintisiz çalışma
+garantisi vermez. Uygulama kararı ancak tartışma, yetenek doğrulaması, risk sınırı
+ve kabul/verification ölçütleri belirlendikten sonra ayrı bir görev/ADR olarak
+alınmalıdır.

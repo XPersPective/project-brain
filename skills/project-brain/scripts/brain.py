@@ -46,7 +46,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.8.0"
+VERSION = "3.9.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -527,6 +527,8 @@ def require_session(root, implementation=False):
     import runtime_quota_recovery as Q
     if Q.status(sys.modules[__name__], root)["status"] in ("PREPARED", "ARMED"):
         raise ValueError("QRP_WAIT: read back/resume or cancel director recovery before new work")
+    import runtime_relay as RL
+    RL.require_free_or_director(sys.modules[__name__], root)
     modes = get_session_modes(root)
     if not modes["exec"] or not modes["rev"]:
         raise ValueError("SESSION_CHOICE_REQUIRED: choose EXEC, REV, serial/parallel and response/execute before implementation; use `agents mode`")
@@ -1366,6 +1368,10 @@ def cmd_boot(root, maintain=True, new_session=False):
         policy_ready = False
     print("SESSION_GATE: " + ("READY" if s_modes["exec"] and s_modes["rev"] and policy_ready else "CONFIRM_ESP_SP_QRP"))
     print(f"WORK: {s_modes['task_mode']} | {s_modes['schedule']} | max_parallel={s_modes['max_parallel']}")
+    import runtime_relay as RL
+    relay_line = RL.boot_line(sys.modules[__name__], root)
+    if relay_line:
+        print(relay_line)
     if os.environ.get("PB_AGENTS_REGISTRY"):
         for line in P.summary(sys.modules[__name__], root):
             print(line)
@@ -2004,6 +2010,8 @@ def main():
     O.add_parser(sub)
     import runtime_control as CT
     CT.add_parser(sub)
+    import runtime_relay as RL
+    RL.add_parser(sub)
 
     for name in ("boot", "brief", "map", "init", "changed", "validate", "doctor"):
         parser = sub.add_parser(name)
@@ -2190,6 +2198,9 @@ def main():
     a = ap.parse_args(_reorder_argv(sys.argv[1:]))
     B_mod = sys.modules[__name__]
 
+    if a.cmd == "relay":
+        print(json.dumps(RL.command(B_mod, a), ensure_ascii=False))
+        return 0
     if a.cmd in ("policy", "quota", "qualify"):
         print(json.dumps(CT.command(B_mod, a), ensure_ascii=False))
         return 0
@@ -2302,7 +2313,8 @@ def main():
                 print(l)
             return rc
         if a.cmd == "delegate":
-            if os.environ.get("CLI_AGENT_POOL_WORKER"):
+            import runtime_relay as RL
+            if os.environ.get("CLI_AGENT_POOL_WORKER") and not RL.authorized(B_mod, root):
                 raise ValueError("Pool workers cannot delegate recursively")
             if a.backend == "pool" or a.backend is None and a.registry is None:
                 import runtime_agent_pool as AP

@@ -895,9 +895,11 @@ def add_parser(sub):
 
 
 def command(B, args):
-    if os.environ.get("CLI_AGENT_POOL_WORKER"):
-        raise ValueError("Workers cannot manage orchestration")
     root = Path(args.root).resolve()
+    import runtime_relay as RL
+    # Only the relay baton holder may direct orchestration from inside a Pool worker.
+    if os.environ.get("CLI_AGENT_POOL_WORKER") and not RL.authorized(B, root):
+        raise ValueError("Workers cannot manage orchestration")
     if args.action == "metrics":
         file = L.private(args.file)
         if file.stat().st_size > 4 * 1024 * 1024:
