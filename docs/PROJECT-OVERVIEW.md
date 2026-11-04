@@ -48,6 +48,8 @@ notifies the user only when every candidate is exhausted. Successors inherit the
 launcher's confirmed settings; only the baton-token holder (CAP `secretEnv` delivers it) may
 implement, delegate or orchestrate. New sessions ask one numbered setup batch and
 continue with the shown defaults after 5 minutes (`setup ask|wait|defaults`).
+Setup questions use Turkish names for worker choice, scheduling, quota waiting,
+director transfer and successor tier; English identifiers stay in technical data.
 The cross-repository contract is `skills/project-brain/references/director-contract.md`.
 
 The protocol governs agent behavior and CLI gates, not a host's billed-token

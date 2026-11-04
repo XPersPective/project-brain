@@ -9,6 +9,13 @@ as director and stops. BRP never logs in, logs out or edits credentials. QRP
 
 ## Setup (once, with ESP/SP/QRP)
 
+User-facing setup is Turkish: **Çalışan seçimi** (ESP), **Çalışma düzeni** (SP),
+**Kota yenilenmesini bekleme** (QRP), **Yönetici devri** (BRP), and **Yeni
+yöneticinin seviyesi**. Use these names in the chat; internal English keys and
+exact Pool identifiers remain unchanged. The opening states the tool-first
+economy rule without promising measured minimum token usage. Show the batch once
+per new session, reuse answers during that session, and let successors inherit.
+
 `PB setup ask` prints one numbered batch with defaults (worker source and tier,
 serial/parallel + max workers, QRP, BRP + threshold, director tier). Relay the
 lines to the user unchanged. Save explicit answers with `PB policy --file …

@@ -36,7 +36,7 @@ Confirm secret references, never values; missing access blocks dependent work.
 
 ## 2. ESP, SP and QRP
 
-English names; localized explanations.
+Use Turkish names/questions from `setup ask`; keep internal identifiers English.
 
 | Executor Selection Policy (ESP) | Resources |
 |---|---|

@@ -20,6 +20,11 @@ while filtering provider secrets. They pass under Python
 3.11.15 and 3.8.20. A copy of a real 3.9 project's relay record and policy was
 read by the new code with its confirmation hash unchanged.
 
+User-facing setup questions/defaults now use Turkish conceptual names while
+policy JSON and machine statuses stay compatible. Existing setup regressions
+check the Turkish batch, saved defaults and timeout; inheritance still suppresses
+questions for successors and workers.
+
 End-to-end on 2026-11-05 through the installed CAP 2.1.1 service on a scratch Git
 repository (not a user project). That CAP has none of the pb-director/1 features
 yet, so `relay start --unverified` printed every missing guarantee. Live quota

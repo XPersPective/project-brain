@@ -17,9 +17,12 @@ import runtime_verify as V
 
 TIMEOUT = 300
 SLICE = 60
-LABELS = {"solo": "Solo (I work alone with tools)", "native": "Native (host models)",
-          "native-cheap": "Native Cheapest", "native-pinned": "Native Pinned",
-          "cap-category": "CAP Categories", "cap-catalog": "CAP Catalog", "cap-pinned": "CAP Pinned"}
+LABELS = {"solo": "Yalnız ben, araçları kullanarak", "native": "Bu uygulamadaki yardımcı ajanlar",
+          "native-cheap": "Bu uygulamadaki en ekonomik uygun yardımcılar",
+          "native-pinned": "Bu uygulamada sizin seçtiğiniz yardımcılar",
+          "cap-category": "Ajan Havuzu: seçtiğiniz seviyeden",
+          "cap-catalog": "Ajan Havuzu: listeden ben seçeyim",
+          "cap-pinned": "Ajan Havuzu: sizin seçtiğiniz hesap ve modeller"}
 BUILTIN = {"schema": 1, "execution": {"source": "solo"}, "scheduling": {"mode": "serial", "max_parallel": 1},
            "quota_recovery": {"enabled": False, "threshold_percent": 10}}
 
@@ -49,40 +52,49 @@ def _source(selector):
 def questions(value):
     s, q = value["scheduling"], value["quota_recovery"]
     relay = value.get("relay") or {"enabled": False, "threshold_percent": 10}
-    director = ("routes " + ", ".join(c["route"] + ("/" + c["model"] if c.get("model") else "")
+    director = ("Seçilen hesap ve modeller: " + ", ".join(c["route"] + ("/" + c["model"] if c.get("model") else "")
                                       for c in relay.get("candidates", []))
-                if relay.get("candidates") else "same tier as this director"
-                if relay.get("director_category", "same") == "same" else "CAP category " + relay["director_category"])
-    on = lambda flag, pct: ("On, at %d%% remaining" % pct) if flag else "Off"
+                if relay.get("candidates") else "Mevcut yöneticiyle aynı seviye"
+                if relay.get("director_category", "same") == "same" else "Ajan Havuzu seviyesi: " + relay["director_category"])
+    on = lambda flag, pct: ("Açık; kalan kota %%%d olduğunda" % pct) if flag else "Kapalı"
     return [
-        ("Who does the work? Solo, Native, Native Cheapest, Native Pinned, or CLI Agent Pool "
-         "(CAP) Categories/Catalog/Pinned. For CAP Categories name the worker tier, e.g. high, medium, low.",
+        ("Çalışan seçimi — İşi kim yapsın? Yalnız ben; bu uygulamadaki yardımcılar "
+         "(ben seçeyim / en ekonomik uygun olanlar / siz seçin); ya da bağlı Ajan Havuzu "
+         "(seviyesine göre / listeden ben seçeyim / hesap ve modeli siz seçin). "
+         "Havuz için seviye veya model tercihinizi belirtin.",
          _source(value["execution"])),
-        ("Run jobs one at a time (Serial) or in parallel? If parallel, how many at most?",
-         "Parallel (%d)" % s["max_parallel"] if s["mode"] == "parallel" else "Serial (1)"),
-        ("Quota Recovery (QRP): when my quota runs low, stop and wait for it to renew on this same account?",
+        ("Çalışma düzeni — İşler sırayla mı, aynı anda mı yürüsün? "
+         "Sıralı: tek iş. Paralel: bağımsız işler aynı anda; en fazla kaç yardımcı?",
+         "Paralel (en fazla %d)" % s["max_parallel"] if s["mode"] == "parallel" else "Sıralı (tek iş)"),
+        ("Kota yenilenmesini bekleme — Yönetici kotası azalınca işi kaydedip aynı hesabın "
+         "kotasının yenilenmesini bekleyeyim mi? Açık / kapalı; açıksa kalan kota eşiği (ör. %10).",
          on(q["enabled"], q["threshold_percent"])),
-        ("Baton Relay (BRP): when my quota runs low, hand the director role to another signed-in CAP account?",
+        ("Yönetici devri — Yönetici kotası azalınca işi kaydedip yönetimi Ajan Havuzu'ndaki "
+         "başka bir hazır hesaba devredeyim mi? Açık / kapalı; açıksa kalan kota eşiği (ör. %10).",
          on(relay.get("enabled"), relay["threshold_percent"])),
-        ("Director tier for relay successors: a CAP category, the same tier as me, or exact routes?", director),
+        ("Yeni yöneticinin seviyesi — Devir açıksa kim devralsın? Mevcut yöneticiyle aynı seviye; "
+         "seçtiğiniz havuz seviyesi; veya sizin belirlediğiniz hesap ve modeller. Devir kapalıysa uygulanmaz.", director),
     ]
 
 
 def render(value):
-    lines = ["Setup for this session (answer once; reply with numbers to change, e.g. \"2: parallel 4\"):"]
+    lines = ["Bu oturumun çalışma ayarları (yalnız değiştirmek istediklerinizi numarasıyla yazın):",
+             "Çalışma ilkesi: önce araçlarla çöz, izin verilen yardımcılar arasından uygun en ekonomik olanı seç; "
+             "planlama, doğrulama ve incelemeyi koru."]
     for number, (question, default) in enumerate(questions(value), 1):
-        lines += ["%d. %s" % (number, question), "   Default: " + default]
-    lines.append("No reply within 5 minutes = I continue with these defaults.")
+        lines += ["%d. %s" % (number, question), "   Varsayılan: " + default]
+    lines.append('Örnek yanıt: "2: paralel 3; 4: açık, %10" veya "varsayılanlarla devam". '
+                 "5 dakika yanıt gelmezse gösterilen varsayılanlarla devam ederim.")
     return lines
 
 
 def ask(B, root, now=None):
     import runtime_relay as RL
     if RL.authorized(B, root):
-        return {"status": "RELAY_SUCCESSOR", "lines": ["Settings inherited from the relay launcher; ask no setup questions."]}
+        return {"status": "RELAY_SUCCESSOR", "lines": ["Çalışma ayarları önceki yöneticiden devralındı; yeniden soru sorulmaz."]}
     line = RL.boot_line(B, root)
     if line and line.startswith("RELAY: ACTIVE") or line and line.startswith("RELAY: HANDOFF_PENDING"):
-        return {"status": "RELAY_ACTIVE", "lines": [line, "Ask setup questions only if the user wants to change the policy."]}
+        return {"status": "RELAY_ACTIVE", "lines": [line, "Çalışma ayarları yalnız kullanıcı değiştirmek isterse yeniden sorulur."]}
     value = defaults(B, root)
     now = time.time() if now is None else now
     B.write_atomic(_path(B, root), json.dumps({"schema": 1, "asked_at": now, "defaults": value}, indent=2))
@@ -137,7 +149,7 @@ def command(B, args):
     from pathlib import Path
     if os.environ.get("CLI_AGENT_POOL_WORKER"):
         if args.action == "ask":
-            return {"status": "INHERITED", "lines": ["Workers inherit settings; ask no setup questions."]}
+            return {"status": "INHERITED", "lines": ["Yardımcılar çalışma ayarlarını devralır; yeniden soru sorulmaz."]}
         raise ValueError("Workers inherit settings; they never answer setup questions")
     root = Path(args.root).resolve()
     if not B.brain_exists(root):

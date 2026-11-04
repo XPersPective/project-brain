@@ -18,6 +18,8 @@
   Live 3.9 relay records upgrade in place.
 - `setup ask|wait|defaults`: one numbered setup batch with defaults, continuing
   with them after 5 minutes without blocking longer than 60 s per call.
+- Ask setup in Turkish with meaningful names for worker choice, scheduling,
+  quota waiting and director transfer; keep technical identifiers compatible.
 - Cross-repository contract `references/director-contract.md` (pb-director/1);
   every CAP feature is optional and missing guarantees are printed.
 - Guard lost-submit recovery, fast takeover identity and unrelated review locks;

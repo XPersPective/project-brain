@@ -567,9 +567,9 @@ class SetupTests(unittest.TestCase):
         asked = SU.ask(FakeBrain, self.root, now=1000)
         text = "\n".join(asked["lines"])
         self.assertEqual(len(re.findall(r"^\d\. ", text, re.M)), 5)
-        self.assertEqual(text.count("   Default: "), 5)
-        self.assertIn("No reply within 5 minutes", text)
-        self.assertIn("Default: Solo", text)
+        self.assertEqual(text.count("   Varsayılan: "), 5)
+        self.assertIn("5 dakika yanıt gelmezse", text)
+        self.assertIn("Varsayılan: Yalnız ben", text)
         with self.assertRaisesRegex(ValueError, "SETUP_WAIT"):
             SU.apply_defaults(FakeBrain, self.root, now=1100)
         slept = []
@@ -583,11 +583,11 @@ class SetupTests(unittest.TestCase):
 
     def test_saved_policy_is_default_only_when_it_was_confirmed(self):
         E.save(FakeBrain, self.root, dict(BASE), "explicit")
-        self.assertIn("Default: Solo", "\n".join(SU.ask(FakeBrain, self.root)["lines"]))
-        self.assertIn("Default: Serial (1)", "\n".join(SU.ask(FakeBrain, self.root)["lines"]), "unconfirmed file is not a default")
+        self.assertIn("Varsayılan: Yalnız ben", "\n".join(SU.ask(FakeBrain, self.root)["lines"]))
+        self.assertIn("Varsayılan: Sıralı (tek iş)", "\n".join(SU.ask(FakeBrain, self.root)["lines"]), "unconfirmed file is not a default")
         E.confirm(FakeBrain, self.root, "user said yes")
         E.begin_session(FakeBrain, self.root)
-        self.assertIn("Default: Parallel (3)", "\n".join(SU.ask(FakeBrain, self.root)["lines"]))
+        self.assertIn("Varsayılan: Paralel (en fazla 3)", "\n".join(SU.ask(FakeBrain, self.root)["lines"]))
         self.assertEqual(SU.apply_defaults(FakeBrain, self.root, accepted=True)["status"], "DEFAULTS_CONFIRMED")
 
     def test_worker_never_opens_setup(self):
