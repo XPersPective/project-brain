@@ -1,83 +1,94 @@
 # Baton Relay Policy (BRP)
 
-Optional director circulation across accounts that the user already signed in
-once in CLI Agent Pool (CAP). When the director's quota reaches the user's
-threshold, it checkpoints, starts the next listed CAP route with quota as the new
-director and stops. The successor takes the baton and does the same, until the
-project is complete. BRP never logs in, logs out or edits credentials; account
-sign-in belongs to CAP. QRP (same-account wait) is unchanged and separate.
+Optional director circulation across accounts the user already signed in once in
+CLI Agent Pool (CAP), safe to leave running for hours or days. When the director's
+quota reaches the user's threshold it checkpoints, starts the next ready candidate
+as director and stops. BRP never logs in, logs out or edits credentials. QRP
+(same-account wait) is separate. Design: ADR-006; CAP contract:
+[references/director-contract.md](references/director-contract.md).
 
-## Questions (new session, with ESP/SP/QRP)
+## Setup (once, with ESP/SP/QRP)
 
-Ask once, in the user's language, with English names:
-
-1. Circulate the director with BRP? (default: no)
-2. Threshold: hand off when remaining quota is at or below what percent? Suggest 10.
-3. Which CAP routes (and optional model/effort), in circulation order? Offer the
-   current CAP accounts (each account is its own `routeId`, e.g. `codex-local`,
-   `codex-acc2`, `agy-acc2`). Optional `max_handoffs` (default 50).
-
-Save them in the executor policy and confirm as usual:
+`PB setup ask` prints one numbered batch with defaults (worker source and tier,
+serial/parallel + max workers, QRP, BRP + threshold, director tier). Relay the
+lines to the user unchanged. Save explicit answers with `PB policy --file …
+--confirm`. Without a reply, call `PB setup wait` (≤60 s per call; check for a
+reply between calls) until it returns `TIMEOUT_REACHED`, then `PB setup defaults`.
+If the user says "use defaults", `PB setup defaults --accepted`.
 
 ```json
-"relay": {"enabled": true, "threshold_percent": 10, "max_handoffs": 50,
-  "candidates": [{"route": "codex-local"}, {"route": "codex-acc2"},
-                 {"route": "agy-acc2", "model": "gemini-3-pro"}, {"route": "claude-local", "model": "opus"}]}
+"relay": {"enabled": true, "threshold_percent": 10, "director_category": "same"}
 ```
 
-`relay` is optional; policies without it behave exactly as before. While enabled,
-CAP workers also require remaining quota above the threshold.
+`director_category` is a CAP category id (e.g. `high`) or `same` (default: the
+categories that contain the launcher's route/model). Or list exact routes instead:
+`"candidates": [{"route": "codex-acc2"}, {"route": "agy-local", "model": "gemini-4-argon"}]`.
+Optional `max_handoffs` (planned handoffs, default 50) and `takeover_minutes`
+(default 15). Worker tier is the ESP (`cap-category` categories, pins or native).
+While enabled, CAP workers also need quota above the threshold.
 
-## Director (baton holder)
+## Start (launcher, execute session)
 
-1. Start once in an execute session: `PB relay start --route <own CAP route>`
-   (add `--model`, `--pool-task <id>` if known). It returns a one-time `token`.
-   Keep it only in your context and set `PB_RELAY_TOKEN=<token>` for every Brain
-   command (PowerShell `$env:PB_RELAY_TOKEN='<token>'`; POSIX `export PB_RELAY_TOKEN=<token>`).
-2. At meaningful checkpoints save your route quota from CAP
-   (`pool_get_quotas {routeId}`) to an ignored file under `.project-brain/.cache/`
-   and run `PB relay assess --snapshot <file> [--model <id>]`.
-   `READY`: continue. `UNKNOWN`: continue carefully and re-check later.
-3. On `HANDOFF_REQUIRED`: save all candidate quotas as `{routeId: snapshot}` and run
-   `PB relay next --quotas <file>`. On `SELECTED` run
-   `PB relay handoff --task <id> --next "<actual next step>" --route <route> [--model <id>] [--effort <e>]`.
-   It writes the task handoff checkpoint, starts the successor through CAP (write,
-   execute, the same workspace) and returns `HANDED_OFF`. Stop working immediately.
-   On `EXHAUSTED` no listed account has quota: use QRP if enabled, else tell the user.
-4. When every task is accepted: `PB relay complete`.
+`PB relay start --route <own CAP route> [--model <id>]` resolves the candidates,
+runs a short readiness probe on each through CAP `pool_preflight` (compound and
+multi-line shell, MCP pool access, reading this skill outside the workspace, Git
+commit/push permission, reaching the local CAP service) and prints a table plus
+the unattended guarantees CAP provides. It refuses when no candidate is ready and
+starts with the ready ones otherwise. Show the table to the user before they
+leave. Without CAP preflight it refuses unless `--unverified`.
 
-The successor's prompt carries its own token and these same steps. It first runs
-`PB relay takeover`; only `ACTIVE` authorizes work. Takeover verifies the token,
-unchanged policy and the exact handoff checkpoint, then cancels the previous
-director's CAP task if it is still running (the process, never its login).
+It returns a one-time `token`. Append `--relay-token <token>` to every Project
+Brain command (works in every shell), or set `PB_RELAY_TOKEN`. A launcher that
+will be left alone should hand off at once (step 2 below works at any quota),
+because a host session's death cannot be observed.
+
+## Director loop (every director)
+
+1. At meaningful checkpoints: `PB relay assess` (reads own quota through CAP).
+   `READY`/`UNKNOWN`: continue.
+2. On `HANDOFF_REQUIRED`: `PB relay handoff --task <id> --next "<actual next step>"`.
+   It selects, re-probes when stale, checkpoints and starts the successor. On
+   `HANDED_OFF` stop at once and, inside CAP, end with a completed report
+   "handed off". On `EXHAUSTED` no candidate has quota: use QRP if enabled, else
+   continue carefully; the relay is unchanged.
+3. When every task is accepted: `PB relay complete`.
+
+A successor's prompt tells it to run `PB relay takeover` first and work only on
+`ACTIVE`. It inherits the launcher's confirmed settings: it never asks setup
+questions, never runs `boot --new-session` setup, and does not repeat discovery or
+verification the checkpoint and evidence record. Takeover verifies authority,
+the checkpoint and the skill version, adopts a confirmed policy edit, acks its
+CAP task and cancels a still-running previous director task.
+
+## Automatic recovery
+
+`PB relay recover` is the reconciler. CAP's watchdog runs it when any director
+task ends; `relay start` runs it; a person may run it. It never needs a token. Before a
+planned handoff only CAP's cached readiness is read (the live director holds the
+workspace lock); recovery after a dead director runs fresh probes.
+
+- Successor ended without takeover, or no takeover within `takeover_minutes` →
+  candidate marked unhealthy, next healthy candidate started (`FAILOVER`).
+- Director task ended without a handoff (crash, timeout, quota) → next candidate
+  started from the last checkpoint (`RECOVER`).
+- Relay-owned `needs_review` locks (recorded director tasks and workers linked
+  through `parentTaskId`) are resolved; stray duplicate director tasks are cancelled.
+- A workspace locked by an older task needing review, no ready candidate, or
+  three unplanned transfers without progress → `EXHAUSTED`: the only time the user
+  is notified (boot, status, CAP dashboard notice).
 
 ## One director at a time
 
-`boot` prints `RELAY: ACTIVE gen N director <route> since <UTC>` while circulation
-runs. Implementation commands from any process without the current token fail
-with `RELAY_ACTIVE`, so a later session cannot run the project twice. Only the
-baton holder may delegate or run orchestration from inside a CAP worker; ordinary
-CAP workers still cannot delegate. `PB relay status` shows director, pending
-successor, generation and the last timestamped event (`START`, `HANDOFF`,
-`HANDOFF_RETRY`, `TAKEOVER`, `COMPLETE`, `STOP`; the last 200 are kept).
-`PB relay stop --note "<reason>"` ends circulation and cancels the director and
-pending successor CAP tasks; then the user may start fresh.
+Only the holder of the baton token (delivered by CAP `secretEnv` where available)
+may implement, delegate or
+orchestrate; others get `RELAY_ACTIVE`. `boot` shows the holder, pending
+successor and `EXHAUSTED`; it and `relay status` never start tasks.
+`PB relay stop --note "<reason>"` ends circulation, cancels relay tasks and
+releases relay locks. A record whose CAP holder already ended is replaced by the
+next `relay start`; a host holder needs `relay stop`.
 
-The record is `.project-brain/.cache/relay.json` (ignored, never in worktrees);
-tokens are stored only as SHA-256 hashes. Handoff checkpoints are normal task
-evidence (`.project-brain/evidence/<task>/handoff.json`).
-
-## Recovery and limits
-
-- A lost `handoff` acknowledgement may be retried for the same route: a new token
-  and key are issued, so a late duplicate successor cannot take the baton.
-- A changed policy or edited checkpoint blocks takeover; ask the user.
-- CAP write tasks lock the workspace: a successor queued behind a CAP director
-  starts after that task ends. A host director (editor session) must stop at once.
-- A director inside CAP needs to reach the local CAP service for quota, delegation
-  and handoff. Codex runs workers in its workspace sandbox; verify network access
-  to `127.0.0.1` before making a Codex route a relay director, or prefer Claude or
-  Antigravity routes for directors and use Codex for workers.
-- Quota readings are provider reports, not reservations. BRP does not guarantee
-  uninterrupted work, provider-term compliance or billed-token savings; the user
-  decides which of their own accounts may circulate.
+Unconfirmed policy edits never take effect mid-relay; confirmed ones are adopted
+at the next relay command (a disabled relay stops). The record is
+`.project-brain/.cache/relay.json` (ignored; hashes only). Quota readings are
+provider reports, not reservations; BRP does not guarantee uninterrupted work,
+provider-term compliance or billed-token savings.

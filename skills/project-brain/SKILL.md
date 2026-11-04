@@ -6,11 +6,11 @@ description: >-
   planning, resumption or audits. Excludes store publishing.
 license: MIT
 metadata:
-  version: 3.9.0
+  version: 3.10.0
   author: XPersPective
 ---
 
-# Project Brain 3.9.0
+# Project Brain 3.10.0
 
 `PB` = `python <this-skill>/scripts/brain.py` (Python 3.8+, stdlib).
 
@@ -50,19 +50,17 @@ English names; localized explanations.
 
 Scheduling Policy (SP): Serial or Parallel with a confirmed maximum. Waves are
 not concurrency. Quota Recovery Policy (QRP): enabled/disabled, plus threshold
-if enabled (suggest 10% remaining); director quota only. Baton Relay Policy
-(BRP), optional: circulate director across CAP routes? threshold (suggest 10%)?
-[RELAY](RELAY.md).
+if enabled (suggest 10%); director quota only. Baton Relay Policy (BRP), optional:
+circulate director across CAP accounts, threshold, director tier. [RELAY](RELAY.md).
 
-Each new implementation session, including "continue": `PB orient`, then
-`PB boot --new-session`. Read back unfinished jobs; show saved ESP/SP/QRP/BRP and
-ask ONE keep/change question covering them. Current-session explicit answers
-count. Recommend saved parallel settings for unfinished work. Never reset/replay
-old jobs; changes govern new dispatch, with safe serial drain.
+New implementation session, including "continue": `PB orient`, `PB boot
+--new-session`, read back unfinished jobs, `PB setup ask`: relay its ONE numbered
+batch unchanged. No reply: `setup wait` (≤60 s/call) until TIMEOUT_REACHED, then
+`setup defaults`. Session answers count; relay successors inherit, never asked.
+Never reset/replay old jobs; changes govern new dispatch, with safe serial drain.
 Save explicit choices: `PB policy --file <project-relative-json> --confirm
 --note "<user choices>"`; `policy --full` shows exact bounds. Changing policy
-invalidates confirmation. Legacy mode/environment cannot widen it. First new-session
-boot requires these choices even for older Brain. [WORKFLOW](WORKFLOW.md#2-session-and-boot-details)
+invalidates confirmation. Legacy mode/environment cannot widen it. [WORKFLOW](WORKFLOW.md#2-session-and-boot-details)
 defines JSON/commands. "Change ESP/SP/QRP" opens saved choices; same-session
 questions do not. Unsupported host identity/effort/cost blocks affected dispatch.
 

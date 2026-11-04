@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.10.0 — 2026-11-05
+
+- Unattended Baton Relay: `relay start` probes every candidate through CAP
+  `pool_preflight` (compound/multi-line shell, MCP, skill outside the workspace,
+  Git, local CAP service), verified and cached by CAP, and shows an all-green table.
+- Two-phase handoff: the old director holds the baton until `takeover`; the new
+  `relay recover` reconciler (run by CAP's onExit watchdog) fails over from a
+  successor that never takes over, restarts after a dead director, resolves
+  relay-owned `needs_review` locks, cancels duplicate director tasks and notifies
+  only when every candidate is exhausted. Bounded against endless failover.
+- Director tiers from CAP categories (default: the launcher's own tier); quota is
+  read through CAP; quota-unknown candidates are a last resort.
+- Successors inherit the launcher's confirmed settings and are never asked setup
+  questions; unconfirmed mid-relay policy edits never take effect, confirmed ones
+  are adopted. Authority via `--relay-token` on any command or CAP `secretEnv`.
+  Live 3.9 relay records upgrade in place.
+- `setup ask|wait|defaults`: one numbered setup batch with defaults, continuing
+  with them after 5 minutes without blocking longer than 60 s per call.
+- Cross-repository contract `references/director-contract.md` (pb-director/1);
+  every CAP feature is optional and missing guarantees are printed.
+- Guard lost-submit recovery, fast takeover identity and unrelated review locks;
+  preserve CAP task leases in the RPC transport. Add an isolated real-CAP relay
+  integration check with synthetic native execution and a scratch Git remote.
+
 ## 3.9.0 — 2026-11-04
 
 - Add the optional Baton Relay Policy (BRP): at a user-chosen quota threshold the

@@ -215,9 +215,17 @@ def main():
     # Real stdin/argv transport, not shell interpolation; JSON errors stay actionable.
     with tempfile.TemporaryDirectory(prefix="pb-pool-rpc-") as directory:
         script = Path(directory) / "fake.py"
-        script.write_text("import json,sys\nr=json.load(sys.stdin)\nprint(json.dumps(r))\n", encoding="utf-8")
+        script.write_text("import json,sys,os\nr=json.load(sys.stdin)\n"
+                          "r['lease']=os.environ.get('CLI_AGENT_POOL_TASK_TOKEN')\n"
+                          "r['worker']=os.environ.get('CLI_AGENT_POOL_WORKER')\n"
+                          "r['secret']=os.environ.get('PROVIDER_API_KEY')\nprint(json.dumps(r))\n", encoding="utf-8")
         with patch.dict(os.environ, {"PB_AGENT_POOL_COMMAND": json.dumps([sys.executable, str(script)])}):
             assert AP.rpc("pool_select", {"prompt": "Türkçe & $(literal) 🎤"})["arguments"]["prompt"] == "Türkçe & $(literal) 🎤"
+            with patch.dict(os.environ, {"CLI_AGENT_POOL_TASK_TOKEN": "scoped-test-lease",
+                                         "CLI_AGENT_POOL_WORKER": "1", "PROVIDER_API_KEY": "test-provider-secret"}):
+                transported = AP.rpc("pool_get_task", {"taskId": "task-123"})
+                assert transported["lease"] == "scoped-test-lease" and transported["worker"] == "1"
+                assert transported["secret"] is None
         with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("rpc", 45)), patch.object(AP, "command", return_value=[sys.executable]):
             try:
                 AP.rpc("pool_submit")

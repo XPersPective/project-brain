@@ -1,4 +1,4 @@
-# Project Brain 3.9.0
+# Project Brain 3.10.0
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,
@@ -38,11 +38,17 @@ This session's user cancelled its alarm; no active release-task alarm remains.
 Many waves reuse state/evidence/cursors; SOLO needs no provider connection.
 
 Baton Relay Policy (BRP) is opt-in and separate from QRP: at the user's threshold
-the director checkpoints, starts the next listed CAP route with quota as the new
-director and stops; the successor takes a one-time token, cancels a still-running
-predecessor task and continues. Boot shows the active director with UTC times;
-only the token holder may implement, delegate or orchestrate, so a project is not
-run twice. Logins stay in CAP; `relay stop` ends circulation and cancels its tasks.
+the director checkpoints, starts the next ready candidate (explicit CAP routes or
+a CAP category; default the launcher's own tier) as director and stops. The old
+director stays the holder until the successor confirms `takeover`. `relay start`
+probes every candidate through CAP `pool_preflight` and prints an all-green table;
+`relay recover`, run by CAP's onExit watchdog, fails over from a successor that
+never takes over, restarts after a dead director, resolves relay-owned locks and
+notifies the user only when every candidate is exhausted. Successors inherit the
+launcher's confirmed settings; only the baton-token holder (CAP `secretEnv` delivers it) may
+implement, delegate or orchestrate. New sessions ask one numbered setup batch and
+continue with the shown defaults after 5 minutes (`setup ask|wait|defaults`).
+The cross-repository contract is `skills/project-brain/references/director-contract.md`.
 
 The protocol governs agent behavior and CLI gates, not a host's billed-token
 counter or editor actions outside Brain. Model capability and real savings still
@@ -59,7 +65,8 @@ need measurement; smaller context is not a guarantee of lower billed usage.
 - `scripts/runtime_executor_policy.py`, `runtime_quota_recovery.py`, `runtime_control.py`:
   validated ESP/SP/QRP, exact bounds, session receipts and host wake guards.
 - `scripts/runtime_relay.py`, `RELAY.md`: optional BRP director circulation, baton
-  tokens, single-director gate and CAP successor start/cancel.
+  authority, readiness probes, two-phase handoff and the recover reconciler.
+- `scripts/runtime_setup.py`: one batched new-session question with 5-minute defaults.
 - `scripts/runtime_session.py`: bounded metadata orientation, durable multipart
   intake and saved-focus continuity. Session settings live in the ignored cache;
   requests.json is durable project intent, separate from proof.
@@ -76,6 +83,8 @@ need measurement; smaller context is not a guarantee of lower billed usage.
   and session accounting remain available explicitly with `--backend direct`.
 - `scripts/migrate.py`, `runtime_adopt.py`: conversion, archive and recovery.
 - `scripts/test_brain.py`: complete offline regression entry point.
+- `tools/test_relay_integration.mjs`: optional real CAP transport/watchdog check
+  with synthetic native execution, a private service and scratch Git remote.
 
 ## Verification and design
 
@@ -85,6 +94,7 @@ need measurement; smaller context is not a guarantee of lower billed usage.
 - [Architecture decision](design/decisions/ADR-003.md).
 - [Orchestration decision](design/decisions/ADR-004.md).
 - [Executor/recovery decision](design/decisions/ADR-005.md).
+- [Unattended setup and relay decision](design/decisions/ADR-006.md).
 
 ## Orchestration development
 

@@ -114,9 +114,13 @@ needs clarification before dispatch, never a guessed alias.
 
 **Intake:** in each NEW implementation session, including a new-session
 "continue", load the unfinished task/Resume and saved ESP/SP. First read back
-already running/uncertain operations without replay. Then show one compact
-proposal, for example: "ESP: Native Cheapest; SP: Parallel (2); QRP: disabled.
-Keep these or change?" Confirm all three before new execution/dispatch. Explicit ESP/SP
+already running/uncertain operations without replay. Then `PB setup ask` prints
+ONE numbered, plain-language batch (worker source/tier, scheduling and maximum,
+QRP, BRP, director tier), each with its default underneath; relay it unchanged.
+Defaults are the saved policy only if those bytes were confirmed before, else
+Solo/Serial 1/QRP off/BRP off. Without a reply, `setup wait` (≤60 s per call, so
+replies arrive between calls) until 5 minutes passed, then `setup defaults`
+saves and confirms them; never block longer. Confirm before new execution/dispatch. Explicit ESP/SP
 answers already supplied in the current session satisfy the corresponding question.
 Do not infer new-session confirmation from "continue" alone or a saved preference.
 This replaces the earlier standing-policy/no-confirmation shortcut.

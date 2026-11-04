@@ -46,7 +46,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.9.0"
+VERSION = "3.10.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -1257,7 +1257,11 @@ def cmd_boot(root, maintain=True, new_session=False):
             print(f"  ! foreign planning state detected: {fname} ({', '.join(fpaths)}) -> run `legacy` to preview adoption")
         print("NEXT: Substantial work -> SKILL.md Genesis (`map`, then `init`). Small request -> just do it.")
         return 0
-    if new_session and maintain:
+    import runtime_relay as RL
+    if new_session and maintain and RL.authorized(sys.modules[__name__], root):
+        # A relay successor inherits the launcher's confirmed settings and session modes.
+        print("RELAY_SUCCESSOR: settings inherited; ask no setup questions and do not repeat recorded discovery/verification.")
+    elif new_session and maintain:
         set_session_modes(root, new=True)
         import runtime_executor_policy as E
         E.begin_session(sys.modules[__name__], root)
@@ -1996,6 +2000,23 @@ def _resolve_root_and_task(pos1, pos2, default_root="."):
     return Path(pos1 or default_root).resolve(), pos2
 
 
+def _relay_token_argv(argv):
+    """`--relay-token <t>` works on every command and in shells that drop environment changes."""
+    out, i = [], 0
+    while i < len(argv):
+        item = argv[i]
+        if item == "--relay-token" and i + 1 < len(argv):
+            os.environ["PB_RELAY_TOKEN"] = argv[i + 1]
+            i += 2
+            continue
+        if item.startswith("--relay-token="):
+            os.environ["PB_RELAY_TOKEN"] = item.split("=", 1)[1]
+        else:
+            out.append(item)
+        i += 1
+    return out
+
+
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -2012,6 +2033,8 @@ def main():
     CT.add_parser(sub)
     import runtime_relay as RL
     RL.add_parser(sub)
+    import runtime_setup as SU
+    SU.add_parser(sub)
 
     for name in ("boot", "brief", "map", "init", "changed", "validate", "doctor"):
         parser = sub.add_parser(name)
@@ -2195,11 +2218,22 @@ def main():
     sp_mode.add_argument("--task-mode", choices=("response", "execute"), default=None)
     sp_mode.add_argument("--json", action="store_true")
 
-    a = ap.parse_args(_reorder_argv(sys.argv[1:]))
+    argv = _relay_token_argv(sys.argv[1:])
+    a = ap.parse_args(_reorder_argv(argv))
     B_mod = sys.modules[__name__]
 
     if a.cmd == "relay":
-        print(json.dumps(RL.command(B_mod, a), ensure_ascii=False))
+        result = RL.command(B_mod, a)
+        code = result.pop("exit_code", 0) if isinstance(result, dict) else 0
+        if isinstance(result, dict) and result.get("notify"):
+            print(result["notify"])
+        print(json.dumps(result, ensure_ascii=False))
+        return code
+    if a.cmd == "setup":
+        result = SU.command(B_mod, a)
+        for line in result.pop("lines", []):
+            print(line)
+        print(json.dumps(result, ensure_ascii=False))
         return 0
     if a.cmd in ("policy", "quota", "qualify"):
         print(json.dumps(CT.command(B_mod, a), ensure_ascii=False))

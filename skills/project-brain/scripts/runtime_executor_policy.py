@@ -157,7 +157,9 @@ def load(B, root):
     value, digest = _read(_path(B, root))
     if value is None and digest is None:
         return None
-    return _validate(value)
+    import runtime_relay as RL
+    # The relay baton holder never works under an unconfirmed mid-relay edit.
+    return RL.effective(B, root, _validate(value))
 
 
 def save(B, root, value, note):
@@ -198,9 +200,12 @@ def begin_session(B, root):
 def confirm(B, root, note):
     if not B.brain_exists(root):
         raise ValueError("Initialize Brain before confirming executor policy")
-    value = load(B, root)
-    if value is None:
+    current, file_hash = _read(_path(B, root))
+    if current is None and file_hash is None:
         raise ValueError("Save explicit executor, scheduling and quota recovery choices before confirmation")
+    # Confirmation concerns the user's file, even while the holder still runs
+    # under the previous inherited policy pending this confirmation.
+    value = _validate(current)
     note = _text(note, 1000)
     require_clean(note, "executor confirmation note")
     session = _session(B, root) or begin_session(B, root)
@@ -212,11 +217,39 @@ def confirm(B, root, note):
         _canonical(value).encode("utf-8")).hexdigest(), "file_hash": file_hash,
         "session_id": os.environ.get("PB_SESSION_ID", ""), "note": note}
     B.write_atomic(_path(B, root, session=True), json.dumps(session, ensure_ascii=False, indent=2))
+    # Durable across nonce rotation: setup defaults may reuse only a confirmed file.
+    B.write_atomic(V.public_path(root, B.BRAIN_DIR + "/.cache/policy-confirmed.json"),
+                   json.dumps({"schema": 1, "file_hash": file_hash}))
     return session
+
+
+def last_confirmed(B, root):
+    """True when the policy file's bytes equal the last confirmed policy (any session)."""
+    try:
+        _, file_hash = _read(_path(B, root))
+        path = V.public_path(root, B.BRAIN_DIR + "/.cache/policy-confirmed.json")
+        return bool(file_hash) and path.is_file() and json.loads(path.read_text(encoding="utf-8")).get("file_hash") == file_hash
+    except (ValueError, OSError, AttributeError):
+        return False
+
+
+def receipt_matches_file(B, root):
+    """The current session's confirmation covers the current policy bytes (nonce-free check)."""
+    try:
+        value, file_hash = _read(_path(B, root))
+        session = _session(B, root)
+        receipt = session.get("confirmation") if session else None
+        return (isinstance(receipt, dict) and file_hash is not None and receipt.get("file_hash") == file_hash
+                and receipt.get("policy_hash") == hashlib.sha256(_canonical(_validate(value)).encode("utf-8")).hexdigest())
+    except (ValueError, OSError, TypeError):
+        return False
 
 
 def confirmed(B, root):
     """Freshness observation, not authenticated user/model identity."""
+    import runtime_relay as RL
+    if RL.authorized(B, root):
+        return True  # the live baton holder inherits the launcher's confirmed settings
     try:
         value, file_hash = _read(_path(B, root))
         if file_hash is None:

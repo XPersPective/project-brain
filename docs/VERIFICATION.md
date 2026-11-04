@@ -1,4 +1,53 @@
-# Verification guide — Project Brain 3.9.0
+# Verification guide — Project Brain 3.10.0
+
+3.10.0 makes setup and the Baton Relay safe to leave unattended (ADR-006,
+contract `skills/project-brain/references/director-contract.md`). 33 offline
+checks in test_relay.py use a fake CAP that implements pb-director/1: strict
+relay policy (director tier, default same tier), quota-unknown last resort,
+preflight table and refusal, same-tier resolution, token argument authority,
+two-phase handoff/takeover with secretEnv, idle and deadline fields, older-skill
+refusal, failover after a failed or silent successor, restart after a dead
+director, unplanned-transfer bound and single notification, relay-owned versus
+foreign `needs_review` locks, START_TIMEOUT and lost responses without penalty,
+stray director cancellation, stale-record reset, confirmed/unconfirmed policy
+edits, in-place upgrade of a live 3.9 record, stop/complete, max_handoffs, and
+the one-batch setup question with the 5-minute default. Continuation regressions
+also cover preserving a lost-acknowledgement successor, leaving a new unrelated
+review lock untouched, explicit director profile/read paths, fast takeover task
+identity, confirmation by the current holder and worker setup suppression.
+The Pool adapter transport test preserves CAP's scoped task lease/worker marker
+while filtering provider secrets. They pass under Python
+3.11.15 and 3.8.20. A copy of a real 3.9 project's relay record and policy was
+read by the new code with its confirmation hash unchanged.
+
+End-to-end on 2026-11-05 through the installed CAP 2.1.1 service on a scratch Git
+repository (not a user project). That CAP has none of the pb-director/1 features
+yet, so `relay start --unverified` printed every missing guarantee. Live quota
+skipped `codex-local` (3-6%) and, once known, `claude-local` (7%) below the 10%
+threshold, and a later recover correctly ended `EXHAUSTED` with one CAP_NOTIFY.
+After a restart with free candidates: handoff to `mcode-local`, which was killed
+before takeover twice; `relay recover` failed over with fresh tokens, marked it
+unhealthy after the second failure, printed the exact resolve command for each
+leftover `needs_review` lock, and moved to `qoder-local`. The real Qoder successor
+ran `relay takeover` (generation 2), wrote and committed relay.txt, accepted
+PB-001 and ran `relay complete`. Events: START, HANDOFF, FAILOVER, FAILOVER,
+TAKEOVER, COMPLETE. Its CAP task still ended `needs_review` (`INVALID_REPORT`),
+which recover reported on the completed relay; locks were released manually
+because this CAP lacks `resolve`/fingerprint release. This original live-provider
+run did not exercise the new CAP mechanisms.
+
+The subsequent `tools/test_relay_integration.mjs` check runs against the sibling
+CAP source service with private data, port 0 and a scratch Git repository/local
+bare remote. Real Python CLI -> JSON stdin -> CAP HTTP/MCP exercises verified
+preflight, explicit director admission, secretEnv delivery, task identity and
+self-acknowledgement. A synthetic native executor fails the first director before
+takeover; the actual onExit watchdog invokes `relay recover`, preflights and starts
+the next candidate, which takes over, commits/pushes to the local remote and
+completes. Events: START, HANDOFF, FAILOVER, TAKEOVER, COMPLETE; final CAP state:
+succeeded. No provider is called. Native tool observations are synthetic; this
+proves cross-repository transport and recovery wiring, not provider permissions.
+Deadline/idle behavior remains covered by offline PB/CAP tests.
+
 
 3.9.0 adds the optional Baton Relay Policy (BRP). 11 offline checks cover strict
 optional policy JSON, threshold and model-scoped quota windows, circular candidate
@@ -193,6 +242,13 @@ Optional live Pool integration (fresh private data directory, synthetic worker):
 
 ```text
 python -B skills/project-brain/scripts/test_pool_integration.py --pool-entry <Pool>/bin/pool.js
+```
+
+Optional pb-director/1 cross-repository relay integration (Node with CAP's source
+dependencies installed; no Python runtime dependencies):
+
+```text
+node tools/test_relay_integration.mjs <Pool-source-root> <absolute-python-executable>
 ```
 
 All Python files must parse with Python 3.8 grammar. Windows runtime checks use

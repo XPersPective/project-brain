@@ -39,6 +39,11 @@ def rpc(tool, arguments=None):
     # The detached shared daemon must survive this short-lived RPC client. A worker
     # ProcessTree would also kill a freshly started daemon on Windows JobObject close.
     env = {k: v for k, v in os.environ.items() if not V.SECRET_ENV.search(k)}
+    # CAP's scoped lease is transport authority, not a provider credential.
+    # Preserve it so linked workers and director successors retain their role;
+    # the service validates the lease and enforces owner-only operations.
+    if os.environ.get("CLI_AGENT_POOL_TASK_TOKEN"):
+        env["CLI_AGENT_POOL_TASK_TOKEN"] = os.environ["CLI_AGENT_POOL_TASK_TOKEN"]
     env["PYTHONIOENCODING"] = "utf-8"
     try:
         response = subprocess.run(command() + ["rpc"],
