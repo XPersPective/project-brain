@@ -32,8 +32,14 @@ MAX_HISTORY = 200
 HASH = re.compile(r"^[0-9a-f]{64}$")
 TOKEN = re.compile(r"^[0-9a-f]{32}$")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,199}$")
-STATES = {"ACTIVE", "HANDOFF_PENDING", "STOPPED", "COMPLETED", "EXHAUSTED"}
+STATES = {"ACTIVE", "HANDOFF_PENDING", "STOPPING", "STOPPED", "COMPLETED", "EXHAUSTED"}
 LIVE = {"ACTIVE", "HANDOFF_PENDING"}
+# STOPPING: the user asked the director to save and withdraw (ADR-007). No new work,
+# no successor; still blocks other sessions until STOPPED or the grace deadline.
+BLOCKING = LIVE | {"STOPPING"}
+STOP_GRACE = 120
+STOP_SLICE = 60
+PREPARE_MARGIN = 5
 ACTIVE_TASK = {"queued", "starting", "running", "cancelling"}
 TERMINAL_TASK = {"succeeded", "failed", "timed_out", "cancelled", "needs_review"}
 FEATURES = {"preflight", "onExit", "ack", "idle", "secretEnv", "resolve", "releaseLockOnFailure", "directorProfile"}
@@ -229,6 +235,8 @@ def view(state):
             result["pending"]["checkpoint"] = pending["checkpoint"]["path"]
     if state.get("reason"):
         result["reason"] = state["reason"]
+    if state.get("stop_deadline"):
+        result["stop_deadline"] = _iso(state["stop_deadline"])
     last = state["history"][-1] if state["history"] else None
     if last:
         result["last_event"] = dict(last, at=_iso(last.get("at")))
@@ -251,6 +259,12 @@ def boot_line(B, root):
         return ("RELAY: EXHAUSTED since %s (%s). No director runs; the user decides: `relay start` "
                 "again or work normally." % (_iso(state["history"][-1]["at"]) if state["history"] else "?",
                                               state.get("reason") or "no ready candidate"))
+    if state["status"] == "STOPPING":
+        d = state["director"]
+        return ("RELAY: STOPPING gen %d director %s%s; the user asked it to save and withdraw by %s. "
+                "No new work; `relay stop` again waits or forces after the deadline."
+                % (state["generation"], d["route"], "/" + d["model"] if d.get("model") else "",
+                   _iso(state.get("stop_deadline")) or "?"))
     if state["status"] not in LIVE:
         return None
     d = state["director"]
@@ -283,9 +297,24 @@ def authorized(B, root, token=None):
     return bool(state and state["status"] == "ACTIVE" and _holds(state["director"], token))
 
 
+def stopping_holder(B, root, token=None):
+    """True for the baton holder after the user requested a stop: it may save and complete only."""
+    try:
+        state = read(B, root)
+    except ValueError:
+        return False
+    return bool(state and state["status"] == "STOPPING" and _holds(state["director"], token))
+
+
 def require_free_or_director(B, root):
     """Single-director gate used before implementation work."""
     state = read(B, root)
+    if state and state["status"] == "STOPPING":
+        if _holds(state["director"]):
+            raise ValueError("RELAY_STOP_REQUESTED: the user asked you to stop. Save Resume/next step now, "
+                             "then run `relay complete --note \"stopped by user\"` before %s and end."
+                             % (_iso(state.get("stop_deadline")) or "the deadline"))
+        raise ValueError("RELAY_ACTIVE: " + (boot_line(B, root) or "a relay director is stopping"))
     if state and state["status"] in LIVE and not _holds(state["director"]):
         raise ValueError("RELAY_ACTIVE: " + (boot_line(B, root) or "a relay director owns this project"))
 
@@ -296,7 +325,7 @@ def effective(B, root, value):
         state = read(B, root)
     except ValueError:
         return value
-    if (not state or state["status"] not in LIVE or not state.get("inherited") or value is None
+    if (not state or state["status"] not in BLOCKING or not state.get("inherited") or value is None
             or not _holds(state["director"]) or digest(value) == state["policy_hash"]):
         return value
     import runtime_executor_policy as E
@@ -332,8 +361,13 @@ def assess(snapshot, policy, model=None):
     if value is None:
         return {"status": "UNKNOWN", "threshold_percent": relay["threshold_percent"],
                 "reason": "no applicable quota window; continue carefully and re-check later"}
-    return {"status": "HANDOFF_REQUIRED" if value <= relay["threshold_percent"] else "READY",
-            "remaining_percent": value, "threshold_percent": relay["threshold_percent"]}
+    threshold = relay["threshold_percent"]
+    result = {"status": "HANDOFF_REQUIRED" if value <= threshold else "READY",
+              "remaining_percent": value, "threshold_percent": threshold}
+    if threshold < value <= threshold + PREPARE_MARGIN:
+        # ADR-007: save Resume/checkpoint 5 points early so the handoff never races exhaustion.
+        result["prepare_checkpoint"] = True
+    return result
 
 
 def fetch_quotas(rpc, candidates):
@@ -609,7 +643,7 @@ def start(B, root, policy, route, model=None, effort=None, task_id=None, rpc=Non
     if route is None:
         raise ValueError("The current director route is required")
     state = read(B, root)
-    if state and state["status"] in LIVE:
+    if state and state["status"] in BLOCKING:
         holder = _task(rpc, state["director"].get("task_id")) if rpc else None
         pending = state.get("pending")
         pending_task = _task(rpc, pending.get("task_id")) if rpc and pending else None
@@ -635,7 +669,7 @@ def start(B, root, policy, route, model=None, effort=None, task_id=None, rpc=Non
         raise ValueError("RELAY_NOT_READY: no candidate passed preflight: " + json.dumps(table, ensure_ascii=False))
     token = secrets.token_hex(16)
     with B.checkout_lock(root):
-        if (read(B, root) or {}).get("status") in LIVE:
+        if (read(B, root) or {}).get("status") in BLOCKING:
             raise ValueError("RELAY_ACTIVE: another director started meanwhile")
         new = {"schema": SCHEMA, "status": "ACTIVE", "policy_hash": policy_hash, "inherited": copy.deepcopy(policy),
                "generation": 1, "handoffs": 0, "unplanned": 0, "announced": False,
@@ -964,6 +998,14 @@ def recover(B, root, policy, rpc, brain_script=None, now=None, sleep=time.sleep,
             observed[task_id] = _task(rpc, task_id)
     labelled, strays = _strays(state, rpc, root)
     actions = ["cancelled stray " + t for t in _cancel_all(rpc, strays)]
+    if state["status"] == "STOPPING":
+        # A requested stop never restarts or fails over; it only finishes the stop.
+        holder = observed.get(state["director"].get("task_id")) if state["director"].get("task_id") else None
+        ended = holder is not None and holder.get("state") in TERMINAL_TASK | {"not_found"}
+        if ended or now >= (state.get("stop_deadline") or 0):
+            done = finish(B, root, "STOP", "stop finished by recover", rpc=rpc, now=now)
+            return dict(done, actions=actions + done.get("actions", []), notify=None)
+        return dict(view(state), actions=actions, notify=None)
     if state["status"] not in LIVE:
         actions += _resolve_owned(state, rpc, observed)
         notify = None
@@ -1094,7 +1136,7 @@ def finish(B, root, event, note, rpc=None, token=None, now=None):
     S.require_public(note, "relay note")
     with B.checkout_lock(root, timeout=90):
         state = read(B, root)
-        if not state or state["status"] not in LIVE:
+        if not state or state["status"] not in BLOCKING:
             if state and event == "STOP" and state["status"] == "EXHAUSTED":
                 state["status"] = "STOPPED"
                 _event(state, event, now, note=note or None)
@@ -1105,13 +1147,61 @@ def finish(B, root, event, note, rpc=None, token=None, now=None):
         tasks = [t for t in ((state.get("pending") or {}).get("task_id"),) if t]
         if event == "STOP" and state["director"].get("task_id"):
             tasks.insert(0, state["director"]["task_id"])
-        state["status"] = "COMPLETED" if event == "COMPLETE" else "STOPPED"
+        acknowledged = event == "COMPLETE" and state["status"] == "STOPPING"
+        state["status"] = "STOPPED" if event == "STOP" or acknowledged else "COMPLETED"
         state["pending"] = None
-        _event(state, event, now, note=note or None)
+        state.pop("stop_deadline", None)
+        _event(state, "STOP_ACK" if acknowledged else event, now, note=note or None)
         _write(B, root, state)
     cancelled = _cancel_all(rpc, tasks) if rpc else []
     actions = _resolve_owned(state, rpc, {}) if rpc and event == "STOP" else []
     return dict(view(state), cancelled=cancelled, actions=actions)
+
+
+def request_stop(B, root, note, rpc=None, now=None, sleep=time.sleep, force=False, clock=time.time):
+    """User stop (ADR-007): ask the director to save and withdraw within STOP_GRACE seconds.
+
+    The first call records STOPPING and cancels a not-yet-confirmed successor. Each
+    call waits at most STOP_SLICE seconds for the holder's `relay complete`; at the
+    deadline, with `force`, or when the director task already ended, the director
+    task is cancelled (finish STOP). A host director without a CAP task cannot be
+    cancelled by Brain; it is told at its next Brain command and must stop."""
+    now = clock() if now is None else now
+    note = (note or "User stopped the relay")[:500]
+    S.require_public(note, "relay note")
+    state = read(B, root)
+    if not state or state["status"] not in BLOCKING or force:
+        return finish(B, root, "STOP", note, rpc=rpc, now=now)
+    holder = _task(rpc, state["director"].get("task_id")) if rpc and state["director"].get("task_id") else None
+    if holder and holder.get("state") in TERMINAL_TASK | {"not_found"}:
+        return finish(B, root, "STOP", note + " (director already ended)", rpc=rpc, now=now)
+    cancel = []
+    if state["status"] != "STOPPING":
+        with B.checkout_lock(root, timeout=90):
+            state = read(B, root)
+            if state["status"] in LIVE:
+                pending = state.get("pending") or {}
+                cancel = [pending["task_id"]] if pending.get("task_id") else []
+                state.update(status="STOPPING", pending=None, stop_deadline=now + STOP_GRACE)
+                _event(state, "STOP_REQUESTED", now, note=note)
+                _write(B, root, state)
+        if rpc:
+            _cancel_all(rpc, cancel)
+        return dict(view(state), seconds_left=STOP_GRACE, cancelled=cancel,
+                    next="run `relay stop` again to wait (at most 60 s per call); it forces after the deadline")
+    waited = 0
+    while True:
+        left = state["stop_deadline"] - (now + waited)
+        if left <= 0:
+            return finish(B, root, "STOP", note + " (grace period elapsed)", rpc=rpc, now=now + waited)
+        if waited >= STOP_SLICE:
+            return dict(view(state), seconds_left=int(left))
+        step = min(5, left, STOP_SLICE - waited)
+        sleep(step)
+        waited += step
+        state = read(B, root)
+        if not state or state["status"] != "STOPPING":
+            return view(state)
 
 
 def mark_progress(B, root, policy, rpc, now=None):
@@ -1145,6 +1235,7 @@ def add_parser(sub):
     p.add_argument("--next", dest="next_step", default="")
     p.add_argument("--note", default="")
     p.add_argument("--unverified", action="store_true")
+    p.add_argument("--force", action="store_true", help="stop: cancel the director now instead of the 2-minute save")
     p.add_argument("--from-hook", action="store_true")
 
 
@@ -1164,9 +1255,10 @@ def command(B, args, pool=None):
     pool = pool or _pool()
     rpc = pool.rpc
     if args.action == "stop":
-        if os.environ.get("CLI_AGENT_POOL_WORKER") and not authorized(B, root):
+        if os.environ.get("CLI_AGENT_POOL_WORKER") and not (authorized(B, root) or stopping_holder(B, root)):
             raise ValueError("Workers cannot stop another director's relay")
-        return finish(B, root, "STOP", args.note or "User stopped the relay", rpc=rpc)
+        return request_stop(B, root, args.note or "User stopped the relay", rpc=rpc,
+                            force=getattr(args, "force", False))
     policy = E.load(B, root)
     script = str(Path(__file__).resolve().parent / "brain.py")
     if args.action == "recover":
@@ -1181,6 +1273,9 @@ def command(B, args, pool=None):
     E.require_confirmed(B, root)
     if args.action == "assess":
         state = mark_progress(B, root, policy, rpc)
+        if state and state["status"] == "STOPPING":
+            return {"status": "STOP_REQUESTED", "stop_deadline": _iso(state.get("stop_deadline")),
+                    "next": "save Resume/next step, then `relay complete --note \"stopped by user\"` and end"}
         policy = E.load(B, root)
         if args.snapshot:
             snapshot = CT.read_input(root, args.snapshot)

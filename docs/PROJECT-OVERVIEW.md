@@ -1,4 +1,4 @@
-# Project Brain 3.10.0
+# Project Brain 3.11.0
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,
@@ -13,8 +13,8 @@ session answers and intervening questions never trigger repeated interviews.
 Intervening questions reuse active context rather than boot/history/skill reloads.
 The read-only `brief` CLI emits at most 4 KiB with explicit missing detail and
 pending/readback warnings, without migration, dispatch or session changes.
-Executor Selection Policy (ESP) names seven worker choices: Solo, Native, Native
-Cheapest, Native Pinned, CAP Categories, CAP Catalog, CAP Pinned. CAP explicitly
+Executor Selection Policy (ESP) names eight worker choices: Solo, Native, Native
+Cheapest, Native Pinned, Mixed, CAP Categories, CAP Catalog, CAP Pinned. CAP explicitly
 means CLI Agent Pool. Scheduling Policy (SP) separately names Serial/Parallel and
 its maximum. Solo means main-agent work with tools and no subagent delegation.
 The director records both in `.project-brain/executor-policy.json`; new sessions
@@ -90,6 +90,8 @@ need measurement; smaller context is not a guarantee of lower billed usage.
 
 ## Verification and design
 
+- [Setup and role decision](design/decisions/ADR-007.md): accepted Turkish form,
+  follow-up deadlines, resource failure rules and mandatory roles/economy.
 - [Verification guide](VERIFICATION.md): checks, protected invariants, limits,
   release procedure.
 - [Evidence recovery](design/decisions/ADR-001.md).

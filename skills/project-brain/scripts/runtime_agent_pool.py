@@ -298,7 +298,7 @@ def _candidate_rows(source, selector, kind):
             for row in targeted_models(pin["routeId"], pin["modelId"]):
                 found[(row["routeId"], row["id"])] = row
         return list(found.values())
-    if source == "cap-category":
+    if "categories" in selector:  # cap-category, or mixed bounded to categories
         queries = [("pool_list_pools", {"group": category, "limit": 12, "offset": 0}, category)
                    for category in selector["categories"]]
     else:
@@ -351,8 +351,9 @@ def select_policy(B, root, tier="M", role="worker", route="", model="", effort="
     bounds = selector.get("effort", {})
     if selected_effort is None and bounds.get("selector") == "user":
         selected_effort = bounds["value"]
-    category = group if source == "cap-category" and group else None
-    if source == "cap-category" and category and category not in selector["categories"]:
+    capped = "categories" in selector
+    category = group if capped and group else None
+    if capped and category and category not in selector["categories"]:
         raise ValueError("Category is outside saved executor bounds")
     E.guard(B, root, role, "pool", category=category, effort=selected_effort)
     mode = mode or ("response" if role in ("reviewer", "discovery") else "execute")
@@ -381,8 +382,8 @@ def select_policy(B, root, tier="M", role="worker", route="", model="", effort="
         if qualification is None or QUALITY_LEVELS.index(QUALITY_TIERS[qualification]) < quality_needed:
             continue
         memberships = row.get("categories", [])
-        actual_category = row.get("selectedCategory") if source == "cap-category" else None
-        if source == "cap-category" and (not actual_category or actual_category not in selector["categories"]
+        actual_category = row.get("selectedCategory") if capped else None
+        if capped and (not actual_category or actual_category not in selector["categories"]
                                           or actual_category not in memberships):
             continue
         supported = row.get("efforts", [])
@@ -477,7 +478,7 @@ def gate(B, task, spec, actor, action, root=None):
         effort = spec.get("pool_effort") or (entry.get("request") or {}).get("effort") or live.get("defaultEffort")
         live["effort"] = effort
         E.guard(B, root, role, "pool", model=live,
-                category=category if saved["execution"]["source"] == "cap-category" or saved["review"]["source"] == "cap-category" else None,
+                category=category if "categories" in saved["execution"] or "categories" in saved["review"] else None,
                 effort=effort)
         tier = __import__("runtime_agents").score_task(B, None, task)["effective_tier"]
         needed = GROUPS[tier]

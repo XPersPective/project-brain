@@ -9,11 +9,22 @@ file to change a format, interpret a trailer, or understand a migration.
 
 # config.yaml
 
+Executor policy remains schema 1 in `executor-policy.json`, separate from config.
+Optional `speed: balanced|turbo`, `origin: user|defaults`, `cap_fallback: native|wait`
+and `scheduling.auto: true|false` are validated without changing older policy bytes.
+`mixed` permits native and CAP, optionally bounding CAP `categories` only.
+`cap_fallback: wait` preserves explicit CAP-only bounds through setup timeouts.
+Session-local `.cache/setup.json` binds the session nonce, shown defaults,
+`asked_at`, mode (`setup|clarification|relay_active|quota_waiting`) and resolved
+status. Clarification gates dispatch until confirmation or 300-second defaults.
+The host translates copied form answers into existing policy JSON; the HTML has
+no direct submission transport or autonomous timer. See WORKFLOW §2.1–2.2.
+
 Stable policy only — never HEAD, active task, timestamps, model, or test results.
 
 ```yaml
 schema_version: 4
-skill_version: "3.10.0"
+skill_version: "3.11.0"
 protocol_version: "1"
 architecture:
   mode: single          # domains: current/<d>.md, optional target/<d>.md; target.md always holds Goal/Status

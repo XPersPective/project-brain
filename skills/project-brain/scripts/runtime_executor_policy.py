@@ -11,7 +11,12 @@ from runtime_security import require_clean
 
 LIMIT = 65536
 SOURCES = ("solo", "native", "native-cheap", "native-pinned",
-           "cap-category", "cap-catalog", "cap-pinned")
+           "cap-category", "cap-catalog", "cap-pinned", "mixed")
+# "mixed" = Yerleşik ajanlar + CLI Ajan Havuzu: host agents and CAP models, CAP
+# optionally bounded to categories. Optional top-level keys (absent in older files,
+# so their confirmations and relay hashes stay valid): speed, origin, scheduling.auto.
+SPEEDS = ("balanced", "turbo")
+ORIGINS = ("user", "defaults")
 
 
 def _path(B, root, session=False):
@@ -58,10 +63,10 @@ def _selector(value):
     if source not in SOURCES:
         raise ValueError("Unknown executor source")
     result = {"source": source}
-    if source == "cap-category":
+    if source == "cap-category" or (source == "mixed" and "categories" in value):
         result["categories"] = _items(value.get("categories"))
     elif "categories" in value:
-        raise ValueError("Categories require cap-category")
+        raise ValueError("Categories require cap-category or mixed")
     if source in ("native-pinned", "cap-pinned"):
         models = value.get("models")
         if not isinstance(models, list) or not 1 <= len(models) <= 128:
@@ -97,18 +102,27 @@ def _selector(value):
 
 
 def _validate(value):
-    _keys(value, ("schema", "execution", "scheduling", "quota_recovery"), ("review", "note", "relay"))
+    _keys(value, ("schema", "execution", "scheduling", "quota_recovery"),
+          ("review", "note", "relay", "speed", "origin", "cap_fallback"))
     if type(value["schema"]) is not int or value["schema"] != 1:
         raise ValueError("Unsupported executor policy schema")
     result = {"schema": 1, "execution": _selector(value["execution"])}
     result["review"] = _selector(value["review"]) if "review" in value else copy.deepcopy(result["execution"])
     schedule = value["scheduling"]
-    _keys(schedule, ("mode", "max_parallel"))
+    _keys(schedule, ("mode", "max_parallel"), ("auto",))
     if (schedule["mode"] not in ("serial", "parallel")
             or type(schedule["max_parallel"]) is not int or not 1 <= schedule["max_parallel"] <= 32
             or (schedule["mode"] == "serial" and schedule["max_parallel"] != 1)):
         raise ValueError("Scheduling requires serial/1 or parallel/1..32")
+    if "auto" in schedule and (type(schedule["auto"]) is not bool
+                               or (schedule["auto"] and schedule["mode"] != "parallel")):
+        raise ValueError("Automatic parallel width requires parallel mode and true/false")
     result["scheduling"] = dict(schedule)
+    for name, allowed in (("speed", SPEEDS), ("origin", ORIGINS), ("cap_fallback", ("native", "wait"))):
+        if name in value:
+            if value[name] not in allowed:
+                raise ValueError("Executor policy %s must be one of %s" % (name, ", ".join(allowed)))
+            result[name] = value[name]
     recovery = value["quota_recovery"]
     _keys(recovery, ("enabled", "threshold_percent"))
     if (type(recovery["enabled"]) is not bool or type(recovery["threshold_percent"]) is not int
@@ -220,6 +234,11 @@ def confirm(B, root, note):
     # Durable across nonce rotation: setup defaults may reuse only a confirmed file.
     B.write_atomic(V.public_path(root, B.BRAIN_DIR + "/.cache/policy-confirmed.json"),
                    json.dumps({"schema": 1, "file_hash": file_hash}))
+    import runtime_setup as SU
+    if SU.pending(B, root):
+        setup = SU._record(B, root)
+        setup["status"] = "resolved"
+        B.write_atomic(SU._path(B, root), json.dumps(setup, ensure_ascii=False, indent=2))
     return session
 
 
@@ -248,8 +267,8 @@ def receipt_matches_file(B, root):
 def confirmed(B, root):
     """Freshness observation, not authenticated user/model identity."""
     import runtime_relay as RL
-    if RL.authorized(B, root):
-        return True  # the live baton holder inherits the launcher's confirmed settings
+    if RL.authorized(B, root) or RL.stopping_holder(B, root):
+        return True  # the baton holder inherits the launcher's confirmed settings
     try:
         value, file_hash = _read(_path(B, root))
         if file_hash is None:
@@ -268,6 +287,9 @@ def confirmed(B, root):
 
 
 def require_confirmed(B, root):
+    import runtime_setup as SU
+    if SU.pending(B, root):
+        raise ValueError("SETUP_CLARIFICATION_PENDING: ask the recorded follow-up; wait or resolve it before dispatch")
     value = load(B, root)
     marker = _path(B, root, session=True).exists()
     if value is None and not marker:
@@ -310,9 +332,11 @@ def guard(B, root, role, backend, model=None, category=None, effort=None, cheape
     source = selected["source"]
     if backend == "main":
         return selected
-    expected = "pool" if source.startswith("cap-") else "native"
-    if source == "solo" or backend != expected:
+    expected = (("native", "pool") if source == "mixed" else ("pool",) if source.startswith("cap-")
+                else ("native",))
+    if source == "solo" or backend not in expected:
         raise ValueError("Worker backend is outside saved executor source")
+    capped = "categories" in selected and backend == "pool"
     bounds = selected.get("effort", {})
     if model is None and bounds.get("selector") == "default" and effort is not None:
         raise ValueError("Saved provider-default effort forbids an explicit override")
@@ -324,7 +348,7 @@ def guard(B, root, role, backend, model=None, category=None, effort=None, cheape
             raise ValueError("Effort is outside saved allowed choices")
     if category is not None:
         _text(category)
-        if source == "cap-category" and category not in selected["categories"]:
+        if capped and category not in selected["categories"]:
             raise ValueError("Category is outside saved executor bounds")
     if model is None:
         return selected  # Exact identity and effective effort are checked after selection.
@@ -353,7 +377,7 @@ def guard(B, root, role, backend, model=None, category=None, effort=None, cheape
         identity = {key: _text(model.get(key), exact=True) for key in ("routeId", "modelId")}
         if identity not in selected["models"]:
             raise ValueError("CAP model is outside saved exact pins")
-    elif source == "cap-category":
+    elif capped:
         memberships = model.get("categories")
         if memberships is None:
             actual_category = model.get("category", model.get("group"))
@@ -377,4 +401,29 @@ def summary(B, root):
             "review": {"source": value["review"]["source"]},
             "scheduling": value["scheduling"], "quota_recovery": value["quota_recovery"],
             **({"relay": {k: value["relay"][k] for k in ("enabled", "threshold_percent")}} if "relay" in value else {}),
+            **{k: value[k] for k in ("speed", "origin", "cap_fallback") if k in value},
             "confirmed": confirmed(B, root)}
+
+
+def cap_unavailable(value, role="exec"):
+    """What to do when CLI Agent Pool cannot serve the confirmed source (ADR-007).
+
+    Defaults (no user reply) may fall back to host agents; an explicit user choice
+    never changes silently: mixed continues with its host half, CAP-only waits.
+    The user is always told. Relay then falls back to the quota-wait rule."""
+    if value is None:
+        return {"action": "NOT_APPLICABLE"}
+    source = value[_role(role)]["source"]
+    relay = isinstance(value.get("relay"), dict) and value["relay"].get("enabled") is True
+    tail = (" Yönetici devri havuz olmadan yapılamaz; kota eşiğinde bekleme kuralı uygulanır."
+            if relay else "")
+    if source in ("solo", "native", "native-cheap", "native-pinned"):
+        return {"action": "CONTINUE", "notify": ("CLI Ajan Havuzu'na erişilemiyor." + tail) if relay else None}
+    if source == "mixed" or value.get("cap_fallback") == "native" or (
+            value.get("origin") == "defaults" and value.get("cap_fallback") != "wait"):
+        return {"action": "CONTINUE_NATIVE",
+                "notify": "CLI Ajan Havuzu'na erişilemiyor; yerleşik ajanlarla devam ediliyor." + tail}
+    return {"action": "WAIT",
+            "notify": ("CLI Ajan Havuzu'na erişilemiyor. Seçiminiz yalnız havuz olduğu için yeni iş "
+                       "dağıtılmıyor; erişim düzelince devam edilir. Yerleşik ajanlarla sürdürmek için "
+                       "\"3: yerleşik ajanlar\" yazın." + tail)}

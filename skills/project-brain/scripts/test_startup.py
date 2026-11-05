@@ -97,6 +97,36 @@ def main():
         assert 'waiting on a design note' in B.find_task(root, 'PB-004')['text']
         assert (B.bp(root) / 'migration-backup/tasks/PB-004.md').read_text(encoding='utf-8') == V3_TASK
 
+    # A new-session boot upgrades the previous release without changing saved
+    # executor restrictions, unresolved requests, active work or unrelated files.
+    with tempfile.TemporaryDirectory(prefix='pb-startup-310-') as directory:
+        root = Path(directory)
+        with contextlib.redirect_stdout(io.StringIO()):
+            _project(root, legacy=False)
+        config = B.bp(root) / 'config.yaml'
+        config.write_text(config.read_text(encoding='utf-8').replace(B.VERSION, '3.10.0'), encoding='utf-8')
+        policy = {'schema': 1, 'execution': {'source': 'cap-pinned', 'models': [{'routeId': 'user-route', 'modelId': 'user-model'}]},
+                  'scheduling': {'mode': 'serial', 'max_parallel': 1},
+                  'quota_recovery': {'enabled': False, 'threshold_percent': 10}}
+        write(root, '.project-brain/executor-policy.json', json.dumps(policy))
+        write(root, '.project-brain/requests.json', '{"schema":1,"requests":[]}')
+        write(root, 'user-work.txt', 'Keep this local work\n')
+        task = B.bp(root) / 'tasks/PB-001.md'
+        task.write_text(task.read_text(encoding='utf-8').replace('Status: READY', 'Status: IN_PROGRESS') +
+                        '\n## Resume\nKeep pending user changes.\n\n## External\nStatus: response_unknown\n', encoding='utf-8')
+        protected = [B.bp(root) / 'executor-policy.json', B.bp(root) / 'requests.json', root / 'user-work.txt']
+        before = {p: p.read_bytes() for p in protected}
+        raw_task = task.read_bytes()
+        code, output = run(root, 'boot', '--new-session')
+        assert code == 0, output
+        assert B.parse_config(root)['skill_version'] == B.VERSION
+        assert all(p.read_bytes() == raw for p, raw in before.items())
+        assert 'Keep pending user changes.' in task.read_text(encoding='utf-8')
+        assert 'response_unknown' in task.read_text(encoding='utf-8')
+        assert (B.bp(root) / 'migration-backup/tasks/PB-001.md').read_bytes() == raw_task
+        stable = snapshot(root)
+        assert run(root, 'orient')[0] == 0 and snapshot(root) == stable
+
     with tempfile.TemporaryDirectory(prefix='pb-startup-modern-') as directory:
         root = Path(directory)
         with contextlib.redirect_stdout(io.StringIO()):

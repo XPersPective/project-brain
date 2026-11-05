@@ -46,7 +46,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.10.0"
+VERSION = "3.11.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"

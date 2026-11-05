@@ -1,4 +1,36 @@
-# Verification guide — Project Brain 3.10.0
+# Verification guide — Project Brain 3.11.0
+
+3.11.0 adds the seven-item Turkish form and durable missing-choice follow-up.
+The complete offline `test_brain.py` entry point passed on Windows Python 3.11.15.
+The 43 `test_relay.py` checks pass on Windows Python 3.11.15 and 3.8.20, including real CLI
+ask → clarify → policy confirmation, fresh follow-up deadlines, dispatch blocking,
+resolved-answer retention, stale-session refusal, persisted CAP-only restrictions,
+role-specific authorized native recovery, active/stopping holder authority, HTML
+script escaping, unified quota preparation and graceful stop. An independent scoped
+source review found the missing wiring, role/provenance and holder issues; fixes
+and regressions were reviewed with no remaining scoped blocking finding.
+
+Playwright renders at 390×844 and 1280×800 were inspected; missing-selection output,
+native-fallback permission and reset were exercised with no horizontal overflow.
+Artifacts are local under `output/playwright/`. The form copies a chat answer; it
+has no direct host submit API. The host runs `setup wait/defaults`, so an inactive
+host cannot autonomously enforce a wall-clock timer. Python 3.8 grammar and changed
+protocol links pass; the skill entry remains below its 6,500-byte budget.
+Boot GC keeps active/dirty/recovery evidence; it cannot erase host chat history or
+force the current host model.
+
+Installed CAP 2.2.0 compatibility: compact help/categories/catalog and all eight
+pb-director/1 features were read from the real service. Both real-daemon checks
+passed against the installed package: `test_pool_integration.py` (auto-start,
+worker execution, fixed effort, no replay, isolated verification/integration) and
+`tools/test_relay_integration.mjs` (START, HANDOFF, FAILOVER, TAKEOVER, COMPLETE;
+final director task succeeded). Executors are synthetic; no provider inference,
+paid fallback or unrelated workspace writes are claimed. The obsolete legacy-only
+policy/category assertions in the transport test now also exercise compact CAP.
+The local Skills Manager source refresh was hash-verified across the central
+library and all 42 existing deployments (57 non-cache files each). Normal new
+project-session orient/boot upgrades older project state with backups, deferring
+read-only/merge/future-format cases; it installs no Windows login service.
 
 3.10.0 makes setup and the Baton Relay safe to leave unattended (ADR-006,
 contract `skills/project-brain/references/director-contract.md`). 33 offline

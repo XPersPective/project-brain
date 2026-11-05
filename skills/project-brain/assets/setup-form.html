@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<!-- Project Brain session setup form (ADR-007). `PB setup ask` copies this file to
+     .project-brain/.cache/setup-form.html with the shown defaults injected below.
+     The form cannot send data to the agent: the user copies the one-line answer. -->
+<script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+<style>
+  :root{--foreground:#1f2937;--card:#fff;--border:#d1d5db}
+  @media(prefers-color-scheme:dark){:root{--foreground:#e5e7eb;--card:#111827;--border:#4b5563}}
+  body{color:var(--foreground);background:var(--card);font-family:system-ui,sans-serif}
+  .grid2{display:grid;grid-template-columns:170px 1fr;column-gap:16px;align-items:start}
+  .row{padding:9px 0;border-bottom:1px solid color-mix(in srgb,var(--border,#444) 60%,transparent)}
+  .row:last-child{border-bottom:0}
+  .lbl{font-size:14px;font-weight:600;padding-top:1px}
+  .opts{display:flex;flex-wrap:wrap;gap:6px 22px}
+  .opt{display:inline-flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;user-select:none}
+  .cb{width:17px;height:17px;border-radius:4px;border:1.5px solid color-mix(in srgb,var(--foreground,#e5e7eb) 45%,transparent);display:inline-flex;align-items:center;justify-content:center;transition:all .12s;flex:none}
+  .opt:hover .cb{border-color:#22c55e}
+  .opt.on .cb{background:#22c55e;border-color:#22c55e}
+  .opt.on .cb::after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg) translate(-1px,-1px)}
+  .opt.on{font-weight:600}
+  .pct{width:42px;margin-left:4px;padding:1px 4px;border-radius:5px;font-size:13px;text-align:center;background:transparent;border:1px solid var(--border,#444);color:inherit}
+  .note{grid-column:2;margin-top:7px;width:100%;padding:5px 9px;border-radius:6px;font-size:13px;background:transparent;border:1px solid var(--border,#444);color:inherit;outline:none}
+  .note:focus{border-color:#22c55e}
+  .help{font-size:13px;line-height:1.5;margin:10px 0;opacity:.85}
+  button:focus-visible,input:focus-visible,.opt:focus-visible{outline:2px solid #22c55e;outline-offset:3px}
+  @media(max-width:600px){.grid2{grid-template-columns:1fr;row-gap:8px}.note{grid-column:1}.opt{min-height:32px}}
+</style>
+</head>
+<body class="bg-transparent antialiased p-2">
+<div class="bg-[var(--card)] border border-[var(--border)] rounded-xl px-5 py-3">
+  <div class="text-[15px] font-semibold pb-2">Çalışma ayarları</div>
+  <div id="form"></div>
+  <p class="help"><label><input id="fallback" type="checkbox"> Yalnız havuz seçersem erişim sorunu olduğunda yerleşik ajanlarla devam edilsin.</label><br>İşaretli değilse yalnız havuz tercihinizde sistem bekler. Karma seçimde izin verilen yerleşik ajanlarla devam eder. Her durumda size bilgi verilir.</p>
+  <p class="help">Yanıtı kopyalayıp sohbete gönderin. “Kullanıcı seçimi” ayrıntılarını boş bırakırsanız gönderimden sonra sorulur. Bu soruya 5 dakika yanıt gelmezse yalnız eksik alanlarda gösterilen varsayılanlar kullanılır; verdiğiniz diğer seçimler korunur.</p>
+  <div class="grid2 pt-3 mt-1 border-t border-[var(--border)] items-center">
+    <div class="text-[13px] font-semibold">Yanıtınız</div>
+    <div class="flex items-center gap-3 min-w-0">
+      <div id="out" class="flex-1 text-[14px] truncate"></div>
+      <button id="reset" class="text-[13px] opacity-70 hover:opacity-100">Sıfırla</button>
+      <button id="copy" class="text-[13px] font-semibold px-3 py-1 rounded-md border" style="border-color:#22c55e;color:#22c55e">Kopyala</button>
+    </div>
+  </div>
+</div>
+<script>
+const INIT = null; // PB_INIT
+const fallbackDefault=!!(INIT&&INIT.cap_fallback==='native');
+document.getElementById('fallback').checked=fallbackDefault;
+const Q=[
+ {n:1,t:"Çalışma düzeni",o:["Paralel","Sıralı"]},
+ {n:2,t:"Ajan kullanımı",o:["Çoklu ajan","Sadece yönetici"]},
+ {n:3,t:"Ajan kaynağı",o:["Yerleşik ajanlar","Yerleşik ajanlar + CLI Ajan Havuzu","Yalnız CLI Ajan Havuzu","Kullanıcı seçimi"],note:[1,2,3],ph:"Ör. yalnız medium havuzu · katalogdan · şu model"},
+ {n:4,t:"Çalışma hızı",o:["Dengeli","Turbo"]},
+ {n:5,t:"Kota bekleme",o:["Açık","Kapalı"],pct:1},
+ {n:6,t:"Yönetici devri",o:["Açık","Kapalı"],pct:1},
+ {n:7,t:"Devralan yönetici",o:["Aynı havuzdan eşdeğer aday","Kullanıcı seçimi"],note:[1],ph:"Ör. high havuzundan · şu hesap/model"}
+];
+const D={};Q.forEach(q=>{const v=(INIT&&INIT[q.n])||{};D[q.n]={i:v.i||0,note:v.note||"",pct:v.pct||10};});
+const S={};const init=()=>Q.forEach(q=>S[q.n]=Object.assign({},D[q.n]));
+function render(){
+ const f=document.getElementById('form');f.innerHTML='';
+ Q.forEach(q=>{
+  const s=S[q.n],r=document.createElement('div');r.className='row grid2';
+  r.innerHTML=`<div class="lbl">${q.n}. ${q.t}</div>`;
+  const o=document.createElement('div');o.className='opts';o.setAttribute('role','radiogroup');o.setAttribute('aria-label',q.t);
+  q.o.forEach((l,i)=>{
+   const e=document.createElement('label');e.className='opt'+(s.i===i?' on':'');
+   e.tabIndex=0;e.setAttribute('role','radio');e.setAttribute('aria-checked',String(s.i===i));
+   e.onkeydown=ev=>{if(ev.key===' '||ev.key==='Enter'){ev.preventDefault();e.click();document.querySelectorAll('[role=radio]')[Q.slice(0,Q.indexOf(q)).reduce((a,x)=>a+x.o.length,0)+i].focus();}};
+   e.innerHTML=`<span class="cb"></span><span>${l}</span>`;
+   e.onclick=ev=>{if(ev.target.tagName==='INPUT')return;s.i=i;if(!(q.note||[]).includes(i))s.note="";render();};
+   if(q.pct&&i===0&&s.i===0){const p=document.createElement('span');p.className='text-[13px]';
+    p.innerHTML=`%<input class="pct" type="number" min="1" max="50" value="${s.pct}">`;
+    p.querySelector('input').onchange=ev=>{s.pct=Math.min(50,Math.max(1,+ev.target.value||10));out();};e.appendChild(p);}
+   o.appendChild(e);
+  });
+  r.appendChild(o);
+  if(q.note&&q.note.includes(s.i)){const n=document.createElement('input');n.className='note';n.placeholder=q.ph;n.value=s.note;
+   n.setAttribute('aria-label',q.t+' ayrıntıları');n.oninput=ev=>{s.note=ev.target.value;out();};r.appendChild(n);}
+  f.appendChild(r);
+ });out();
+}
+function out(){
+ const p=[];Q.forEach(q=>{const s=S[q.n],d=D[q.n];if(s.i===d.i&&s.pct===d.pct&&s.note.trim()===d.note)return;
+  let v=q.o[s.i].toLowerCase();if(q.pct&&s.i===0)v+=' %'+s.pct;
+  if(s.note.trim())v+=', '+s.note.trim();else if(q.note&&q.note.includes(s.i))v+=' (ayrıntı sorulsun)';p.push(q.n+': '+v);});
+ if(document.getElementById('fallback').checked!==fallbackDefault)p.push('Havuz sorunu: '+(document.getElementById('fallback').checked?'yerleşik ajanlarla devam':'bekle'));
+ const o=document.getElementById('out');o.textContent=p.length?p.join('; '):'Varsayılanlarla devam';o.title=o.textContent;
+}
+document.getElementById('copy').onclick=()=>{const t=document.getElementById('out').textContent,b=document.getElementById('copy');
+ const done=()=>{b.textContent='Kopyalandı ✓';setTimeout(()=>b.textContent='Kopyala',1500);};
+ const fb=()=>{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();done();};
+ navigator.clipboard?navigator.clipboard.writeText(t).then(done).catch(fb):fb();};
+document.getElementById('fallback').onchange=out;
+document.getElementById('reset').onclick=()=>{document.getElementById('fallback').checked=fallbackDefault;init();render();};
+init();render();
+</script>
+</body>
+</html>

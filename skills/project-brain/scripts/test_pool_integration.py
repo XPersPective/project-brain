@@ -60,10 +60,18 @@ def main(entry):
         try:
             with patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()) as output:
                 B.set_session_modes(project, "P-ALL", "P-ALL", new=True)
-                assert AP.rpc("pool_get_policy")["selectionMode"] == "manual"  # Starts from stopped.
+                policy = AP.rpc("pool_get_policy")  # Starts from stopped.
+                assert AP.modern(policy) or policy.get("selectionMode") == "manual"
                 assert (state / "daemon.pid").is_file()
                 time.sleep(0.3)
-                assert AP.rpc("pool_list_pools")["pools"][2]["members"][0]["id"] == "synthetic-1.0"  # Survives caller exit.
+                # Modern CAP returns category summaries separately from bounded
+                # model pages; neither category order nor expanded members is fixed.
+                assert AP.rpc("pool_list_pools")  # Survives caller exit.
+                members = AP.rpc("pool_list_pools", {"group": "low"})
+                if AP.modern(policy):
+                    assert any(row["modelId"] == "synthetic-1.0" for row in members["models"]), members
+                else:
+                    assert any(row["id"] == "synthetic-1.0" for row in members["members"]), members
                 selected = AP.select("L")
                 assert selected["request"]["effort"] == "medium"
                 assert selected["request"]["mode"] == "execute"

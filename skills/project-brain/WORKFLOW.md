@@ -118,7 +118,7 @@ already running/uncertain operations without replay. Then `PB setup ask` prints
 ONE numbered, plain-language batch (worker source/tier, scheduling and maximum,
 QRP, BRP, director tier), each with its default underneath; relay it unchanged.
 Defaults are the saved policy only if those bytes were confirmed before, else
-Solo/Serial 1/QRP off/BRP off. Without a reply, `setup wait` (≤60 s per call, so
+Native/Parallel auto (runtime ceiling 32)/Balanced/QRP on at 10%/BRP on at 10%. Without a reply, `setup wait` (≤60 s per call, so
 replies arrive between calls) until 5 minutes passed, then `setup defaults`
 saves and confirms them; never block longer. Confirm before new execution/dispatch. Explicit ESP/SP
 answers already supplied in the current session satisfy the corresponding question.
@@ -131,6 +131,45 @@ setup. Source repositories that retired their own Brain remain exempt from
 consumer setup; do not initialize tracking merely to ask these questions.
 Record execution/review resources separately if requested; the same ESP bounds
 both otherwise, without waiving independent-review requirements.
+
+After the user sends the copied form answer, unresolved item 3/7 choices must
+be recorded with `setup clarify --answer "<answer>" --file <policy.json>`.
+The project-local JSON contains the resolved answers; missing fields use the shown
+defaults. Relay ALL returned follow-up questions. A fresh 300-second deadline gates
+new dispatch; repeated ask/clarify does not restart it. `policy --file --confirm`
+resolves details, or `setup defaults` applies only missing defaults after timeout.
+Preserve explicit CAP-only restrictions across later sessions and timeouts.
+`cap_fallback: "native"` explicitly allows native fallback; `"wait"` preserves
+CAP-only restrictions even on timeout. Mixed already authorizes its native half.
+On CAP access/no-eligible-model failure, run `setup recover-cap --role exec|rev`,
+relay its notification before new work, and obey WAIT. This updates only that
+role's effective authorization. Read back/settle any uncertain job before replacing
+it; a submit timeout is never proof that nothing started. No eligible independent
+reviewer means acceptance waits. Never treat policy, validation, auth denial or
+containment errors as a transport fallback opportunity.
+
+### 2.2 Roles, economy and context
+
+These rules are mandatory in balanced and turbo modes. Yönetici owns goal/scope,
+architecture, planning, decomposition, model/effort selection and final acceptance;
+small tasks with high handoff cost may be executed directly. Uygulayıcı implements,
+tests, fixes its mistakes and delivers evidence. Denetleyici independently reviews
+MEDIUM/HIGH risk or complex work, starting one tier below only when capable;
+equal/stronger when needed. Self-check is never independent review.
+Initial architecture/roadmap and critical decisions require Bağımsız İkinci Görüş:
+at least one independent opinion, preferring equivalent different model, then
+higher narrow advice, lower with high effort, then same model in a clean separate
+session. Supply goal/constraints/facts, never the lead's preference. It does not
+replace implementation review. If unavailable, keep the decision/acceptance gate
+pending and report the limit rather than waive it.
+Boot scans/mapping use deterministic tools first, then the cheapest authorized
+capable low-tier worker (≤5 entrypoints, ≤150 words). Do not preload whole histories,
+full catalogs, every domain or unchanged evidence. Reuse current session/focus and
+load only relevant source slices. Record concise Resume before compaction/handoff.
+`boot` GC removes recoverable committed closed evidence/unused logs, preserving
+active, dirty, cited and uncertain work. It does not erase host chat context or
+switch the current host model; use host compaction when supported. Report unknown
+identity/counters/capability honestly; never claim measured token savings without them.
 
 **Scheduling Policy (SP):** Serial means work proceeds one at a time; Parallel
 permits independent jobs up to a user-confirmed maximum, further bounded by the

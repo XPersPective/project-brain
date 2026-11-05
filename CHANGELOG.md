@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.11.0 — 2026-11-05
+
+- Seven-item Turkish setup form, mandatory missing-choice follow-up and 300-second defaults preserving resolved answers.
+- Explicit CAP failure policy with role-aware native recovery, notification and CAP-only waiting; saved restrictions survive session timeouts.
+- Mixed sources, balanced/turbo, quota preparation, graceful relay stop and active recovery screens.
+- Mandatory role/second-opinion rules and bounded low-tier boot/context protocol.
+- Installed CAP 2.2.0 real-daemon transport/relay compatibility; previous-release startup preservation and managed deployment verification.
+
 ## 3.10.0 — 2026-11-05
 
 - Unattended Baton Relay: `relay start` probes every candidate through CAP

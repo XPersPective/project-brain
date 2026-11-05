@@ -58,6 +58,11 @@ def _policy(policy):
         raise ValueError("Quota recovery policy must be finite JSON")
     if len(raw) > MAX_RECORD:
         raise ValueError("Quota recovery policy exceeds 16 KiB")
+    relay = policy.get("relay")
+    if isinstance(relay, dict) and relay.get("enabled") is True and _number(relay.get("threshold_percent")):
+        # ADR-007: with director transfer on, its threshold is the single trigger;
+        # waiting is the fallback taken at that same point when no successor is ready.
+        threshold = relay["threshold_percent"]
     return qrp["enabled"], threshold, _hash(raw)
 
 
@@ -119,6 +124,8 @@ def assess(snapshot, policy, now=None):
         result.update({"next_reset_at": max(blocking.values()), "limiting_windows": blocking})
     elif not observation["allowed"]:
         return {"status": "UNKNOWN", "reason": "ordinary provider usage is unavailable"}
+    elif result["remaining_percent"] <= threshold + 5:
+        result["prepare_checkpoint"] = True  # save Resume 5 points before the threshold
     return result
 
 
