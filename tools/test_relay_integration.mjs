@@ -44,7 +44,7 @@ try {
   writeFileSync(path.join(fixtureSkill, 'SKILL.md'), '# Synthetic director fixture\nRead the relay contract.\n');
   const wrapper = path.join(fixtureSkill, 'scripts', 'brain.py');
   writeFileSync(wrapper, `import os,sys\nsys.path.insert(0,${JSON.stringify(source)})\nos.environ['PB_AGENT_POOL_COMMAND']=${JSON.stringify(command)}\nimport brain\nsys.exit(brain.main())\n`);
-  const config = configSchema.parse({ python, directorReadRoots: [fixtureSkill, path.dirname(source)], routes: ['bad', 'good'].map(id => ({
+  const config = configSchema.parse({ python, directorReadRoots: [fixtureSkill, path.dirname(source), path.join(process.env.USERPROFILE || process.env.HOME || root, '.skills-manager', 'skills'), path.join(process.env.USERPROFILE || process.env.HOME || root, '.agents', 'skills')], routes: ['bad', 'good'].map(id => ({
     id, adapter: 'claude', executable: process.execPath, enabled: true, billing: 'subscription', trustedSettings: true,
     models: [{ id: 'synthetic', alias: 'Synthetic', group: 'high', kinds: ['write'] }],
   })) });

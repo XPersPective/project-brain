@@ -46,7 +46,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "3.11.0"
+VERSION = "3.12.0"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -1173,6 +1173,66 @@ def committed_exact(root, path):
         return False
 
 
+def watch_status(root, heal=False):
+    """Produces an ultra-compact, token-thrifty 1-line status for observers/watchdogs and timers."""
+    import datetime
+    import runtime_relay as RL
+    root = Path(root).resolve()
+    now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if heal:
+        try:
+            lock_file = root / BRAIN_DIR / "checkout.lock"
+            if lock_file.exists() and time.time() - lock_file.stat().st_mtime > 120:
+                lock_file.unlink()
+        except Exception:
+            pass
+    tasks = list_tasks(root)
+    total_tasks = len(tasks)
+    active = next((t for t in tasks if t["status"] in ("IN_PROGRESS", "REVIEW")), None)
+    done_count = sum(1 for t in tasks if t["status"] == "DONE")
+    left_count = total_tasks - done_count
+    rem_pct = int(round((left_count / total_tasks * 100))) if total_tasks > 0 else 0
+    cur_str = "none"
+    if active:
+        tid = active["id"]
+        stage_pct = 50 if active["status"] == "REVIEW" else 25
+        try:
+            proven = proven_criteria_ids(root, active)
+            crit_count = len(active.get("criteria", []))
+            if crit_count > 0:
+                stage_pct = int(round((len(proven) / crit_count) * 100))
+        except Exception:
+            pass
+        cur_str = "%s(%s,%d%%)" % (tid, active["status"], stage_pct)
+    modes = get_session_modes(root)
+    mode_str = modes.get("exec") or "solo"
+    route_str = "host"
+    quota_str = "?"
+    pool_str = "native"
+    relay_st = None
+    try:
+        relay_st = RL.read(sys.modules[__name__], root)
+    except Exception:
+        pass
+    if relay_st and relay_st.get("director"):
+        d = relay_st["director"]
+        route_str = d.get("route", "route")
+        if d.get("model"):
+            route_str += "/" + d["model"].split("/")[-1]
+        pool_str = "pool"
+    try:
+        q_cache = root / BRAIN_DIR / ".cache" / "quotas.json"
+        if q_cache.exists():
+            q_data = json.loads(q_cache.read_text(encoding="utf-8"))
+            rem = RL.remaining(q_data)
+            if rem is not None:
+                quota_str = "%d%%" % rem
+    except Exception:
+        pass
+    return "%s | %s/%s/%s/%s | cur:%s | rem:%d%%(%d/%d)" % (
+        now_iso, mode_str, route_str, quota_str, pool_str, cur_str, rem_pct, left_count, total_tasks)
+
+
 def gc_brain(root, has_git=None, completed=None):
     """Collect only recoverable closed work; preserve unknown/active recovery inputs."""
     import runtime_verify as V
@@ -1195,10 +1255,24 @@ def gc_brain(root, has_git=None, completed=None):
     # A remaining task, including dirty DONE, still owns all its evidence and logs.
     retained = {t["id"] for t in list_tasks(root)}
     closed = completed - retained
+    active_checkpoints = set()
+    try:
+        import runtime_relay as RL
+        st = RL.read(sys.modules[__name__], root)
+        if st:
+            for cp in ((st.get("pending") or {}).get("checkpoint"), st.get("last_checkpoint")):
+                if cp and cp.get("path"):
+                    parts = Path(cp["path"]).parts
+                    if len(parts) >= 3 and parts[0] == BRAIN_DIR and parts[1] == "evidence":
+                        active_checkpoints.add(parts[2])
+    except Exception:
+        pass
     ev_root = V.public_path(root, BRAIN_DIR + "/evidence")
     if ev_root.is_dir():
         for directory in sorted(ev_root.iterdir()):
-            if not re.fullmatch(r"PB-\d{3,}", directory.name) or directory.name not in closed:
+            if not re.fullmatch(r"PB-\d{3,}", directory.name) or directory.name not in closed or directory.name in active_checkpoints:
+                continue
+            if (directory / "handoff.json").exists():
                 continue
             try:
                 V.public_path(root, directory.relative_to(root).as_posix())
@@ -2036,6 +2110,10 @@ def main():
     import runtime_setup as SU
     SU.add_parser(sub)
 
+    p_watch = sub.add_parser("watch", help="Token-thrifty 1-line project & quota monitor for observers and timers")
+    p_watch.add_argument("root", nargs="?", default=".")
+    p_watch.add_argument("--heal", action="store_true", help="Non-blocking check and recovery of stale locks or dead runs")
+
     for name in ("boot", "brief", "map", "init", "changed", "validate", "doctor"):
         parser = sub.add_parser(name)
         parser.add_argument("root", nargs="?", default=".")
@@ -2222,6 +2300,10 @@ def main():
     a = ap.parse_args(_reorder_argv(argv))
     B_mod = sys.modules[__name__]
 
+    if a.cmd == "watch":
+        line = watch_status(a.root, getattr(a, "heal", False))
+        print(line)
+        return 0
     if a.cmd == "relay":
         result = RL.command(B_mod, a)
         code = result.pop("exit_code", 0) if isinstance(result, dict) else 0
@@ -2438,4 +2520,7 @@ if __name__ == "__main__":
         sys.exit(main())
     except (ValueError, OSError, sqlite3.Error) as exc:
         print(f"FAIL {exc}", file=sys.stderr)
+        if "--from-hook" in sys.argv:
+            print("CAP_RETRY_AFTER 30")
+            sys.exit(75)
         sys.exit(2)

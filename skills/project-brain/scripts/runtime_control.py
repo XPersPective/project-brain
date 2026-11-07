@@ -59,9 +59,10 @@ def wake_prompt(root, nonce):
 
 
 def command(B, args):
-    if os.environ.get("CLI_AGENT_POOL_WORKER"):
-        raise ValueError("Workers cannot change director policy or quota recovery")
+    import runtime_relay as RL
     root = Path(args.root).resolve()
+    if os.environ.get("CLI_AGENT_POOL_WORKER") and not RL.authorized(B, root):
+        raise ValueError("Workers cannot change director policy or quota recovery")
     if not root.is_dir():
         raise ValueError("Project directory required")
     if args.cmd == "policy":

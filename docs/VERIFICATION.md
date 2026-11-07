@@ -1,4 +1,4 @@
-# Verification guide — Project Brain 3.11.0
+# Verification guide — Project Brain 3.12.0
 
 3.11.0 adds the seven-item Turkish form and durable missing-choice follow-up.
 The complete offline `test_brain.py` entry point passed on Windows Python 3.11.15.

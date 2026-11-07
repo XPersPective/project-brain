@@ -73,7 +73,40 @@ def _account(snapshot):
     return _hash(value.encode("utf-8"))
 
 
+def _normalize_cap_snapshot(snapshot, now):
+    if not isinstance(snapshot, dict) or "rateLimits" in snapshot:
+        return snapshot
+    windows_list = snapshot.get("windows")
+    if not isinstance(windows_list, list) or not windows_list:
+        return snapshot
+    accountId = snapshot.get("accountId") or snapshot.get("routeId") or snapshot.get("account") or "cap-route"
+    rate_limits = {"limitId": snapshot.get("routeId", "cap-route")}
+    window_keys = ("primary", "secondary")
+    for i, w in enumerate(windows_list[:2]):
+        if not isinstance(w, dict):
+            continue
+        rem = w.get("remainingPercent", 100)
+        used = 100 - rem if _number(rem) else 0
+        reset = None
+        if w.get("resetAt"):
+            try:
+                import datetime
+                dt = datetime.datetime.fromisoformat(w["resetAt"].replace("Z", "+00:00"))
+                reset = dt.timestamp()
+            except Exception:
+                pass
+        if not reset or reset <= now:
+            reset = now + 18000
+        rate_limits[window_keys[i]] = {"usedPercent": used, "resetsAt": reset, "windowDurationMins": 300}
+    return {
+        "accountId": accountId,
+        "ordinaryUsageAllowed": snapshot.get("status") not in ("auth_required", "subscription_required", "credits_required"),
+        "rateLimits": rate_limits
+    }
+
+
 def _observe(snapshot, now):
+    snapshot = _normalize_cap_snapshot(snapshot, now)
     account = _account(snapshot)
     if not isinstance(snapshot.get("ordinaryUsageAllowed"), bool):
         raise ValueError("Ordinary usage availability is unknown")

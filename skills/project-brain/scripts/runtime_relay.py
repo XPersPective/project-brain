@@ -42,7 +42,7 @@ STOP_SLICE = 60
 PREPARE_MARGIN = 5
 ACTIVE_TASK = {"queued", "starting", "running", "cancelling"}
 TERMINAL_TASK = {"succeeded", "failed", "timed_out", "cancelled", "needs_review"}
-FEATURES = {"preflight", "onExit", "ack", "idle", "secretEnv", "resolve", "releaseLockOnFailure", "directorProfile"}
+FEATURES = {"preflight", "onExit", "ack", "idle", "secretEnv", "resolve", "releaseLockOnFailure", "directorProfile", "quotaBarrier", "wakeAt", "supersede"}
 CAPABILITIES = ["shell", "poolMcp", "readOutside", "gitCommit", "gitRemote", "poolService"]
 CONTRACT = "pb-director/1"
 TOKEN_ENV = "PB_RELAY_TOKEN"
@@ -133,8 +133,8 @@ def validate_policy(value):
     elif value["enabled"] and not normalized:
         result["director_category"] = "same"
     limit = value.get("max_handoffs", 50)
-    if type(limit) is not int or not 1 <= limit <= 500:
-        raise ValueError("Relay max_handoffs must be an integer 1..500")
+    if type(limit) is not int or not 0 <= limit <= 500:
+        raise ValueError("Relay max_handoffs must be an integer 0..500")
     result["max_handoffs"] = limit
     if "takeover_minutes" in value:
         minutes = value["takeover_minutes"]
@@ -340,6 +340,20 @@ def worker_reserve(B, root, policy):
 
 # ---------------------------------------------------------------- quota
 
+def _scope_matches(scope, model):
+    if not isinstance(scope, str) or not isinstance(model, str):
+        return False
+    s = scope.lower()
+    m = model.lower()
+    if s in m:
+        return True
+    if s == "gemini-flash" and m.startswith("gemini") and "flash" in m:
+        return True
+    if s == "gemini-pro" and m.startswith("gemini") and "pro" in m:
+        return True
+    return False
+
+
 def remaining(snapshot, model=None):
     """Lowest known remaining percentage that applies to the model, else None."""
     if not isinstance(snapshot, dict) or snapshot.get("status") == "auth_required":
@@ -349,7 +363,7 @@ def remaining(snapshot, model=None):
         if not isinstance(window, dict) or not _number(window.get("remainingPercent")):
             continue
         scopes = window.get("models")
-        if model and isinstance(scopes, list) and scopes and not any(isinstance(s, str) and s.lower() in model.lower() for s in scopes):
+        if model and isinstance(scopes, list) and scopes and not any(_scope_matches(s, model) for s in scopes):
             continue
         values.append(max(0, min(100, window["remainingPercent"])))
     return min(values) if values else None
@@ -357,6 +371,13 @@ def remaining(snapshot, model=None):
 
 def assess(snapshot, policy, model=None):
     relay, _ = _policy(policy)
+    if isinstance(snapshot, dict):
+        if snapshot.get("status") in ("auth_required", "subscription_required", "credits_required"):
+            return {"status": "HANDOFF_REQUIRED", "remaining_percent": 0, "threshold_percent": relay["threshold_percent"],
+                    "reason": snapshot.get("status")}
+        if snapshot.get("offline") or snapshot.get("networkError"):
+            return {"status": "UNKNOWN", "threshold_percent": relay["threshold_percent"],
+                    "offline": True, "reason": "network offline; continue carefully and re-check later"}
     value = remaining(snapshot, model)
     if value is None:
         return {"status": "UNKNOWN", "threshold_percent": relay["threshold_percent"],
@@ -400,7 +421,11 @@ def choose(policy, quotas, current_route, candidates=None, health=None, current_
         if key(candidate) in exclude or health.get(key(candidate), {}).get("status") == "unhealthy":
             skipped.append({"route": candidate["route"], "model": candidate.get("model"), "reason": "unhealthy"})
             continue
-        value = remaining((quotas or {}).get(candidate["route"]), candidate.get("model"))
+        qsnap = (quotas or {}).get(candidate["route"])
+        if isinstance(qsnap, dict) and qsnap.get("status") in ("auth_required", "subscription_required", "credits_required"):
+            skipped.append({"route": candidate["route"], "model": candidate.get("model"), "reason": qsnap.get("status")})
+            continue
+        value = remaining(qsnap, candidate.get("model"))
         if value is None:
             unknown.append(candidate)
         elif value > relay["threshold_percent"]:
@@ -470,8 +495,9 @@ def resolve_candidates(relay, route, model, rpc):
 # ---------------------------------------------------------------- readiness
 
 def _preflight_request(root, candidate, script):
+    skill_root = str(Path(script).resolve().parent.parent)
     request = {"routeId": candidate["route"], "workspace": str(Path(root).resolve()),
-               "readPaths": [str(Path(script).resolve().parent.parent)], "capabilities": list(CAPABILITIES)}
+               "readPaths": [skill_root], "capabilities": list(CAPABILITIES)}
     for name, field in (("model", "modelId"), ("effort", "effort")):
         if candidate.get(name):
             request[field] = candidate[name]
@@ -632,7 +658,10 @@ def guarantees(feats, readiness):
             "takeover_deadline": "CAP-enforced" if "ack" in feats else "checked when recover runs",
             "lock_release": "automatic" if "releaseLockOnFailure" in feats else ("resolved by recover" if "resolve" in feats else "manual `cli-agent-pool resolve`"),
             "hang_detection": "CAP idle timeout" if "idle" in feats else "12 h task timeout only",
-            "authority": "token via CAP secretEnv" if "secretEnv" in feats else "baton token in prompt"}
+            "authority": "token via CAP secretEnv" if "secretEnv" in feats else "baton token in prompt",
+            "quota_barrier": "CAP-enforced" if "quotaBarrier" in feats else "relay assess only",
+            "wake_schedule": "CAP wakeAt" if "wakeAt" in feats else "timer/cron polling",
+            "predecessor_cleanup": "CAP supersede" if "supersede" in feats else "takeover cancellation"}
 
 
 def start(B, root, policy, route, model=None, effort=None, task_id=None, rpc=None, brain_script=None,
@@ -721,6 +750,12 @@ def _commit_pending(B, root, expect, candidate, kind, checkpoint_fn, now, select
             _merge_health(state, name, record)
         old = state.get("pending") or {}
         checkpoint = old.get("checkpoint") if kind == "FAILOVER" else state.get("last_checkpoint") if kind == "RECOVER" else None
+        if kind == "RECOVER" and checkpoint:
+            cp_file = V.public_path(root, checkpoint["path"])
+            if not cp_file.is_file():
+                checkpoint = None
+            else:
+                checkpoint = {"path": checkpoint["path"], "sha256": hashlib.sha256(cp_file.read_bytes()).hexdigest()}
         if checkpoint_fn:
             path = checkpoint_fn()
             checkpoint = {"path": path.relative_to(root).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
@@ -769,6 +804,10 @@ def _send(B, root, state, pending, token, rpc, script):
         request["idleTimeoutSeconds"] = IDLE_TIMEOUT
     if "secretEnv" in feats:
         request["secretEnv"] = {TOKEN_ENV: token}
+    if "quotaBarrier" in feats and relay.get("threshold_percent"):
+        request["stopOnQuotaBarrierPercent"] = relay["threshold_percent"]
+    if "supersede" in feats and state["director"].get("task_id"):
+        request["supersedesTaskId"] = state["director"]["task_id"]
     if "onExit" in feats:
         request["onExit"] = {"argv": [sys.executable, script, "relay", "recover", root_text, "--from-hook"],
                              "timeoutSeconds": 300}
@@ -842,7 +881,7 @@ def handoff(B, root, policy, task, next_step, brain_script, rpc, candidate=None,
         if state["pending"].get("task_id"):
             raise ValueError("HANDOFF_PENDING: a successor was already started; read it back with relay status")
         candidate = state["pending"]["candidate"]  # an unacknowledged submit is retried with a fresh token
-    if state["handoffs"] >= relay["max_handoffs"] and not state.get("pending"):
+    if relay.get("max_handoffs", 50) > 0 and state["handoffs"] >= relay["max_handoffs"] and not state.get("pending"):
         raise ValueError("RELAY_LIMIT: max_handoffs reached; the user must restart the relay")
     updates, selection = {}, {"status": "SELECTED"}
     if candidate is None:
@@ -901,7 +940,11 @@ def takeover(B, root, policy, rpc, token=None, now=None, version=None):
         if pending.get("checkpoint"):
             checkpoint = V.public_path(root, pending["checkpoint"]["path"])
             if not checkpoint.is_file() or hashlib.sha256(checkpoint.read_bytes()).hexdigest() != pending["checkpoint"]["sha256"]:
-                raise ValueError("RELAY_CHECKPOINT_CHANGED: handoff checkpoint changed; ask the user")
+                if pending.get("kind") in ("RECOVER", "FAILOVER"):
+                    _event(state, "CHECKPOINT_DEVIATION", now, path=pending["checkpoint"]["path"])
+                    pending["checkpoint"] = None
+                else:
+                    raise ValueError("RELAY_CHECKPOINT_CHANGED: handoff checkpoint changed; ask the user")
         previous = state["director"]
         state["director"] = {"route": pending["route"], "model": pending.get("model"), "effort": pending.get("effort"),
                              "task_id": pending.get("task_id"), "token_hash": pending["token_hash"], "since": now}
@@ -1037,7 +1080,7 @@ def recover(B, root, policy, rpc, brain_script=None, now=None, sleep=time.sleep,
             actions.append("successor state unknown; CAP unreachable")
         elif info.get("state") in TERMINAL_TASK | {"not_found"}:
             error = str(info.get("error") or info.get("state"))
-            if "START_TIMEOUT" not in error:
+            if not any(w in error.upper() for w in ("START_TIMEOUT", "QUOTA_BARRIER", "QUOTA_EXHAUSTED", "SUPERSEDED_BY_HANDOFF")):
                 failure = (pending["candidate"], "successor ended without takeover: " + error)
             holder = observed.get(director.get("task_id")) if director.get("task_id") else None
             if holder and holder.get("state") in ACTIVE_TASK:
@@ -1077,7 +1120,9 @@ def recover(B, root, policy, rpc, brain_script=None, now=None, sleep=time.sleep,
         info = observed.get(director["task_id"])
         if info and info.get("state") in TERMINAL_TASK | {"not_found"}:
             error = str(info.get("error") or info.get("state"))
-            failure = ({"route": director["route"], "model": director.get("model")}, "director ended: " + error)
+            is_quota = any(w in error.upper() for w in ("QUOTA_BARRIER", "QUOTA_EXHAUSTED", "SUPERSEDED_BY_HANDOFF"))
+            if not is_quota:
+                failure = ({"route": director["route"], "model": director.get("model")}, "director ended: " + error)
             plan = "RECOVER"
     actions += ["cancelled " + t for t in _cancel_all(rpc, cancel)]
     actions += _resolve_owned(state, rpc, observed)
@@ -1105,16 +1150,48 @@ def recover(B, root, policy, rpc, brain_script=None, now=None, sleep=time.sleep,
         hard = failure and any(word in failure[1].upper() for word in HARD)
         selection, updates = _select(B, root, state, state.get("inherited") or policy, rpc, script, now, sleep,
                                      allow_current=plan == "RECOVER" and not hard)
-        if selection["status"] == "SELECTED":
+        while selection["status"] == "SELECTED":
             try:
                 state, pending, token = _commit_pending(B, root, expect, selection["candidate"], plan, None, now,
                                                         selection, updates, planned=False, count=bool(failure))
+                task_id = _send(B, root, state, pending, token, rpc, script)
+                return dict(view(read(B, root)), actions=actions + ["%s to %s (task %s)" % (plan, key(selection["candidate"]), task_id)],
+                            notify=None)
             except ValueError as exc:
-                return dict(status(B, root), actions=actions + [str(exc)], notify=None)
-            task_id = _send(B, root, state, pending, token, rpc, script)
-            return dict(view(read(B, root)), actions=actions + ["%s to %s (task %s)" % (plan, key(selection["candidate"]), task_id)],
-                        notify=None)
+                actions.append("rejected %s: %s" % (key(selection["candidate"]), str(exc)[:120]))
+                _failure(state, selection["candidate"], "SUBMISSION_REJECTED: " + str(exc)[:200])
+                with B.checkout_lock(root, timeout=90):
+                    cur = read(B, root)
+                    cur["pending"] = None
+                    cur["status"] = "ACTIVE"
+                    _write(B, root, cur)
+                selection, updates = _select(B, root, state, state.get("inherited") or policy, rpc, script, now, sleep,
+                                             allow_current=False)
         reason = "no ready candidate has quota above the threshold"
+        earliest_reset = None
+        for r_id, q_data in (fetch_quotas(rpc, _candidates(state, validate_policy((state.get("inherited") or policy)["relay"]))) or {}).items():
+            if isinstance(q_data, dict):
+                for w in q_data.get("windows") or []:
+                    if isinstance(w, dict) and w.get("resetAt"):
+                        try:
+                            import datetime
+                            dt = datetime.datetime.fromisoformat(w["resetAt"].replace("Z", "+00:00"))
+                            t_epoch = dt.timestamp()
+                            if t_epoch > now:
+                                earliest_reset = min(earliest_reset or t_epoch, t_epoch)
+                        except Exception:
+                            pass
+        if earliest_reset:
+            wake_seconds = max(60, min(3600, int(earliest_reset - now + 15)))
+            import datetime
+            wake_iso = datetime.datetime.fromtimestamp(now + wake_seconds, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            print("CAP_WAKE_AT " + wake_iso)
+            print("CAP_RETRY_AFTER %d" % wake_seconds)
+            with B.checkout_lock(root, timeout=90):
+                cur = read(B, root)
+                cur["reason"] = "waiting quota renewal until " + wake_iso
+                _write(B, root, cur)
+            return dict(view(read(B, root)), actions=actions + ["waiting quota renewal until " + wake_iso], exit_code=75)
     with B.checkout_lock(root, timeout=90):
         current = read(B, root)
         if current["generation"] == expect["generation"] and current["status"] in LIVE:
@@ -1266,6 +1343,7 @@ def command(B, args, pool=None):
             return recover(B, root, policy, rpc, script)
         except ValueError as exc:
             if args.from_hook:
+                print("CAP_RETRY_AFTER 30")
                 return {"status": "RETRY", "error": str(exc)[:300], "exit_code": 75}
             raise
     if args.action == "takeover":
@@ -1282,7 +1360,10 @@ def command(B, args, pool=None):
         else:
             if not state or state["status"] not in LIVE:
                 raise ValueError("RELAY_NOT_ACTIVE: no relay director to assess")
-            snapshot = rpc("pool_get_quotas", {"routeId": state["director"]["route"]})
+            try:
+                snapshot = rpc("pool_get_quotas", {"routeId": state["director"]["route"]})
+            except Exception as exc:
+                snapshot = {"status": "UNKNOWN", "offline": True, "reason": str(exc)}
         return assess(snapshot, policy, args.model or (state or {}).get("director", {}).get("model"))
     if args.action == "next":
         state = read(B, root)

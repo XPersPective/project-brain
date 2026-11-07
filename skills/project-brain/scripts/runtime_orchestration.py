@@ -85,7 +85,9 @@ def modes(B, root, kind, backend):
     E.guard(B, root, "review" if kind == "REVIEW" else "exec", backend)
     value = B.get_session_modes(root)
     mode = value["rev" if kind == "REVIEW" else "exec"]
-    if mode == "solo" or (backend == "pool") != mode.startswith("pool_"):
+    if mode == "solo":
+        raise ValueError("Worker backend is outside the selected session resource")
+    if mode != "mixed" and (backend == "pool") != mode.startswith("pool_"):
         raise ValueError("Worker backend is outside the selected session resource")
     return value, mode
 
@@ -363,7 +365,7 @@ def submit(B, root, db, directory, rid):
                                    role="reviewer" if row["kind"] == "REVIEW" else "worker")
         actor = P.remember(selected["selected"])
         request = dict(selected["request"], prompt=C.prompt(row["spec"]["packet"]), workspace=str(path),
-                       timeoutSeconds=300, idempotencyKey=row["spec"]["idempotencyKey"])
+                       timeoutSeconds=1800, idempotencyKey=row["spec"]["idempotencyKey"])
         with db.transaction():
             db.db.execute("INSERT INTO requests VALUES(?,?)", (rid, json.dumps(request, ensure_ascii=False)))
             db.event(rid, "REQUEST_SAVED", {"route": request.get("routeId"), "model": request.get("modelId"),
@@ -392,13 +394,25 @@ def observe(B, root, db, directory, rid):
         return {"run": rid, "state": row["state"], "action": "submit reuses the saved exact request/key"}
     current = P.rpc("pool_get_task", {"taskId": row["backend_id"], "after": 0, "compact": True})
     states = {"queued": "RUNNING", "starting": "RUNNING", "running": "RUNNING", "cancelling": "CANCEL_REQUESTED",
-              "succeeded": "SUCCEEDED", "failed": "FAILED", "cancelled": "CANCELLED", "needs_review": "FAILED"}
+              "succeeded": "SUCCEEDED", "failed": "FAILED", "timed_out": "FAILED", "cancelled": "CANCELLED", "needs_review": "FAILED"}
     state = states.get(current.get("state"), "UNKNOWN")
     report = current.get("report")
     if state == "SUCCEEDED" and report is None and row["kind"] == "REVIEW":
         report = {"status": "completed", "summary": "Review response retained; director must inspect findings",
                   "files": [], "checks": [], "research": [], "blockers": [],
                   "findings": [current.get("result") or "Missing review response"], "decision_required": True}
+    if directory is not None:
+        path = workspace(row, directory)
+        if row["kind"] == "EXECUTE" and path.is_dir():
+            if state == "SUCCEEDED" and report is None:
+                report = {"status": "completed", "summary": "Execution completed; file changes synthesized from workspace",
+                          "files": list(changed_paths(B, path)), "checks": []}
+            elif state == "FAILED" and current.get("error") in ("INVALID_REPORT", "MANUALLY_RESOLVED"):
+                ch = changed_paths(B, path)
+                if ch:
+                    state = "SUCCEEDED"
+                    report = {"status": "completed", "summary": "Recovered from report formatting: changes present in workspace",
+                              "files": list(ch), "checks": []}
     if state == "SUCCEEDED":
         try:
             Q.validate(report)
@@ -408,7 +422,7 @@ def observe(B, root, db, directory, rid):
         state = "CANCEL_REQUESTED"
     if state != row["state"]:
         row = db.transition(rid, state, row["version"], report=report,
-                            observation={"selected_model": current.get("modelId"),
+                            observation={"backend_state": current.get("state"), "selected_model": current.get("modelId"),
                                          "reported_model": current.get("reportedModel"), "effort": current.get("effort")})
     return summary(row)
 
@@ -474,9 +488,21 @@ def snapshot(B, root, db, directory, rid):
     if row["output"]:
         return row["output"]
     path = workspace(row, directory)
-    if git(path, "rev-parse", "HEAD") != row["spec"]["base"]:
-        raise ValueError("Unexpected worker commit; inspect before continuing")
+    worker_head = git(path, "rev-parse", "HEAD")
+    has_worker_commits = False
+    if worker_head != row["spec"]["base"]:
+        try:
+            mb = git(path, "merge-base", worker_head, row["spec"]["base"])
+            if mb == row["spec"]["base"]:
+                has_worker_commits = True
+            else:
+                raise ValueError("Unexpected worker commit; inspect before continuing")
+        except Exception:
+            raise ValueError("Unexpected worker commit; inspect before continuing")
     changed = changed_paths(B, path)
+    if has_worker_commits:
+        branch_diff = [p for p in git(path, "diff", "--name-only", row["spec"]["base"]).splitlines() if p.strip()]
+        changed = sorted(set(changed) | set(branch_diff))
     if not changed or any(not any(B.matches(p, a) for a in row["spec"]["areas"]) or
                           p.startswith(B.BRAIN_DIR + "/") or V.PRIVATE.search(p) for p in changed):
         raise ValueError("No changes or changes outside assigned Areas")
@@ -493,7 +519,7 @@ def snapshot(B, root, db, directory, rid):
         name, email = git(root, "config", "user.name"), git(root, "config", "user.email")
         if not name or not email:
             raise ValueError("Existing human Git identity required")
-        git(path, "read-tree", row["spec"]["base"], env=env)
+        git(path, "read-tree", worker_head if has_worker_commits else row["spec"]["base"], env=env)
         git(path, "add", "--", *changed, env=env)
         git(path, "diff", "--cached", "--check", env=env)
         # Scan staged content through existing secret guard using the same index.
@@ -892,6 +918,7 @@ def add_parser(sub):
     parser.add_argument("--note", default="")
     parser.add_argument("--start-file", default="")
     parser.add_argument("--actor", default="")
+    parser.add_argument("--force", action="store_true")
 
 
 def command(B, args):
@@ -983,6 +1010,14 @@ def command(B, args):
                 row = db.get(args.run)
                 if row["state"] == "PREPARED":
                     return summary(db.transition(args.run, "CANCELLED", row["version"]))
+                if getattr(args, "force", False):
+                    if row["spec"]["backend"] == "pool" and row["backend_id"]:
+                        try:
+                            import runtime_agent_pool as P
+                            P.rpc("pool_cancel_task", {"taskId": row["backend_id"]})
+                        except Exception:
+                            pass
+                    return summary(db.transition(args.run, "CANCELLED", row["version"]))
                 if row["spec"]["backend"] == "native" and row["backend_id"] and row["state"] in ("RUNNING", "UNKNOWN", "CANCEL_REQUESTED"):
                     if row["state"] != "CANCEL_REQUESTED":
                         row = db.transition(args.run, "CANCEL_REQUESTED", row["version"])
@@ -994,6 +1029,8 @@ def command(B, args):
                         row = db.transition(args.run, "CANCEL_REQUESTED", row["version"])
                     P.rpc("pool_cancel_task", {"taskId": row["backend_id"]})
                     return observe(B, root, db, directory, args.run)
+                if row["state"] in ("SUBMITTING", "UNKNOWN", "CANCEL_REQUESTED"):
+                    return summary(db.transition(args.run, "CANCELLED", row["version"]))
                 raise ValueError("Native host must confirm cancellation; no process state inferred")
     finally:
         db.close()

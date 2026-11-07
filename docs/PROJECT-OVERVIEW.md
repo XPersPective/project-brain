@@ -1,4 +1,4 @@
-# Project Brain 3.11.0
+# Project Brain 3.12.0
 
 Git-native project memory, executable tasks, source-bound evidence and approved
 CLI/native delegation. Python 3.8+, standard library only; project schema 4,

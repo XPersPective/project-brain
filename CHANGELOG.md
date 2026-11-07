@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.12.0 — 2026-11-07
+
+- Resilient Baton Relay Policy (BRP) circulation: multi-day circulation support with unlimited handoffs (`max_handoffs: 0` or 1..500) and zero-penalty rotations on quota barriers or handoff supersession.
+- Automatic quota wake-at scheduling (`CAP_WAKE_AT` / `CAP_RETRY_AFTER` with exit 75) when all candidates are quota-limited, enabling seamless autonomous recovery upon quota renewal without external observer polling.
+- Proactive quota barrier defense passing `stopOnQuotaBarrierPercent` and `supersedesTaskId` to CLI Agent Pool.
+- Ultra-compact timestamped status command `PB watch` (<25 tokens) with non-blocking `--heal` lock check for timers, watchdogs, and observers.
+- Fault-tolerant takeover and checkpoint recovery: eliminated `RELAY_CHECKPOINT_CHANGED` aborts on dirty-tree reconciliation and added candidate failover loop on submission rejection.
+- Offline and network outage resilience: distinguish authentication requirements from transient network failures in quota assessment, avoiding route poisoning.
+- Tolerant execution report synthesis from workspace diffs on successful execution or report formatting errors.
+- Support isolated worktree worker commits in `PB runs snapshot`.
+- Added `runs cancel --force` and automatic request ledger rotation to prevent capacity deadlocks.
+
 ## 3.11.0 — 2026-11-05
 
 - Seven-item Turkish setup form, mandatory missing-choice follow-up and 300-second defaults preserving resolved answers.

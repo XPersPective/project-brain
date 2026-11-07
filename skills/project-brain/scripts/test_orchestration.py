@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import brain as B
 import runtime_context as C
@@ -45,6 +45,22 @@ def receipt(db, rid, value):
 
 
 def main():
+    # A confirmed Pool timeout is terminal failure, never an unknown live writer.
+    # Unrecognized provider states must still retain conservative ownership.
+    for backend_state, expected in (("timed_out", "FAILED"), ("unrecognized", "UNKNOWN")):
+        row = {"id": "timeout-fixture", "task": "PB-001", "kind": "EXECUTE", "state": "RUNNING",
+               "version": 1, "backend_id": "existing-pool-task", "spec": {"backend": "pool"},
+               "verification": "PENDING", "integration": "PENDING", "report": None}
+        db = Mock()
+        db.get.return_value = row
+        db.transition.side_effect = lambda rid, state, version, **values: dict(row, state=state, **values)
+        with patch.object(P, "rpc", return_value={"state": backend_state, "report": None}) as rpc:
+            observed = O.observe(B, None, db, None, row["id"])
+        assert observed["state"] == expected
+        assert observed["verification"] == "PENDING" and observed["integration"] == "PENDING"
+        rpc.assert_called_once_with("pool_get_task", {"taskId": "existing-pool-task", "after": 0, "compact": True})
+        assert db.transition.call_args.kwargs["observation"]["backend_state"] == backend_state
+
     assert L.conflict(["src/**/schema.ts"], ["src/db/schema.ts"])
     assert L.conflict(["src/foo*.py"], ["src/foo2.py"])
     assert L.conflict([], ["src/a.py"])

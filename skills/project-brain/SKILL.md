@@ -6,11 +6,11 @@ description: >-
   planning, resumption or audits. Excludes store publishing.
 license: MIT
 metadata:
-  version: 3.11.0
+  version: 3.12.0
   author: XPersPective
 ---
 
-# Project Brain 3.11.0
+# Project Brain 3.12.0
 
 `PB` = `python <this-skill>/scripts/brain.py` (Python 3.8+, stdlib).
 
@@ -90,9 +90,9 @@ the holder saves Resume and runs `relay complete`, or `relay stop` forces after 
 [RECOVERY](RECOVERY.md) gives host steps/limits; never promise continuous execution.
 
 Same-session questions reuse context then resume Next: no boot/reset, history or
-skill reload, dispatch/tests merely for a question. Missing focus: `PB brief`
-is read-only ≤4 KiB with explicit omissions/readback warnings, not execution
-authority. Record new directives with intake; preserve objective unless cancelled.
+skill reload, dispatch/tests merely for a question. Missing focus: `PB watch` gives
+1-line thrifty status for timers/watchdogs; `PB brief` is read-only ≤4 KiB.
+Record new directives with intake; preserve objective unless cancelled.
 
 ## 4. Work and proof
 

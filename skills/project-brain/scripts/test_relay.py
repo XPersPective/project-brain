@@ -769,6 +769,19 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(r_assessed["status"], "READY")
         self.assertTrue(r_assessed.get("prepare_checkpoint"))
 
+    def test_agy_usage_scope_matching_covers_gemini_flash_pro_and_argon(self):
+        snap = {
+            "status": "available",
+            "windows": [
+                {"name": "weekly", "remainingPercent": 92, "models": ["gemini-pro", "gemini-flash"]},
+                {"name": "5h", "remainingPercent": 84, "models": ["gemini-pro", "gemini-flash"]},
+                {"name": "5h", "remainingPercent": 45, "models": ["gemini-4-argon"]},
+            ],
+        }
+        self.assertEqual(RL.remaining(snap, "gemini-3.8-flash"), 84)
+        self.assertEqual(RL.remaining(snap, "gemini-3.8-pro"), 84)
+        self.assertEqual(RL.remaining(snap, "gemini-4-argon"), 45)
+
 
 if __name__ == "__main__":
     unittest.main()

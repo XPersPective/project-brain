@@ -60,7 +60,12 @@ def intake(B, root, items, relation="related", task="", resolve=""):
         if any(not isinstance(item, str) or not 1 <= len(item.strip()) <= 500 or any(ord(ch) < 32 for ch in item) for item in items):
             raise ValueError("Each intake item must be 1..500 characters without control characters")
         if len(data["requests"]) >= 100:
-            raise ValueError("Request ledger full; reconcile/archive answered records, never discard unresolved work")
+            answered = [r for r in data["requests"] if r.get("status") in ("answered", "linked")]
+            if answered:
+                to_remove = set(r["id"] for r in answered[:max(1, len(data["requests"]) - 90)])
+                data["requests"] = [r for r in data["requests"] if r["id"] not in to_remove]
+            if len(data["requests"]) >= 100:
+                raise ValueError("Request ledger full; reconcile/archive answered records, never discard unresolved work")
         from runtime_security import require_clean
         require_clean("\n".join(items), "request intake")
         number = max([int(row["id"].split("-")[1]) for row in data["requests"]] + [0]) + 1
