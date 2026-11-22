@@ -165,8 +165,8 @@ def run_command(root, argv, log_path, timeout=900, input_bytes=None, strip_secre
     }
 
 
-def task_digest(B, root, task):
-    return R.task_digest(B, root, task)
+def task_digest(B, root, task, check_session=True):
+    return R.task_digest(B, root, task, check_session=check_session)
 
 
 def prune_runs(B, root):
@@ -268,10 +268,21 @@ def latest_review(lines):
 
 def implementers(B, task):
     """Everyone who started (owned) the task; none of them may review it."""
-    owners = {r["owner"] for r in B.start_records(task)}
-    if task.get("owner"):
-        owners.add(task["owner"])
-    return owners
+    return set(A.implementers(B, task))
+
+
+def finding_accepted(B, root, severity, reason, owner):
+    owner_clean = (owner or "").strip()
+    if not (reason or "").strip() or not owner_clean:
+        return False
+    if severity == "QUALITY":
+        return owner_clean == "user"
+    if severity == "MINOR":
+        return owner_clean == "user" or (
+            bool(re.fullmatch(r"PB-\d{3,}", owner_clean))
+            and (B.bp(root) / "tasks" / (owner_clean + ".md")).is_file()
+        )
+    return False
 
 
 def effective_risk(B, task):
@@ -474,18 +485,10 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, s
                 'Finding must be "BLOCKER|MAJOR|QUALITY|MINOR: text" with optional '
                 '" | accepted: reason | owner: user|PB-NNN" (QUALITY: owner user only)'
             )
-        owner = (m.group(4) or "").strip()
-        if owner and not (
-            owner == "user"
-            or (
-                m.group(1) == "MINOR"
-                and re.fullmatch(r"PB-\d{3,}", owner)
-                and (B.bp(root) / "tasks" / (owner + ".md")).is_file()
-            )
-        ):
+        if (m.group(3) is not None or m.group(4) is not None) and not finding_accepted(B, root, m.group(1), m.group(3), m.group(4)):
             raise ValueError(
-                'Accepted MINOR owner must be "user" or an open follow-up task PB-NNN; '
-                "an accepted QUALITY gap is owned by the user only"
+                'Accepted MINOR owner must be "user" or an open follow-up task PB-NNN (with nonempty reason); '
+                "an accepted QUALITY gap is owned by the user only; BLOCKER/MAJOR findings cannot be waived"
             )
     value, _ = task_digest(B, root, task)
     lines = [f"- review by {reviewer} | {verdict} | digest={value} | contract={B.contract(task)}"] + [
@@ -498,6 +501,24 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, s
     if R.enabled(B, root):
         assurance = R.provenance(B, root, task, reviewer, allow_self, agents_path)
         lines.append("- assurance: " + assurance["assurance"])
+        blocking_findings = [
+            f for f in findings
+            if (m := FINDING_RE.match("- finding " + f.strip()))
+            and not finding_accepted(B, root, m.group(1), m.group(3), m.group(4))
+        ]
+        next_step = (
+            "Review passed on current digest; run `accept` and commit"
+            if verdict == "PASS" and not blocking_findings
+            else "Fix review findings, recheck, then re-review"
+        )
+        R.progress(
+            B,
+            root,
+            B.find_task(root, task["id"]),
+            next_step,
+            failing="" if verdict == "PASS" and not blocking_findings else f"Review {verdict}: {len(blocking_findings)} unresolved finding(s)",
+            strategy="review",
+        )
     return 0, [line[2:] for line in lines]
 
 
@@ -628,32 +649,11 @@ def accept(B, root, task_id, actor="", agents_path=None, self_review=False):
                 identity = A.canonical_identity(rev["reviewer"], agents_path)
                 if any(identity == A.canonical_identity(imp, agents_path) for imp in implementers(B, task)):
                     problems.append(f"reviewer {rev['reviewer']} implemented this task")
-            if rev["verdict"] != "PASS":
-                problems.append("review verdict BLOCKED")
-            for severity, text_, reason, owner in rev["findings"]:
-                owner_clean = (owner or "").strip()
-                valid_minor_owner = owner_clean == "user" or (
-                    bool(re.fullmatch(r"PB-\d{3,}", owner_clean))
-                    and (B.bp(root) / "tasks" / (owner_clean + ".md")).is_file()
-                )
-                accepted = (severity == "MINOR" and bool(reason) and valid_minor_owner) or (
-                    severity == "QUALITY" and bool(reason) and owner_clean == "user"
-                )
-                if not accepted:
-                    problems.append(f"unresolved finding {severity}: {text_[:60]}")
-    elif rev is not None and rev["digest"] == current and rev["contract"] == contract:
+    if rev is not None and rev["digest"] == current and rev["contract"] == contract:
         if rev["verdict"] != "PASS":
             problems.append("review verdict BLOCKED")
         for severity, text_, reason, owner in rev["findings"]:
-            owner_clean = (owner or "").strip()
-            valid_minor_owner = owner_clean == "user" or (
-                bool(re.fullmatch(r"PB-\d{3,}", owner_clean))
-                and (B.bp(root) / "tasks" / (owner_clean + ".md")).is_file()
-            )
-            accepted = (severity == "MINOR" and bool(reason) and valid_minor_owner) or (
-                severity == "QUALITY" and bool(reason) and owner_clean == "user"
-            )
-            if not accepted:
+            if not finding_accepted(B, root, severity, reason, owner):
                 problems.append(f"unresolved finding {severity}: {text_[:60]}")
     if problems:
         return 2, [f"BLOCKED {task['id']}"] + [f"  - {p}" for p in problems + missing]

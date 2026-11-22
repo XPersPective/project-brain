@@ -146,14 +146,14 @@ def _run_startup_checks():
         assert 'Keep the pending edit.' in task.read_text(encoding='utf-8') and 'Receipt: user-owned' in task.read_text(encoding='utf-8')
         assert (B.bp(root) / 'migration-backup/tasks/PB-001.md').read_bytes() == original
         # A future project must be rejected before resetting session policy.
-        for field, value in (('skill_version', '99.0.0'), ('schema_version', '99')):
-            old = B.VERSION if field == 'skill_version' else str(B.SCHEMA)
-            config.write_text(config.read_text(encoding='utf-8').replace(old, value), encoding='utf-8')
+        orig_cfg = config.read_text(encoding='utf-8')
+        for old, value in ((B.VERSION, '99.0.0'), (f'schema_version: {B.SCHEMA}', 'schema_version: 99')):
+            config.write_text(orig_cfg.replace(old, value), encoding='utf-8')
             before = snapshot(root)
             for command in (('boot', '--new-session'), ('orient',)):
                 assert run(root, *command)[0] == 2
                 assert snapshot(root) == before
-            config.write_text(config.read_text(encoding='utf-8').replace('99.0.0', B.VERSION).replace('schema_version: 99', 'schema_version: 4'), encoding='utf-8')
+            config.write_text(orig_cfg, encoding='utf-8')
         # Merge/rebase defers conversion and session reset.
         config.write_text(config.read_text(encoding='utf-8').replace(B.VERSION, '3.7.0'), encoding='utf-8')
         before = snapshot(root)

@@ -245,15 +245,6 @@ def _canonical(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
-def _pairs(items):
-    value = {}
-    for key, item in items:
-        if key in value:
-            raise ValueError("Duplicate executor JSON keys")
-        value[key] = item
-    return value
-
-
 def _read(path):
     if not path.exists():
         return None, None
@@ -264,12 +255,12 @@ def _read(path):
     try:
         value = json.loads(
             raw.decode("utf-8"),
-            object_pairs_hook=_pairs,
-            parse_constant=lambda value: (_ for _ in ()).throw(ValueError("Non-finite JSON")),
+            object_pairs_hook=Core._unique_pairs,
+            parse_constant=Core._reject_constant,
         )
     except (UnicodeError, RecursionError) as error:
         raise ValueError("Malformed executor JSON") from error
-    return value, hashlib.sha256(raw).hexdigest()
+    return value, Core.sha256_bytes(raw)
 
 
 # Lightweight read-only relay authority helpers (breaks policy <-> relay cycle).

@@ -203,7 +203,7 @@ def build_worker_prompt(B, root, task, score_info):
     if proven:
         rules.append(
             f"   - Reusable typed evidence on current digest: {', '.join(sorted(proven))}. "
-            "Inspect it before ticking open criteria; re-verify if source, dependencies or environment change."
+            "Do not repeat already-proven checks unless source, dependencies or environment change."
         )
     if surf["ui"]:
         rules.append(
@@ -215,7 +215,9 @@ def build_worker_prompt(B, root, task, score_info):
             "5. BACKEND & STATE RUBRIC: Preserve the project's architecture boundaries and explicit state transitions, "
             "validate external inputs at the boundary, and enforce idempotency/error contracts."
         )
-    rules.append("6. Use `PB check` for Verify receipts; reuse intact current proof, recheck changed inputs. Record progress/Resume before stopping; never invent a PASS.")
+    rules.append(
+        "6. Run the task's `Verify` commands directly and return exact command/exit observations (do NOT load external planning skills or invoke `brain.py`; the director records receipts). Never invent a PASS."
+    )
     rules.append("7. Keep context to the named files; no full-repository dumps or nested delegation. Stop after one failed repair with the exact failure and remaining work. Return changed files, check results and unresolved risks in at most 12 lines; intention-only output is not completion.")
     prompt = "\n".join(rules)
     S.require_clean(prompt, "worker prompt")

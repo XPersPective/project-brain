@@ -231,8 +231,9 @@ def reconcile(B, root, task, note, independent=False, keep_evidence=False):
     return data
 
 
-def guard(B, root, task, allow_stopping=False):
-    E.require_confirmed(B, root)
+def guard(B, root, task, allow_stopping=False, check_session=True):
+    if check_session:
+        E.require_confirmed(B, root)
     if not enabled(B, root):
         return
     S.policy_guard(B, root, task)
@@ -253,17 +254,18 @@ def guard(B, root, task, allow_stopping=False):
     independent = data.get("independent") is True and task.get("purpose") == "discovery"
     if not independent and B.target_status(root) != "CONFIRMED":
         raise ValueError("TARGET_PENDING: implementation requires CONFIRMED Target")
-    B.require_session(root, allow_stopping=allow_stopping)
+    if check_session:
+        B.require_session(root, allow_stopping=allow_stopping)
 
 
 def inputs(task):
     return list(dict.fromkeys(task.get("areas", []) + task.get("inputs", []) + list(DEFAULT_INPUTS)))
 
 
-def task_digest(B, root, task, allow_stopping=False):
+def task_digest(B, root, task, allow_stopping=False, check_session=True):
     if not enabled(B, root):
         return digest(B, root, task["areas"])
-    guard(B, root, task, allow_stopping=allow_stopping)
+    guard(B, root, task, allow_stopping=allow_stopping, check_session=check_session)
     explicit = []
     for pattern in task.get("areas", []) + task.get("inputs", []):
         probe = re.sub(r"\[[^]]*\]|[*?]", "glob", pattern)

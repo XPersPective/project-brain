@@ -1,7 +1,7 @@
 {
   "name": "project-brain",
   "displayName": "Project Brain",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Git-native memory, UI/Backend quality enforcement, complexity scoring, source-bound verification, and economical orchestration.",
   "author": {
     "name": "XPersPective",

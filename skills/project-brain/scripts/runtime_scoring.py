@@ -156,13 +156,6 @@ def score_task(B, root, task):
     }
 
 
-def effective_risk(B, task):
-    """Risk never drops below deterministic surface/scope floors."""
-    declared = task.get("risk") if task.get("risk") in B.RISK_VALUES else "MEDIUM"
-    floor = score_task(B, None, task)["effective_risk"]
-    return B.RISK_VALUES[max(B.RISK_VALUES.index(declared), B.RISK_VALUES.index(floor))]
-
-
 def apply_score_headers(B, task, info):
     """Update Tier and Risk headers in-place in the task file."""
     text = B.read(task["file"]) or ""

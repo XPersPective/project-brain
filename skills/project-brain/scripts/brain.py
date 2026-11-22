@@ -504,23 +504,68 @@ def require_session(root, implementation=False, allow_stopping=False):
     return modes
 
 
-def takeover_status(root, active, has_git, dirty_other):
+_GENERATED_NOISE_RE = re.compile(
+    r"(?:^|/)(?:__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)(?:/|$)|"
+    r"(?:^|/)(?:\.DS_Store|Thumbs\.db)$|\.(?:pyc|pyo)$",
+    re.I,
+)
+ACCEPT_RE = re.compile(r"^- accept: DONE \| digest=(?P<digest>[0-9a-f]+) \| contract=(?P<contract>[0-9a-f]+)$")
+
+
+def _is_generated_noise(path):
+    return bool(_GENERATED_NOISE_RE.search(str(path or "").replace("\\", "/")))
+
+
+def _done_task_intact(root, task):
+    """True only when an uncommitted DONE task's current digest and contract still match its recorded `accept`."""
+    if task.get("status") != "DONE" or not task.get("areas"):
+        return False
+    accepted = None
+    for line in task.get("evidence_lines", []):
+        m = ACCEPT_RE.match(line)
+        if m:
+            accepted = m
+    if not accepted or accepted.group("contract") != contract(task):
+        return False
+    try:
+        cur_dig, _ = V.task_digest(sys.modules[__name__], root, task, check_session=False)
+    except ValueError:
+        return False
+    return cur_dig == accepted.group("digest")
+
+
+def takeover_status(root, active, has_git, dirty_other, done_tasks=()):
     """Determine whether the takeover test suite must run or can be skipped to save tokens."""
     if not has_git:
         return "REQUIRED (no git baseline)"
-    outside = [p for p in dirty_other if not active or not any(matches(p, a) for a in active.get("areas", []))]
+    real_dirty = [p for p in dirty_other if not _is_generated_noise(p)]
+    intact_done = [dt for dt in done_tasks if _done_task_intact(root, dt)]
+    done_areas = [a for dt in intact_done for a in dt.get("areas", [])]
+    outside = [
+        p
+        for p in real_dirty
+        if not (active and any(matches(p, a) for a in active.get("areas", [])))
+        and not any(matches(p, a) for a in done_areas)
+    ]
     if outside:
         return "REQUIRED (source edits outside active Areas)"
     if active and active.get("areas"):
         try:
-            cur_dig, _ = V.task_digest(sys.modules[__name__], root, active)
+            cur_dig, _ = V.task_digest(sys.modules[__name__], root, active, check_session=False)
             cur_con = contract(active)
             if active.get("verify_cmds"):
                 if V.current_checks(sys.modules[__name__], root, active, cur_dig, cur_con):
-                    return f"SKIP ({active['id']} Verify logs valid on current digest={cur_dig}; scoped checks reusable)"
+                    done_note = (
+                        f"; uncommitted DONE pending commit: {','.join(dt['id'] for dt in intact_done)}"
+                        if intact_done
+                        else ""
+                    )
+                    return f"SKIP ({active['id']} Verify logs valid on current digest={cur_dig}; scoped checks reusable{done_note})"
         except ValueError:
             pass
-    if dirty_other:
+    if real_dirty:
+        if intact_done and not active:
+            return f"SKIP (uncommitted DONE task edits present: {','.join(dt['id'] for dt in intact_done)}; commit or inspect)"
         return "REQUIRED (uncommitted source edits present)"
     head_body = git(root, "log", "-1", "--format=%B", "HEAD") or ""
     if not active and not is_wip(head_body) and "global" in trailer_values(head_body, "PB-Verification"):
@@ -533,7 +578,7 @@ def proven_criteria_ids(root, task):
     if not task or not task.get("areas"):
         return set()
     try:
-        cur_dig, _ = V.task_digest(sys.modules[__name__], root, task)
+        cur_dig, _ = V.task_digest(sys.modules[__name__], root, task, check_session=False)
     except ValueError:
         return set()
     cur_con = contract(task)
@@ -1024,7 +1069,7 @@ def staleness(root, base):
     for checkpoint in {base, *bases.values()}:
         deltas[checkpoint] = [
             p for p in (git_paths(root, "diff", "--name-only", f"{checkpoint}..HEAD") or [])
-            if not p.startswith(BRAIN_DIR + "/")
+            if not p.startswith(BRAIN_DIR + "/") and not _is_generated_noise(p)
         ]
     stale = {}
     for d, globs in srcs.items():
@@ -1331,9 +1376,10 @@ def cmd_boot(root, maintain=True, new_session=False):
         notes.append("READBACK_FIRST unresolved external operations: " + ext_sample + ext_more)
 
     active = ip[0] if ip else (rev_tasks[0] if rev_tasks else None)
+    done_tasks = [t for t in all_tasks if t["status"] == "DONE" and t["has_evidence"]]
 
     stale, unmapped, done, recent, since_audit = {}, [], set(), [], 0
-    local_done = {t["id"] for t in all_tasks if t["status"] == "DONE" and t["has_evidence"]}
+    local_done = {t["id"] for t in done_tasks}
     done.update(local_done)
     if not has_git:
         state = state or "NO_GIT"
@@ -1349,9 +1395,14 @@ def cmd_boot(root, maintain=True, new_session=False):
         cp = git(root, "rev-parse", "--short", base) if base else None
         dirty = dirty_paths(root)
         brain_dirty = [p for p in dirty if p.startswith(BRAIN_DIR + "/")]
-        other = [p for p in dirty if not p.startswith(BRAIN_DIR + "/")]
+        other = [p for p in dirty if not p.startswith(BRAIN_DIR + "/") and not _is_generated_noise(p)]
+        intact_done_tasks = [t for t in done_tasks if _done_task_intact(root, t)]
         owned = [p for p in other if active and any(matches(p, a) for a in active["areas"])]
-        unowned = [p for p in other if p not in owned]
+        done_owned = [
+            p for p in other
+            if p not in owned and any(matches(p, a) for dt in intact_done_tasks for a in dt.get("areas", []))
+        ]
+        unowned = [p for p in other if p not in owned and p not in done_owned]
         every, completed = every_ids, completed_ids
         done = (completed | local_done) - open_ids
         stale, unmapped = staleness(root, base)
@@ -1401,7 +1452,7 @@ def cmd_boot(root, maintain=True, new_session=False):
         print(relay_line)
     print("PROTOCOL: " + ("1 (intent/input guards active)" if R.enabled(sys.modules[__name__], root) else "0 (legacy compatibility; run `protocol --enable` before new implementation)"))
     print("SECRETS: " + (S.policy(sys.modules[__name__], root).get("reference") or "ASK_ONCE: choose an external symbolic reference or none"))
-    print(f"TAKEOVER_CHECK: {takeover_status(root, active, has_git, other)}")
+    print(f"TAKEOVER_CHECK: {takeover_status(root, active, has_git, other, done_tasks=done_tasks)}")
     RS.boot_summary(sys.modules[__name__], root)
     for n in notes:
         print(f"  ! {n}")
@@ -1456,10 +1507,30 @@ def cmd_boot(root, maintain=True, new_session=False):
             print(f"  next: {focus['next']}")
         if R.enabled(sys.modules[__name__], root):
             try:
-                R.guard(sys.modules[__name__], root, focus)
-                print("  intent: reconciled with current target/constraints")
+                R.guard(sys.modules[__name__], root, focus, check_session=False)
+                print(
+                    "  intent: reconciled with current target/constraints"
+                    + ("" if gate_ready else " (confirm session policy first)")
+                )
             except ValueError as error:
                 print("  intent: " + str(error))
+        try:
+            focus_dig, _ = V.task_digest(sys.modules[__name__], root, focus, check_session=False)
+            focus_con = contract(focus)
+            rev_rec = V.latest_review(focus.get("review_lines", []))
+            if (
+                rev_rec
+                and rev_rec.get("verdict") == "PASS"
+                and rev_rec.get("digest") == focus_dig
+                and rev_rec.get("contract") == focus_con
+                and all(
+                    V.finding_accepted(sys.modules[__name__], root, sev, rsn, own)
+                    for sev, _, rsn, own in rev_rec.get("findings", [])
+                )
+            ):
+                print(f"  review: PASS valid on current digest={focus_dig} (DO NOT re-review; run `accept`)")
+        except ValueError:
+            pass
         proven_ids = proven_criteria_ids(root, focus)
         if proven_ids:
             print(f"  proven on current digest (DO NOT repeat): {', '.join(sorted(proven_ids))}")
@@ -1755,11 +1826,7 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
             print(f'FAIL {task["id"]} is owned by {cur_owner}; pass --takeover "<reason>" to take over')
             return 2
         dig, count = V.task_digest(sys.modules[__name__], root, task)
-        risk = max(
-            V.effective_risk(sys.modules[__name__], task),
-            SC.score_task(sys.modules[__name__], root, task)["effective_risk"],
-            key=RISK_VALUES.index,
-        )
+        risk = V.effective_risk(sys.modules[__name__], task)
         task["risk"] = risk
         con = contract(task)
         set_headers(task["file"], {"Status": "IN_PROGRESS", "Owner": actor, "Risk": risk})

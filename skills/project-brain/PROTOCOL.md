@@ -16,9 +16,6 @@ no-Git and unborn-Git projects, after preserving raw backups. Use --read-only fo
 observational startup; merge/rebase defers conversion. Future versions and unknown
 legacy shapes stop for inspection. This does not download installed-skill updates.
 
-Confirm Target in the user's words; choose EXEC/REV once. Then record one project
-secret decision, even when the answer is no secrets:
-
 Before implementation: `PB orient`, then `PB boot --new-session`; read durable
 Executor Selection Policy (ESP), Scheduling Policy (SP), and optional QRP/BRP
 from `.project-brain/executor-policy.json`. On every new implementation session

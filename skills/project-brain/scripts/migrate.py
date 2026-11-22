@@ -477,7 +477,6 @@ def migrate_v3_upgrade(root, plan, todo, force_all=True):
             missing_v34 = has_full_body and (
                 "evidence" not in secs
                 or "review" not in secs
-                or not re.search(r"^Owner:", raw, re.M | re.I)
                 or not re.search(r"^Risk:\s*\S+", raw, re.M | re.I)
                 or not re.search(r"^Tier:\s*\S+", raw, re.M | re.I)
                 or not re.search(r"^Priority:\s*\S+", raw, re.M | re.I)

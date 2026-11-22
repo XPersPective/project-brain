@@ -140,7 +140,7 @@ def packet(B, root, task, kind="EXECUTE"):
         "decisions": adrs,
         "rules": [
             "Read applicable repository instructions. Request named missing context; never guess.",
-            "Worker role inherits the director session; do not boot Brain or repeat its session interview.",
+            "Worker role inherits the director session; do not load planning skills, boot `.project-brain/` or repeat setup.",
             "No Brain state/procedure changes, nested delegation, commit, push or publishing.",
             "Preserve user work; use only the assigned workspace and Areas for writes.",
             "Use the existing human Git identity; never add AI/bot attribution.",

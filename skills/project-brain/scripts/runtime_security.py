@@ -1,5 +1,4 @@
 """Project secret references, host adapter preflight and safe outputs. Stdlib only."""
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -169,7 +168,7 @@ def binding_fingerprint(B, root, task):
                     raise ValueError("Linked adapter/scanner paths refused")
                 if path.stat().st_size > 32 * 1024 * 1024:
                     raise ValueError("Adapter/scanner binary needs a bounded launcher for freshness verification")
-                files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+                files[str(path)] = Core.sha256_file(path)
     return Core.fingerprint([data, files])
 
 

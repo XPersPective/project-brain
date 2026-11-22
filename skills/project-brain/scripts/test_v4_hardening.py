@@ -453,6 +453,53 @@ def check_cycle2_authority_and_security_regressions():
             assert picked["selected"]["id"] == "deep-m", picked
             assert picked["request"].get("group") == "high", picked["request"]
 
+        # 7. Cold boot --new-session preserves TAKEOVER_CHECK: SKIP, review: PASS valid, updated progress.next,
+        #    and recognizes uncommitted DONE task Areas + ignores __pycache__/*.pyc noise
+        t1 = B.bp(root) / "tasks/PB-001.md"
+        B.write_atomic(
+            t1,
+            "# PB-001 — Task one\nStatus: READY\nRisk: MEDIUM\nPriority: P1\nTier: L\nDepends: -\nDomain: core\n"
+            "Areas: src/a.py\nInputs: src/a.py\nSecrets: none\n\n## Objective\nUpdate a.py.\n\n"
+            "## Steps\n1. Edit a.py.\n\n## Verify\n- `python -c \"print('ok')\"`\n\n"
+            "## Acceptance\n- [ ] [machine] Works\n\n## Evidence\n\n## Review\n",
+        )
+        B.write_atomic(B.bp(root) / "config.yaml", 'schema_version: 4\nskill_version: "' + Core.VERSION + '"\nprotocol_version: 1\n')
+        B.write_atomic(B.bp(root) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nCold takeover test.\n")
+        code, _ = run_cli(root, "policy", "--source", "solo", "--schedule", "serial", "--confirm")
+        assert code == 0
+        R.reconcile(B, root, B.find_task(root, "PB-001"), "Confirmed for cold takeover check")
+        assert B.cmd_start(root, "PB-001", agent="lead") == 0
+        (root / "src/a.py").write_text("x = 42\n", encoding="utf-8")
+        (root / "src/__pycache__").mkdir(exist_ok=True)
+        (root / "src/__pycache__/a.cpython-311.pyc").write_bytes(b"\x00pyc")
+        B.write_atomic(t1, B.read(t1).replace("- [ ] [machine]", "- [x] [machine]"))
+        assert V.check(B, root, "PB-001", actor="lead")[0] == 0
+        assert V.review(B, root, "PB-001", "lead", "PASS", self_review=True)[0] == 0
+        code, boot_out = run_cli(root, "boot", "--new-session")
+        assert code == 0, boot_out
+        assert "TAKEOVER_CHECK: SKIP (PB-001 Verify logs valid" in boot_out, boot_out
+        assert "review: PASS valid on current digest=" in boot_out, boot_out
+        assert "next: Review passed on current digest; run `accept` and commit" in boot_out, boot_out
+        assert "VERSION_CHECK" not in boot_out, boot_out
+        assert "__pycache__" not in boot_out, boot_out
+
+        # Unresolved MINOR finding on PASS review must NOT advertise "DO NOT re-review; run accept"
+        code, _ = run_cli(root, "setup", "confirm", "--note", "Confirm for minor finding test")
+        assert code == 0
+        assert V.review(B, root, "PB-001", "lead", "PASS", findings=["MINOR: unowned minor item"], self_review=True)[0] == 0
+        code, boot_unres = run_cli(root, "boot", "--read-only")
+        assert code == 0 and "review: PASS valid" not in boot_unres, boot_unres
+        assert "next: Fix review findings, recheck, then re-review" in boot_unres, boot_unres
+
+        # Re-review clean PASS + accept PB-001 (uncommitted DONE), then tamper src/a.py -> _done_task_intact catches it!
+        assert V.review(B, root, "PB-001", "lead", "PASS", self_review=True)[0] == 0
+        assert V.accept(B, root, "PB-001", actor="lead")[0] == 0
+        code, boot_done_ok = run_cli(root, "boot", "--read-only")
+        assert code == 0 and "TAKEOVER_CHECK: SKIP (uncommitted DONE task edits present: PB-001" in boot_done_ok, boot_done_ok
+        (root / "src/a.py").write_text("x = 999\n", encoding="utf-8")
+        code, boot_done_tampered = run_cli(root, "boot", "--read-only")
+        assert code == 0 and "STATE: DIRTY" in boot_done_tampered and "TAKEOVER_CHECK: REQUIRED" in boot_done_tampered, boot_done_tampered
+
 
 def main():
     check_architecture_invariants()
