@@ -47,11 +47,10 @@ leave commits pending; never invent one.
 
 At a new top-level implementation session run `PB orient`, then
 `PB boot --new-session`. Orientation uses metadata/manifests without model calls.
-Do not edit source before the session-choice gate is `READY`. within that session
+Do not edit source before the session-choice gate is `READY`. Within that session
 reuse context; use `PB board` (`on`/`off`, default `on`) for the deterministic
-chat Progress Board (`İlerleme Panosu`), `PB watch` for 1-line timer status,
-`PB brief` only for missing focus, and normal `PB boot` only for actual
-takeover/recovery. A fresh
+chat Progress Board, `PB watch` for 1-line timer status, `PB brief` only for
+missing focus, and normal `PB boot` only for actual takeover/recovery. A fresh
 read-only audit may use `PB orient --read-only` and `PB boot --read-only`; an
 intervening question does not. For no Brain, `PB map` gives a cheap overview.
 Protocol 1 is enabled on init/upgrade unless compatibility `0` was explicitly set;
@@ -220,9 +219,12 @@ by behavior; never score them down artificially.
    UI requires `[visual]`, `[interaction]`, `[accessibility]` proof.
 5. `MEDIUM`/`HIGH` risk: `PB accept <id>` transitions to `REVIEW` (`REVIEW_PENDING`)
    once implementation evidence is complete. Dispatch an independent qualified
-   reviewer and record `PB review <id> --reviewer <alias> --verdict PASS|BLOCKED
-   [--finding "SEVERITY: text"]`. `REV=solo` requires explicit `--self-review`.
-   `BLOCKER`, `MAJOR`, unwaived `QUALITY`, and unowned `MINOR` findings block closure.
+   reviewer (registered via `PB runs prepare --kind REVIEW --backend native|pool`
+   and `PB runs receipt` / CAP) and record `PB review <id> --reviewer <alias>
+   --verdict PASS|BLOCKED [--finding "SEVERITY: text"]`. Under `solo` review
+   policy (`PB policy --review-source solo --confirm`), use explicit
+   `--self-review`. `BLOCKER`, `MAJOR`, unwaived `QUALITY`, and unowned `MINOR`
+   findings block closure.
 6. `PB accept <id>` checks all ticked criteria, current logs/artifacts, staged
    secret scan and review; `HIGH` also requires the configured full test command.
    Reconcile Current when structure changes, run `PB validate`, and checkpoint.

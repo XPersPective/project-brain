@@ -1026,7 +1026,11 @@ def handoff(
     if not isinstance(next_step, str) or not next_step.strip():
         raise ValueError("Save the actual next action before handing off")
     pre_state = read(B, root)
-    resolved_cands = _prepare_adoption_candidates(B, root, pre_state, policy, rpc) if pre_state else None
+    resolved_cands = (
+        _prepare_adoption_candidates(B, root, pre_state, policy, rpc)
+        if pre_state and pre_state.get("status") in LIVE and _holds(pre_state.get("director"), token)
+        else None
+    )
     with B.checkout_lock(root, timeout=90):
         state = read(B, root)
         if not state or state["status"] not in LIVE:
@@ -1121,7 +1125,11 @@ def takeover(B, root, policy, rpc, token=None, now=None, version=None):
     now = time.time() if now is None else now
     version = version or getattr(B, "VERSION", None)
     pre_state = read(B, root)
-    resolved_cands = _prepare_adoption_candidates(B, root, pre_state, policy, rpc) if pre_state else None
+    resolved_cands = (
+        _prepare_adoption_candidates(B, root, pre_state, policy, rpc)
+        if pre_state and pre_state.get("status") == "HANDOFF_PENDING" and _holds(pre_state.get("pending"), token)
+        else None
+    )
     cancel_on_stop = []
     with B.checkout_lock(root, timeout=90):
         state = read(B, root)
@@ -1167,6 +1175,7 @@ def takeover(B, root, policy, rpc, token=None, now=None, version=None):
                 state["skill_version"] = version
             state["generation"] += 1
             state["pending"], state["status"], state["announced"] = None, "ACTIVE", False
+            state.pop("reason", None)
             state["health"].setdefault(key(pending["candidate"]), {}).update(status="ready", reason=None)
             _event(
                 state,
@@ -1460,9 +1469,14 @@ def recover(B, root, policy, rpc, brain_script=None, now=None, sleep=time.sleep,
     if state["status"] not in LIVE:
         return dict(view(state), actions=actions, notify=None)
     if plan != "EXHAUSTED":
-        hard = failure and any(word in failure[1].upper() for word in HARD)
+        hard = bool(failure and any(word in failure[1].upper() for word in HARD))
+        holder_tid = director.get("task_id")
+        holder_info = observed.get(holder_tid) if holder_tid else None
+        holder_terminal = (not holder_tid) or bool(holder_info and holder_info.get("state") in TERMINAL_TASK | {"not_found"})
+        director_failed_hard = bool(hard and failure and failure[0].get("route") == director.get("route"))
+        allow_cur = (plan == "RECOVER" and not hard) or (plan == "FAILOVER" and holder_terminal and not director_failed_hard)
         selection, updates = _select(
-            B, root, state, state.get("inherited") or policy, rpc, script, now, sleep, allow_current=plan == "RECOVER" and not hard
+            B, root, state, state.get("inherited") or policy, rpc, script, now, sleep, allow_current=allow_cur
         )
         attempts = 0
         tried = set()
@@ -1657,7 +1671,11 @@ def request_stop(B, root, note, rpc=None, now=None, sleep=time.sleep, force=Fals
 def mark_progress(B, root, policy, rpc, now=None):
     now = time.time() if now is None else now
     pre_state = read(B, root)
-    resolved_cands = _prepare_adoption_candidates(B, root, pre_state, policy, rpc) if pre_state else None
+    resolved_cands = (
+        _prepare_adoption_candidates(B, root, pre_state, policy, rpc)
+        if pre_state and pre_state.get("status") == "ACTIVE" and _holds(pre_state.get("director"))
+        else None
+    )
     with B.checkout_lock(root, timeout=90):
         state = read(B, root)
         if not state or state["status"] != "ACTIVE" or not _holds(state["director"]):
@@ -1755,6 +1773,8 @@ def command(B, args, pool=None):
         quotas = _read_local_json(root, args.quotas) if args.quotas else fetch_quotas(rpc, candidates or _policy(policy)[0]["candidates"])
         return choose(policy, quotas, current, candidates, (state or {}).get("health"))
     if args.action == "complete":
+        if Core.worker_env_active() and not (authorized(B, root) or stopping_holder(B, root)):
+            raise ValueError("RELAY_NOT_DIRECTOR: only the active baton holder can complete the relay")
         return finish(B, root, "COMPLETE", args.note, rpc=rpc)
     if args.action == "start":
         if Core.worker_env_active():

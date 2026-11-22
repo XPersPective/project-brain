@@ -92,6 +92,54 @@ def peek(B, root):
         db.close()
 
 
+def board_summary(B, root):
+    """Read-only active orchestration map {task_id: {kind, state, worker}} for Progress Board."""
+    if not (A.registry_path().parent / "orchestration").exists():
+        return {}
+    if not B.git(root, "rev-parse", "--git-common-dir"):
+        return {}
+    path = private(directory(B, root, create=False) / "runs.sqlite3")
+    if not path.is_file():
+        return {}
+    try:
+        db = _connect_ro(path)
+    except (sqlite3.Error, ValueError, OSError):
+        return {}
+    try:
+        if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA:
+            return {}
+        out = {}
+        rows = db.execute(
+            "SELECT id,task,kind,state,backend FROM runs WHERE state IN "
+            "('PREPARED','SUBMITTING','RUNNING','CANCEL_REQUESTED','UNKNOWN') OR "
+            "(state='SUCCEEDED' AND integration!='REJECTED' AND (verification!='PASS' OR integration='PENDING')) "
+            "ORDER BY created DESC LIMIT 16"
+        ).fetchall()
+        for rid, tid, kind, state, backend in rows:
+            if tid in out:
+                continue
+            worker = backend or ""
+            for (raw,) in db.execute("SELECT data FROM events WHERE run=? ORDER BY seq DESC LIMIT 8", (rid,)):
+                try:
+                    ev = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                req = ev.get("request") if isinstance(ev.get("request"), dict) else {}
+                route = ev.get("routeId") or ev.get("route") or req.get("routeId") or ""
+                model = ev.get("modelId") or ev.get("model") or req.get("modelId") or ev.get("actor") or ""
+                if route or model:
+                    worker = "/".join(x for x in (route, model) if x)
+                    break
+            out[tid] = {"run": rid, "kind": kind, "state": state, "worker": worker}
+        return out
+    except (sqlite3.Error, ValueError, OSError):
+        return {}
+    finally:
+        db.close()
+
+
 def implementation_strength(B, root, tid, actor):
     """Read immutable execution selection for this candidate or integrated task."""
     if not (A.registry_path().parent / "orchestration").exists() or not B.git(root, "rev-parse", "--git-common-dir"):

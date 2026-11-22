@@ -459,61 +459,75 @@ def check_cycle2_authority_and_security_regressions():
         B.write_atomic(
             t1,
             "# PB-001 — Task one\nStatus: READY\nRisk: MEDIUM\nPriority: P1\nTier: L\nDepends: -\nDomain: core\n"
-            "Areas: src/a.py\nInputs: src/a.py\nSecrets: none\n\n## Objective\nUpdate a.py.\n\n"
+            "Areas: src/**\nInputs: src/**\nSecrets: none\n\n## Objective\nUpdate a.py.\n\n"
             "## Steps\n1. Edit a.py.\n\n## Verify\n- `python -c \"print('ok')\"`\n\n"
             "## Acceptance\n- [ ] [machine] Works\n\n## Evidence\n\n## Review\n",
         )
-        B.write_atomic(B.bp(root) / "config.yaml", 'schema_version: 4\nskill_version: "' + Core.VERSION + '"\nprotocol_version: 1\n')
+        B.write_atomic(
+            B.bp(root) / "config.yaml",
+            '# user comment preserved\nschema_version: 4\nskill_version: "' + Core.VERSION + '"\nprotocol_version: 1\n',
+        )
         B.write_atomic(B.bp(root) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nCold takeover test.\n")
         code, _ = run_cli(root, "policy", "--source", "solo", "--schedule", "serial", "--confirm")
         assert code == 0
         R.reconcile(B, root, B.find_task(root, "PB-001"), "Confirmed for cold takeover check")
         assert B.cmd_start(root, "PB-001", agent="lead") == 0
         (root / "src/a.py").write_text("x = 42\n", encoding="utf-8")
-        (root / "src/__pycache__").mkdir(exist_ok=True)
-        (root / "src/__pycache__/a.cpython-311.pyc").write_bytes(b"\x00pyc")
         B.write_atomic(t1, B.read(t1).replace("- [ ] [machine]", "- [x] [machine]"))
         assert V.check(B, root, "PB-001", actor="lead")[0] == 0
         assert V.review(B, root, "PB-001", "lead", "PASS", self_review=True)[0] == 0
+        # Creating __pycache__/*.pyc inside `Areas: src/**` AFTER check/review must NOT invalidate digest!
+        (root / "src/__pycache__").mkdir(exist_ok=True)
+        (root / "src/__pycache__/a.cpython-311.pyc").write_bytes(b"\x00pyc")
         code, boot_out = run_cli(root, "boot", "--new-session")
         assert code == 0, boot_out
         assert "TAKEOVER_CHECK: SKIP (PB-001 Verify logs valid" in boot_out, boot_out
         assert "review: PASS valid on current digest=" in boot_out, boot_out
+        assert "NEXT: Review PASS valid on current digest for PB-001:" in boot_out, boot_out
         assert "next: Review passed on current digest; run `accept` and commit" in boot_out, boot_out
         assert "VERSION_CHECK" not in boot_out, boot_out
         assert "__pycache__" not in boot_out, boot_out
 
-        # Unresolved MINOR finding on PASS review must NOT advertise "DO NOT re-review; run accept"
-        code, _ = run_cli(root, "setup", "confirm", "--note", "Confirm for minor finding test")
+        # Switching to native policy makes SOLO self-audit invalid -> boot must NOT advertise "review: PASS valid"
+        code, _ = run_cli(root, "policy", "--source", "native", "--schedule", "serial", "--confirm")
         assert code == 0
+        code, boot_native_mismatch = run_cli(root, "boot", "--read-only")
+        assert code == 0 and "review: PASS valid" not in boot_native_mismatch, boot_native_mismatch
+        assert "REVIEW PB-001: an independent reviewer" in boot_native_mismatch, boot_native_mismatch
+        code, _ = run_cli(root, "policy", "--source", "solo", "--schedule", "serial", "--confirm")
+        assert code == 0
+
+        # Unresolved MINOR finding on PASS review must NOT advertise "DO NOT re-review; run accept"
         assert V.review(B, root, "PB-001", "lead", "PASS", findings=["MINOR: unowned minor item"], self_review=True)[0] == 0
         code, boot_unres = run_cli(root, "boot", "--read-only")
         assert code == 0 and "review: PASS valid" not in boot_unres, boot_unres
         assert "next: Fix review findings, recheck, then re-review" in boot_unres, boot_unres
 
-        # Re-review clean PASS + accept PB-001 (uncommitted DONE), then tamper src/a.py -> _done_task_intact catches it!
+        # Re-review clean PASS + accept PB-001 (uncommitted DONE), then tamper src/a.py -> _done_task_intact & board catch it!
         assert V.review(B, root, "PB-001", "lead", "PASS", self_review=True)[0] == 0
         assert V.accept(B, root, "PB-001", actor="lead")[0] == 0
         code, boot_done_ok = run_cli(root, "boot", "--read-only")
         assert code == 0 and "TAKEOVER_CHECK: SKIP (uncommitted DONE task edits present: PB-001" in boot_done_ok, boot_done_ok
-        assert "PROGRESS_BOARD (İlerleme Panosu):" in boot_done_ok and "100% | Phase: COMPLETE | Tasks: 1/1 DONE" in boot_done_ok, boot_done_ok
+        assert "PROGRESS_BOARD:" in boot_done_ok and "100% | COMPLETE | Tasks 1/1" in boot_done_ok, boot_done_ok
         (root / "src/a.py").write_text("x = 999\n", encoding="utf-8")
         code, boot_done_tampered = run_cli(root, "boot", "--read-only")
         assert code == 0 and "STATE: DIRTY" in boot_done_tampered and "TAKEOVER_CHECK: REQUIRED" in boot_done_tampered, boot_done_tampered
+        assert "DONE tampered (reverify)" in boot_done_tampered and "100% | COMPLETE" not in boot_done_tampered, boot_done_tampered
 
-        # 8. Default-on Progress Board (İlerleme Panosu) & persistent Turkish/English toggle (`board on|off|göster|gösterme`)
+        # 8. Default-on Progress Board & persistent Turkish/English toggle (`board on|off|göster|gösterme`) preserving comments
         code, b_default = run_cli(root, "board")
-        assert code == 0 and "PROGRESS_BOARD (İlerleme Panosu):" in b_default and "C1✓" in b_default, b_default
+        assert code == 0 and "PROGRESS_BOARD:" in b_default and "DONE tampered (reverify)" in b_default, b_default
 
-        # Hide via Turkish alias `gösterme` (action before root)
+        # Hide via Turkish alias `gösterme` — preserves `# user comment preserved` in config.yaml
         code, b_off = run_cli(root, "board", "gösterme")
         assert code == 0 and "BOARD: OFF" in b_off and B.parse_config(root).get("board") == "off", b_off
+        assert "# user comment preserved" in (B.bp(root) / "config.yaml").read_text(encoding="utf-8")
         code, boot_hidden = run_cli(root, "boot", "--read-only")
         assert code == 0 and "PROGRESS_BOARD" not in boot_hidden, boot_hidden
         code, b_when_off = run_cli(root, "board")
         assert code == 0 and "BOARD: OFF" in b_when_off and "PROGRESS_BOARD" not in b_when_off, b_when_off
         code, b_forced = run_cli(root, "board", "--force")
-        assert code == 0 and "PROGRESS_BOARD (İlerleme Panosu):" in b_forced, b_forced
+        assert code == 0 and "PROGRESS_BOARD:" in b_forced, b_forced
 
         # Pool worker can read `board` / `board status` but cannot toggle `board on`/`board off`
         code, w_ro = run_cli(root, "board", "--force", extra_env={"CLI_AGENT_POOL_WORKER": "1"})
@@ -523,10 +537,36 @@ def check_cycle2_authority_and_security_regressions():
 
         # Re-enable via Turkish alias `göster`
         code, b_on = run_cli(root, "board", "göster")
-        assert code == 0 and "BOARD: ON" in b_on and "PROGRESS_BOARD (İlerleme Panosu):" in b_on, b_on
+        assert code == 0 and "BOARD: ON" in b_on and "PROGRESS_BOARD:" in b_on, b_on
         assert B.parse_config(root).get("board") == "on"
+        assert "# user comment preserved" in (B.bp(root) / "config.yaml").read_text(encoding="utf-8")
         code, boot_restored = run_cli(root, "boot", "--read-only")
-        assert code == 0 and "PROGRESS_BOARD (İlerleme Panosu):" in boot_restored, boot_restored
+        assert code == 0 and "PROGRESS_BOARD:" in boot_restored, boot_restored
+
+        # 9. Read-only protocol/security/migrate must not create .cache/writer.lock, and current.md-only Areas succeed
+        ro_root = Path(tmp) / "ro-lock"
+        ro_root.mkdir()
+        make_project(ro_root, legacy=False)
+        import shutil as _shutil
+        _shutil.rmtree(B.bp(ro_root) / ".cache", ignore_errors=True)
+        for cmd in (("protocol",), ("security",), ("migrate",)):
+            code, _ = run_cli(ro_root, *cmd, extra_env={"CLI_AGENT_POOL_WORKER": "1"})
+            assert code == 0 and not (B.bp(ro_root) / ".cache/writer.lock").exists(), cmd
+        arch_root = Path(tmp) / "arch-only"
+        arch_root.mkdir()
+        B.cmd_init(arch_root)
+        B.write_atomic(B.bp(arch_root) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nDoc task.\n")
+        B.write_atomic(
+            B.bp(arch_root) / "tasks/PB-001.md",
+            "# PB-001 — Update current.md\nStatus: READY\nRisk: LOW\nPriority: P2\nTier: L\nDepends: -\nDomain: core\n"
+            "Areas: .project-brain/current.md\n\n## Objective\nDocument arch.\n\n## Steps\n1. Update current.md.\n\n"
+            "## Acceptance\n- [ ] [machine] Valid\n\n## Verify\n- `python -c \"assert True\"`\n",
+        )
+        code, _ = run_cli(arch_root, "policy", "--source", "solo", "--schedule", "serial", "--confirm")
+        assert code == 0
+        R.reconcile(B, arch_root, B.find_task(arch_root, "PB-001"), "Confirmed arch task")
+        dig_arch, cnt_arch = V.task_digest(B, arch_root, B.find_task(arch_root, "PB-001"), check_session=False)
+        assert len(dig_arch) == 16 and cnt_arch >= 1
 
 
 def main():

@@ -184,7 +184,7 @@ def prune_runs(B, root):
         cited.update(m.group("log").split("/")[-1] for m in latest.values())
     entries = []
     for p in runs.glob("*.log"):
-        if p.name in cited:
+        if p.name in cited or Core.is_link(p):
             continue
         try:
             entries.append((p.stat().st_mtime, p))
@@ -285,6 +285,39 @@ def finding_accepted(B, root, severity, reason, owner):
     return False
 
 
+def review_status(B, root, task, current, contract, agents_path=None):
+    """Read-only evaluation matching `accept()` gates for whether latest review is currently valid."""
+    rev = latest_review(task.get("review_lines", []))
+    if not rev or rev["digest"] != current or rev["contract"] != contract:
+        return {"valid": False, "rev": rev, "reason": "missing or stale"}
+    if rev["verdict"] != "PASS":
+        return {"valid": False, "rev": rev, "reason": f"verdict {rev['verdict']}"}
+    for severity, text_, reason, owner in rev["findings"]:
+        if not finding_accepted(B, root, severity, reason, owner):
+            return {"valid": False, "rev": rev, "reason": f"unresolved finding {severity}"}
+    risk = effective_risk(B, task)
+    if risk in ("MEDIUM", "HIGH"):
+        modes = B.get_session_modes(root)
+        pol = R.E.load(B, root)
+        rev_src = (pol or {}).get("review", {}).get("source", "")
+        allow_self = modes.get("rev") == "solo" or (not modes.get("rev") and rev_src == "solo")
+        if R.enabled(B, root):
+            try:
+                R.review_guard(B, root, task, rev, allow_self, agents_path)
+            except ValueError as error:
+                return {"valid": False, "rev": rev, "reason": str(error)}
+        elif not allow_self:
+            try:
+                A.gate(B, task, rev["reviewer"], "review", agents_path, root=root)
+            except ValueError as error:
+                return {"valid": False, "rev": rev, "reason": str(error)}
+        if not allow_self:
+            identity = A.canonical_identity(rev["reviewer"], agents_path)
+            if any(identity == A.canonical_identity(imp, agents_path) for imp in implementers(B, task)):
+                return {"valid": False, "rev": rev, "reason": f"reviewer {rev['reviewer']} implemented this task"}
+    return {"valid": True, "rev": rev, "reason": "ok"}
+
+
 def effective_risk(B, task):
     return R.effective_risk(B, task)
 
@@ -317,8 +350,12 @@ def check(B, root, task_id, timeout=None, actor="", rerun=False):
         return 2, [f"FAIL {task['id']} has no backticked Verify command"]
     cfg = B.parse_config(root) if (B.bp(root) / "config.yaml").exists() else {}
     if timeout is None:
-        timeout = float(cfg.get("check_timeout", 900) or 900)
-    elif type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 3600:
+        raw_to = cfg.get("check_timeout", 900)
+        try:
+            timeout = float(raw_to if raw_to not in (None, "") else 900)
+        except (TypeError, ValueError):
+            raise ValueError("Timeout must be in (0, 3600] seconds")
+    if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 3600:
         raise ValueError("Timeout must be in (0, 3600] seconds")
     R.guard(B, root, task)
     before, count = task_digest(B, root, task)
@@ -471,7 +508,11 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, s
             registry = A.registry_path(agents_path)
             models = A.load(registry).get("models", {}) if registry.exists() else {}
             if reviewer not in models:
-                raise ValueError("REVIEW_PROVENANCE_PENDING: independent reviewer must be registered; a different alias alone is not evidence")
+                raise ValueError(
+                    "REVIEW_PROVENANCE_PENDING: independent reviewer must be registered "
+                    "(record a native/CAP review receipt via `PB runs`, or switch to `solo` with `--self-review`); "
+                    "a different alias alone is not evidence"
+                )
         policy = A.gate(B, task, reviewer, "review", agents_path, root=root) or {}
         report = policy.get("review_report")
         if report is not None and (report["verdict"] != verdict or not set(report["findings"]).issubset(set(findings))):
@@ -511,12 +552,19 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, s
             if verdict == "PASS" and not blocking_findings
             else "Fix review findings, recheck, then re-review"
         )
+        fail_msg = ""
+        if verdict != "PASS" or blocking_findings:
+            fail_msg = (
+                f"Review {verdict}: {len(blocking_findings)} unresolved finding(s)"
+                if blocking_findings
+                else f"Review {verdict} (no specific findings recorded)"
+            )
         R.progress(
             B,
             root,
             B.find_task(root, task["id"]),
             next_step,
-            failing="" if verdict == "PASS" and not blocking_findings else f"Review {verdict}: {len(blocking_findings)} unresolved finding(s)",
+            failing=fail_msg,
             strategy="review",
         )
     return 0, [line[2:] for line in lines]

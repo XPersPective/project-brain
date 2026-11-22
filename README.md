@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **4.0.2** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
+Current release: **4.0.3** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
@@ -140,8 +140,10 @@ team docs are protected. Interrupted cleanup resumes its journal instead of reim
 ```text
 brain.py orient   [root]   metadata-only project entry (auto-upgrades legacy Brain)
 brain.py boot     [root] [--new-session] [--read-only]
-                           state, target, plan, focus, unfinished runs and next action
-brain.py setup    <ask|confirm|status|recover-cap> [root] [--advanced]
+                           state, target, plan, focus, progress board, unfinished runs and next action
+brain.py board    [root] [on|off|status] [--force]
+                           default-on zero-token Progress Board (also accepts show/hide/göster/gösterme)
+brain.py setup    <ask|confirm|defaults|wait|recover-cap> [root] [--advanced]
                            default-safe single-line session confirmation and CAP recovery
 brain.py policy   [root] [--source <src>] [--schedule serial|parallel] [--confirm]
                            view, configure inline, save and confirm ESP/SP/QRP/BRP
@@ -166,7 +168,7 @@ brain.py runs     <plan|prepare|submit|observe|wait|verify|integrate|cancel|clea
 brain.py qualify  [root] --route <r> --model <m> --tier L|M|H --note "<text>"
                            optional advisory model-fit override (non-blocking by default)
 brain.py quota    <status|assess|prepare|arm|resume|cancel> [root]
-brain.py relay    <status|start|assess|handoff|takeover|recover|stop|complete> [root]
+brain.py relay    <status|start|assess|next|handoff|takeover|recover|stop|complete> [root]
 brain.py agents   <scan|quota|list|select|mode> [root]
 brain.py delegate <task> [root] [--cli <cli>] [--model <alias>] [--effort low|medium|high] [--dry-run]
 brain.py changed  [root]   files and domains changed since their Current checkpoints
@@ -180,7 +182,7 @@ Exit codes: 0 ok, 1 warnings / review or user feedback pending, 2 errors / block
 
 ## What it runs, reads and writes
 
-- Runs local commands: `git` (read-only queries such as `log`, `status`, `diff`, `ls-files`), the bundled Python scripts, configured `Verify` commands inside an OS-contained `ProcessTree` (`brain.py check`), and optional CLI Agent Pool RPC calls when you enable CAP (`mixed` / `cap-*`).
+- Runs local commands: `git` (read-only queries during core `boot`/`changed`/`validate`, plus isolated worktree/commit/ff-merge operations when opt-in `PB runs` is used), the bundled Python scripts, configured `Verify` commands inside an OS-contained `ProcessTree` (`brain.py check`), and optional CLI Agent Pool RPC calls when you enable CAP (`mixed` / `cap-*`).
 - Reads files inside the current repository. Writes `.project-brain/`, a short pointer block in the project's `AGENTS.md` (plus an existing `CLAUDE.md` / `GEMINI.md`), and the local agent registry `~/.project-brain/agents.json`.
 - Never reads or stores secret credential values.
 - Discovery is not access approval. Unknown or stale quota blocks worker dispatch;

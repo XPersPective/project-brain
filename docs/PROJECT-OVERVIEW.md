@@ -1,4 +1,4 @@
-# Project Brain 4.0.2
+# Project Brain 4.0.3
 
 Git-native project memory, executable tasks, source-bound verification and
 economical orchestration. Python 3.8+, standard library only; project schema 4,
@@ -12,7 +12,7 @@ policy schema 1, opt-in SQLite run ledger schema 1.
   verification (`start`, `check`, `evidence`, `review`, `accept`), `solo` and
   host `native` execution, safe core defaults (`native · parallel (auto) · QRP
   off · BRP off`), single-line `setup ask` → `setup confirm`, inline `policy`
-  flags, `watch` (<25 tokens) and bounded read-only `brief` (≤4 KiB).
+  flags, `board` (default-on zero-token Progress Board), `watch` (<25 tokens) and bounded read-only `brief` (≤4 KiB).
 - **Power features (strictly opt-in):**
   - **CLI Agent Pool (CAP)** (`mixed`, `cap-category`, `cap-catalog`,
     `cap-pinned`): external CLI discovery, auth, quotas, model catalogs and
@@ -36,7 +36,7 @@ All 20 runtime modules under `skills/project-brain/scripts/` are acyclic with
 zero lazy internal imports and Python 3.8+ syntax:
 
 - **Foundation layer:**
-  - `runtime_core.py`: version (`4.0.2`), crash-safe atomic writes (`fsync` +
+  - `runtime_core.py`: version (`4.0.3`), crash-safe atomic writes (`fsync` +
     Windows retry), OS file/project locks, Python 3.8–3.13 UTC ISO parsing,
     bounded JSON loading, safe public/private path checks, secret-scrubbed Git
     runner and `ProcessTree` containment.

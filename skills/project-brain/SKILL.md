@@ -7,20 +7,20 @@ description: >-
   store publishing.
 license: MIT
 metadata:
-  version: 4.0.2
+  version: 4.0.3
   author: XPersPective
 ---
 
-# Project Brain 4.0.2
+# Project Brain 4.0.3
 
 `PB` = `python <this-skill>/scripts/brain.py` (Python 3.8+, stdlib only).
 
 ## 1. Core authority and economy
 
-Use deterministic tools first → cheapest authorized capable worker → lead decision.
-Tools and low-tier (`L`) workers handle scans, callers, routine edits/checks and
-bounded map discovery (≤5 entrypoints, ≤150 words). Read this entry once and only
-relevant references. Never preload histories, full catalogs, every domain, or
+Use deterministic tools → cheapest authorized capable worker → lead decision.
+Tools and `L` workers handle scans, callers, routine edits/checks and bounded
+map discovery (≤5 entrypoints, ≤150 words). Read this entry once and only
+relevant references; never preload histories, full catalogs, all domains, or
 repeat unchanged checks/scans.
 
 User, platform and repository rules govern; source reality beats stale Brain.
@@ -40,8 +40,8 @@ silent paid fallback. Only the user changes `Goal`.
 
 ## 2. Session setup: Core defaults vs Power features
 
-Core Brain runs standalone (`solo` or host `native`, zero external dependencies).
-External CLI agents live exclusively in [CLI Agent Pool](POOL.md) (CAP); legacy
+Core Brain runs standalone (`solo` or host `native`, zero external deps).
+External CLIs live exclusively in [CLI Agent Pool](POOL.md) (CAP); legacy
 `--backend direct` is removed.
 
 | Executor Selection Policy (ESP) | Resources |
@@ -53,22 +53,20 @@ External CLI agents live exclusively in [CLI Agent Pool](POOL.md) (CAP); legacy
 | `cap-category` / `cap-catalog` / `cap-pinned` *(power)* | CAP only |
 
 New implementation session (including "continue"): `PB orient`,
-`PB boot --new-session`, read back unfinished jobs, then `PB setup ask`.
-Safe core defaults: `native · parallel (auto) · QRP off · BRP off`. Present the
-single-line summary and confirm with `PB setup confirm` (or override inline:
-`PB policy --source <src> --schedule parallel|serial --confirm`). Use
-`setup ask --advanced` only when opt-in power features are requested. Workers
-and relay successors inherit confirmed settings. On CAP failure run
-`PB setup recover-cap --role exec|rev`. [WORKFLOW §2](WORKFLOW.md#2-session-and-boot-details).
+`PB boot --new-session`, read back unfinished jobs, then `PB setup ask` (on
+`NO_BRAIN`, see WORKFLOW §7). Core defaults: `native · parallel (auto) · QRP off · BRP off`.
+Present the 1-line summary and wait for user confirmation before `PB setup confirm`
+(or inline `PB policy --source <src> --schedule parallel|serial --confirm`). Use
+`setup ask --advanced` only when power features are requested. Workers/relay
+successors inherit settings. On CAP failure: `PB setup recover-cap --role exec|rev`.
+[WORKFLOW §2](WORKFLOW.md#2-session-and-boot-details).
 
-Same-session questions reuse context then resume `Next` — no boot, reset, or
-history/skill reload. Use `PB watch` for compact status or `PB brief` (≤4 KiB)
-only for missing focus.
+Same-session questions reuse context then resume `Next` (no boot/reset/reloads).
+Use `PB board` for progress, `PB watch` (1-line), or `PB brief` (≤4 KiB) only for missing focus.
 
-- **Progress Board (`İlerleme Panosu` / `PB board`, default `on`):** Echo
-  `PROGRESS_BOARD` lines from `PB` commands verbatim in chat (0 layout tokens).
-  If asked to hide/show it (*"ilerleme panosunu gösterme/göster"*, *"panoyu
-  kapat/aç"*, *"hide/show board"*), run `PB board off` or `PB board on`.
+- **Progress Board (`PB board`, default `on`):** On boot, transitions, or status
+  queries, echo only the latest `PROGRESS_BOARD` block verbatim once per reply
+  (0 layout tokens; never on errors). To hide/show (any language): `PB board off|on`.
 
 ## 3. Work, quality and review
 
@@ -77,9 +75,9 @@ review, §5 checkpoints, §6 audit, §7 adoption) and [QUALITY](QUALITY.md) for
 UI/backend planning or review.
 
 - **Roles:** Lead owns architecture/planning/acceptance; Implementer builds and
-  proves; Reviewer independently audits `MEDIUM`/`HIGH` work (`REV=solo` needs
-  explicit `--self-review`). Initial architecture and critical decisions need
-  ≥1 independent opinion.
+  proves; Reviewer independently audits `MEDIUM`/`HIGH` work (registered via
+  `PB runs` receipt or CAP; `solo` review needs explicit `--self-review`).
+  Initial architecture and critical decisions need ≥1 independent opinion.
 - **Verification:** `score`, `reconcile`, `start`, `check`, `evidence`, `review`,
   `accept`. UI requires `[visual]`, `[interaction]`, `[accessibility]` proof.
   Serious findings, stale proof or pending user feedback block closure.

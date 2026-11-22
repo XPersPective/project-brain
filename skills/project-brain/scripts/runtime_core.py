@@ -25,10 +25,23 @@ import uuid
 
 _LOCK_TLS = threading.local()
 
-VERSION = "4.0.2"
+VERSION = "4.0.3"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
+
+_GENERATED_NOISE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+_GENERATED_NOISE_FILES = frozenset({".DS_Store", "Thumbs.db"})
+_GENERATED_NOISE_EXTS = (".pyc", ".pyo")
+
+
+def is_generated_noise(path):
+    """Return True for ephemeral tool/bytecode noise excluded from digests, dirty checks, and staleness."""
+    parts = path.replace("\\", "/").split("/")
+    if any(p in _GENERATED_NOISE_DIRS for p in parts):
+        return True
+    name = parts[-1] if parts else ""
+    return name in _GENERATED_NOISE_FILES or name.endswith(_GENERATED_NOISE_EXTS)
 
 PRIVATE = re.compile(
     r"(^|/)(?:\.env(?:\.[^/]+)?|auth\.json|credentials?|secrets?|"

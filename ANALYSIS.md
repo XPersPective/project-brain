@@ -1,6 +1,6 @@
-# Project Brain — Comprehensive Audit, Simplification & Verification Record (4.0.2)
+# Project Brain — Comprehensive Audit, Simplification & Verification Record (4.0.3)
 
-- **Baseline Version:** `3.12.0` → **Released Version:** `4.0.2`
+- **Baseline Version:** `3.12.0` → **Released Version:** `4.0.3`
 - **Audit & Verification Dates:** 2026-11-21 – 2026-11-22
 - **Scope:** Multi-cycle architectural, protocol-vs-code, security/authority, concurrency, crash-recovery, UX/context-footprint, real-world E2E, live CAP token A/B benchmark, and companion CAP integration audit of `skills/project-brain/`.
 

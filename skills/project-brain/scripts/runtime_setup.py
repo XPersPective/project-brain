@@ -258,6 +258,7 @@ def apply_defaults(B, root, accepted=False, now=None, timeout=TIMEOUT):
 def recover_cap(B, root, role="exec"):
     """Authorize a new native job when CAP is unavailable; never replay uncertain CAP jobs."""
     with B.checkout_lock(root):
+        RL.require_free_or_director(B, root)
         value = E.require_confirmed(B, root)
         result = E.cap_unavailable(value, role)
         if result["action"] == "CONTINUE_NATIVE" and value[E._role(role)]["source"] != "mixed":

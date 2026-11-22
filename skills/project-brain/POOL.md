@@ -1,4 +1,4 @@
-# CLI Agent Pool integration (Project Brain 4.0.2)
+# CLI Agent Pool integration (Project Brain 4.0.3)
 
 Each CAP account is its own `routeId`; optional director circulation across them
 is the Baton Relay Policy in [RELAY](RELAY.md).

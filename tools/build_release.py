@@ -111,7 +111,13 @@ def main():
     for name in filter(None, names):
         if PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts or name.startswith("dist/"):
             raise ValueError("Invalid tracked release path")
-        if re.search(r"(^|/)(\.env(?:\.|$)|auth\.json$|credentials?(/|$)|secrets?(/|$))|\.(pem|p12|pfx|keystore)$", name, re.I):
+        if re.search(
+            r"(^|/)(?:\.env(?:\.[^/]+)?|auth\.json|credentials?|secrets?|"
+            r"service-account[^/]*|key\.properties|id_rsa|id_ed25519)(/|$)|"
+            r"\.(?:jks|keystore|p8|p12|pfx|pem)$",
+            name,
+            re.I,
+        ):
             raise ValueError("Private path cannot be packaged")
         entries[name] = run(root, "git", "show", ":" + name)
     if "plugin.json" not in entries:
@@ -119,20 +125,47 @@ def main():
     version = json.loads(entries["plugin.json"].decode("utf-8"))["version"]
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise ValueError("Invalid release version")
+    for manifest in ("plugin.json", ".claude-plugin/plugin.json", ".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"):
+        if manifest in entries:
+            json.loads(entries[manifest].decode("utf-8"))
     required = (
         "plugin.json",
         ".claude-plugin/plugin.json",
         "skills/project-brain/SKILL.md",
-        "skills/project-brain/ORCHESTRATION.md",
         "skills/project-brain/WORKFLOW.md",
+        "skills/project-brain/SCHEMAS.md",
+        "skills/project-brain/PROTOCOL.md",
+        "skills/project-brain/QUALITY.md",
+        "skills/project-brain/REFERENCE.md",
+        "skills/project-brain/POOL.md",
+        "skills/project-brain/ORCHESTRATION.md",
+        "skills/project-brain/RECOVERY.md",
+        "skills/project-brain/RELAY.md",
+        "skills/project-brain/references/director-contract.md",
         "skills/project-brain/scripts/brain.py",
+        "skills/project-brain/scripts/migrate.py",
         "skills/project-brain/scripts/runtime_core.py",
         "skills/project-brain/scripts/runtime_scoring.py",
+        "skills/project-brain/scripts/runtime_security.py",
         "skills/project-brain/scripts/runtime_actors.py",
+        "skills/project-brain/scripts/runtime_executor_policy.py",
+        "skills/project-brain/scripts/runtime_protocol.py",
+        "skills/project-brain/scripts/runtime_verify.py",
+        "skills/project-brain/scripts/runtime_context.py",
+        "skills/project-brain/scripts/runtime_reports.py",
         "skills/project-brain/scripts/runtime_runs.py",
+        "skills/project-brain/scripts/runtime_adopt.py",
+        "skills/project-brain/scripts/runtime_agent_pool.py",
+        "skills/project-brain/scripts/runtime_orchestration.py",
+        "skills/project-brain/scripts/runtime_quota_recovery.py",
+        "skills/project-brain/scripts/runtime_relay.py",
+        "skills/project-brain/scripts/runtime_control.py",
+        "skills/project-brain/scripts/runtime_session.py",
+        "skills/project-brain/scripts/runtime_setup.py",
     )
     if any(name not in entries for name in required):
-        raise ValueError("Stage all required source files before packaging")
+        missing_req = [name for name in required if name not in entries]
+        raise ValueError("Stage all required source files before packaging: " + ", ".join(missing_req))
     check_versions(entries, version)
     check_runtime_invariants(entries)
     directory = root / "dist"
@@ -157,12 +190,16 @@ def main():
         observed = run(extracted, sys.executable, "-B", "skills/project-brain/scripts/brain.py", "--version").decode("utf-8").strip()
         if observed != "project-brain " + version + " (schema 4)":
             raise ValueError("Extracted runtime version differs")
-        for subcmd in ("runs", "setup", "policy", "watch"):
+        for subcmd in ("boot", "board", "watch", "validate", "runs", "setup", "policy", "quota", "relay"):
             run(extracted, sys.executable, "-B", "skills/project-brain/scripts/brain.py", subcmd, "--help")
         data = staging.read_bytes()
         checksum = hashlib.sha256(data).hexdigest()
-        output.write_bytes(data)
-        output.with_suffix(".sha256").write_text(checksum + "  " + output.name + "\n", encoding="utf-8")
+        tmp_zip = directory / (output.name + ".tmp")
+        tmp_sha = directory / (output.with_suffix(".sha256").name + ".tmp")
+        tmp_zip.write_bytes(data)
+        tmp_zip.replace(output)
+        tmp_sha.write_text(checksum + "  " + output.name + "\n", encoding="utf-8")
+        tmp_sha.replace(output.with_suffix(".sha256"))
     print(json.dumps({"version": version, "files": len(entries), "sha256": checksum,
                       "package": str(output), "smoke": "extracted version, AST, cycles, budget and CLI help passed"}))
 

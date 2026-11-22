@@ -103,7 +103,10 @@ def digest(B, root, areas):
     files = sorted(
         f
         for f in B.repo_files(root, has_git)
-        if any(B.matches(f, a) for a in areas) and not Core.PRIVATE.search(f) and (root / f).is_file()
+        if any(B.matches(f, a) for a in areas)
+        and not Core.PRIVATE.search(f)
+        and not Core.is_generated_noise(f)
+        and (root / f).is_file()
     )
     if not files:
         raise ValueError("Areas match no files: " + ", ".join(areas))
@@ -256,6 +259,7 @@ def guard(B, root, task, allow_stopping=False, check_session=True):
         raise ValueError("TARGET_PENDING: implementation requires CONFIRMED Target")
     if check_session:
         B.require_session(root, allow_stopping=allow_stopping)
+    return data
 
 
 def inputs(task):
@@ -265,7 +269,7 @@ def inputs(task):
 def task_digest(B, root, task, allow_stopping=False, check_session=True):
     if not enabled(B, root):
         return digest(B, root, task["areas"])
-    guard(B, root, task, allow_stopping=allow_stopping, check_session=check_session)
+    binding = guard(B, root, task, allow_stopping=allow_stopping, check_session=check_session)
     explicit = []
     for pattern in task.get("areas", []) + task.get("inputs", []):
         probe = re.sub(r"\[[^]]*\]|[*?]", "glob", pattern)
@@ -288,12 +292,19 @@ def task_digest(B, root, task, allow_stopping=False, check_session=True):
             if public_cand.is_dir():
                 for path in Core.iter_files(public_cand):
                     sub_rel = path.relative_to(root_abs).as_posix()
+                    if Core.is_generated_noise(sub_rel):
+                        continue
                     pub = Core.public_path(root_abs, sub_rel)
                     if pub.is_file():
                         explicit.append((sub_rel, pub.read_bytes()))
-            elif public_cand.is_file():
+            elif public_cand.is_file() and not Core.is_generated_noise(rel):
                 explicit.append((rel, public_cand.read_bytes()))
-    files_digest, count = digest(B, root, inputs(task))
+    try:
+        files_digest, count = digest(B, root, inputs(task))
+    except ValueError:
+        if not explicit:
+            raise
+        files_digest, count = B.areas_digest([]), len(explicit)
     tools = []
     for cmd in task.get("verify_cmds", []):
         argv = Core.command_argv(cmd)
@@ -308,7 +319,6 @@ def task_digest(B, root, task, allow_stopping=False, check_session=True):
         "tools": tools,
         "configured": B.parse_config(root).get("verification", {}),
     }
-    binding = read_json(record_path(B, root, task["id"], "intent"))
     adrs = {}
     for number in re.findall(r"ADR-(\d+)", task.get("text", "")):
         matched = resolve_adr_files(B, root, number)

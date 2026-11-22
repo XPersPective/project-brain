@@ -23,7 +23,7 @@ Stable policy only — never HEAD, active task, timestamps, model, or test resul
 
 ```yaml
 schema_version: 4
-skill_version: "4.0.2"
+skill_version: "4.0.3"
 protocol_version: "1"
 board: "on"             # optional: "on" (default) | "off" (toggled via `brain.py board on|off`)
 architecture:

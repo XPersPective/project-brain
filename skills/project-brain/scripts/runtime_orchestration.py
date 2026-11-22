@@ -347,6 +347,8 @@ def prepare(B, root, db, directory, tid, kind, backend, resources=(), tiers=None
         if value["status"] not in ("READY", "IN_PROGRESS"):
             raise ValueError("Task is not ready for implementation")
     packet = C.packet(B, root, value, kind)
+    if not packet.get("base"):
+        raise ValueError("Orchestration requires at least one Git commit (HEAD)")
     dirty = [p for p in B.dirty_paths(root) if not p.startswith(B.BRAIN_DIR + "/")]
     if dirty and kind == "EXECUTE":
         raise ValueError("Preserve/checkpoint product edits before isolated dispatch")
@@ -1289,6 +1291,9 @@ def command(B, args):
             }
         finally:
             db.close()
+    if args.action in ("restore", "advance", "cleanup", "rebuild", "reject", "prepare", "submit", "receipt", "verify", "integrate", "cancel"):
+        if hasattr(B, "RL"):
+            B.RL.require_free_or_director(B, root)
     directory = L.directory(B, root)
     if args.action == "restore":
         with effect_lock(directory):

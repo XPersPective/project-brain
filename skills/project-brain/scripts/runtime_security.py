@@ -289,6 +289,8 @@ def scan_staged(B, root, env=None, base=None):
         idx += 1
         if new_mode == "120000":
             raise ValueError("Staged symlink (mode 120000) refused: " + name)
+        if new_mode == "160000":
+            continue  # Git submodule gitlink (commit pointer only; no blob content)
         files.append(name)
     for name in files:
         Core.public_path(root, name)
