@@ -1,4 +1,4 @@
-# Project Brain 4.0.5
+# Project Brain 4.0.6
 
 Git-native project memory, executable tasks, source-bound verification and
 economical orchestration. Python 3.8+, standard library only; project schema 4,
@@ -36,7 +36,7 @@ All 20 runtime modules under `skills/project-brain/scripts/` are acyclic with
 zero lazy internal imports and Python 3.8+ syntax:
 
 - **Foundation layer:**
-  - `runtime_core.py`: version (`4.0.5`), crash-safe atomic writes (`fsync` +
+  - `runtime_core.py`: version (`4.0.6`), crash-safe atomic writes (`fsync` +
     Windows retry), OS file/project locks, Python 3.8–3.13 UTC ISO parsing,
     bounded JSON loading, safe public/private path checks, secret-scrubbed Git
     runner and `ProcessTree` containment.

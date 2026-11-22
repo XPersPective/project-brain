@@ -123,7 +123,7 @@ def read(B, root):
     if not path.is_file() or path.stat().st_size > MAX_RECORD:
         raise ValueError("Relay record exceeds its bound; authority withheld")
     try:
-        state = json.loads(path.read_text(encoding="utf-8"))
+        state = json.loads(path.read_text(encoding="utf-8-sig"))
         valid = (
             isinstance(state, dict)
             and state.get("schema") in (1, SCHEMA)
@@ -1455,8 +1455,22 @@ def recover(B, root, policy, rpc, brain_script=None, now=None, sleep=time.sleep,
         ):
             return dict(view(current), actions=actions + ["relay changed meanwhile; nothing to do"], notify=None)
         stop = _adopt(B, root, current, policy, rpc, now, resolved_candidates=resolved_cands)
+        holder_tid_lock = director.get("task_id")
+        holder_info_lock = observed.get(holder_tid_lock) if holder_tid_lock else None
         if failure:
             _failure(current, failure[0], failure[1])
+        if (
+            plan == "FAILOVER"
+            and holder_info_lock
+            and holder_info_lock.get("state") in TERMINAL_TASK | {"not_found"}
+        ):
+            h_err = str(holder_info_lock.get("error") or holder_info_lock.get("state") or "")
+            if any(word in h_err.upper() for word in HARD):
+                _failure(
+                    current,
+                    {"route": director["route"], "model": director.get("model")},
+                    "director ended: " + h_err,
+                )
         reason = state.get("reason") if plan == "EXHAUSTED" else None
         recent_recovers = 0
         for ev in reversed(current.get("history", [])):
@@ -1478,7 +1492,13 @@ def recover(B, root, policy, rpc, brain_script=None, now=None, sleep=time.sleep,
         holder_tid = director.get("task_id")
         holder_info = observed.get(holder_tid) if holder_tid else None
         holder_terminal = (not holder_tid) or bool(holder_info and holder_info.get("state") in TERMINAL_TASK | {"not_found"})
-        director_failed_hard = bool(hard and failure and failure[0].get("route") == director.get("route"))
+        holder_error = str((holder_info or {}).get("error") or (holder_info or {}).get("state") or "")
+        holder_failed_hard = bool(
+            holder_info
+            and holder_info.get("state") in TERMINAL_TASK | {"not_found"}
+            and any(word in holder_error.upper() for word in HARD)
+        )
+        director_failed_hard = holder_failed_hard or bool(hard and failure and failure[0].get("route") == director.get("route"))
         allow_cur = (plan == "RECOVER" and not hard) or (plan == "FAILOVER" and holder_terminal and not director_failed_hard)
         selection, updates = _select(
             B, root, state, state.get("inherited") or policy, rpc, script, now, sleep, allow_current=allow_cur

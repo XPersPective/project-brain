@@ -270,17 +270,27 @@ def implementers(B, task):
     return set(A.implementers(B, task))
 
 
-def finding_accepted(B, root, severity, reason, owner):
+def finding_accepted(B, root, severity, reason, owner, task_id=None):
     owner_clean = (owner or "").strip()
     if not (reason or "").strip() or not owner_clean:
         return False
     if severity == "QUALITY":
         return owner_clean == "user"
     if severity == "MINOR":
-        return owner_clean == "user" or (
-            bool(re.fullmatch(r"PB-\d{3,}", owner_clean))
-            and (B.bp(root) / "tasks" / (owner_clean + ".md")).is_file()
-        )
+        if owner_clean == "user":
+            return True
+        if not re.fullmatch(r"PB-\d{3,}", owner_clean):
+            return False
+        if task_id and B.norm_id("PB", owner_clean) == B.norm_id("PB", task_id):
+            return False
+        try:
+            owner_file = public_path(root, B.BRAIN_DIR + "/tasks/" + owner_clean + ".md")
+        except ValueError:
+            return False
+        if not owner_file.is_file():
+            return False
+        owner_task = B.parse_task(owner_file)
+        return bool(owner_task and owner_task.get("status") in B.STATUS_VALUES)
     return False
 
 
@@ -292,7 +302,7 @@ def review_status(B, root, task, current, contract, agents_path=None):
     if rev["verdict"] != "PASS":
         return {"valid": False, "rev": rev, "reason": f"verdict {rev['verdict']}"}
     for severity, text_, reason, owner in rev["findings"]:
-        if not finding_accepted(B, root, severity, reason, owner):
+        if not finding_accepted(B, root, severity, reason, owner, task_id=task["id"]):
             return {"valid": False, "rev": rev, "reason": f"unresolved finding {severity}"}
     risk = effective_risk(B, task)
     if risk in ("MEDIUM", "HIGH"):
@@ -417,7 +427,9 @@ def check(B, root, task_id, timeout=None, actor="", rerun=False):
 
 def evidence(B, root, task_id, kind, note, files=(), actor="", criteria=()):
     task = B.find_task(root, task_id)
-    actor = _actor(B, task, actor)
+    if task["status"] not in ("IN_PROGRESS", "REVIEW"):
+        raise ValueError(f"Task {task['id']} is {task['status']}; start it before recording evidence")
+    actor = _actor(B, task, actor or task.get("owner", ""))
     R.guard(B, root, task)
     S.require_clean(note, "evidence note")
     if kind not in B.KINDS or kind == "machine":
@@ -454,6 +466,11 @@ def evidence(B, root, task_id, kind, note, files=(), actor="", criteria=()):
         )
     hashed = []
     for name in files:
+        if "," in name:
+            raise ValueError("Evidence file path cannot contain ',': " + name)
+        norm_low = name.replace("\\", "/").lower()
+        if norm_low.startswith(B.BRAIN_DIR + "/.cache/") or norm_low.startswith(B.BRAIN_DIR + "/migration-backup/"):
+            raise ValueError("Private/ephemeral Brain cache or backup file cannot be cited as Evidence: " + name)
         path = public_path(root, name)
         if not path.is_file():
             raise ValueError("Evidence file missing: " + name)
@@ -489,7 +506,12 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, s
             f"FAIL reviewer must be named and must not have implemented {task['id']} "
             "(no Owner); a session never reviews its own work (unless REV mode is solo with --self-review)"
         ]
-    if not allow_self:
+    if allow_self:
+        if reviewer != task.get("owner"):
+            return 2, [
+                f"FAIL --self-review requires --reviewer to match Owner ({task.get('owner')}) of {task['id']}"
+            ]
+    else:
         identity = A.canonical_identity(reviewer, agents_path)
         if any(identity == A.canonical_identity(imp, agents_path) for imp in imps):
             if modes.get("rev") == "solo":
@@ -525,9 +547,9 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, s
                 'Finding must be "BLOCKER|MAJOR|QUALITY|MINOR: text" with optional '
                 '" | accepted: reason | owner: user|PB-NNN" (QUALITY: owner user only)'
             )
-        if (m.group(3) is not None or m.group(4) is not None) and not finding_accepted(B, root, m.group(1), m.group(3), m.group(4)):
+        if (m.group(3) is not None or m.group(4) is not None) and not finding_accepted(B, root, m.group(1), m.group(3), m.group(4), task_id=task["id"]):
             raise ValueError(
-                'Accepted MINOR owner must be "user" or an open follow-up task PB-NNN (with nonempty reason); '
+                'Accepted MINOR owner must be "user" or another open follow-up task PB-NNN (with nonempty reason); '
                 "an accepted QUALITY gap is owned by the user only; BLOCKER/MAJOR findings cannot be waived"
             )
     value, _ = task_digest(B, root, task)
@@ -544,7 +566,7 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, s
         blocking_findings = [
             f for f in findings
             if (m := FINDING_RE.match("- finding " + f.strip()))
-            and not finding_accepted(B, root, m.group(1), m.group(3), m.group(4))
+            and not finding_accepted(B, root, m.group(1), m.group(3), m.group(4), task_id=task["id"])
         ]
         has_open_items = any(not it.get("done") for it in task.get("items", []))
         if verdict == "PASS" and not blocking_findings:
@@ -704,7 +726,7 @@ def accept(B, root, task_id, actor="", agents_path=None, self_review=False):
         if rev["verdict"] != "PASS":
             problems.append("review verdict BLOCKED")
         for severity, text_, reason, owner in rev["findings"]:
-            if not finding_accepted(B, root, severity, reason, owner):
+            if not finding_accepted(B, root, severity, reason, owner, task_id=task["id"]):
                 problems.append(f"unresolved finding {severity}: {text_[:60]}")
     if problems:
         return 2, [f"BLOCKED {task['id']}"] + [f"  - {p}" for p in problems + missing]

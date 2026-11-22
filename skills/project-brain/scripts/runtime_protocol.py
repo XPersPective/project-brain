@@ -182,10 +182,10 @@ def intent(B, root, task=None):
     root_abs = Path(root).resolve()
     directory = Core.public_path(root_abs, B.BRAIN_DIR + "/target")
     if directory.is_dir():
-        domains = set(task.get("domains", [])) if task else set()
+        domains = {B.norm_domain(d) for d in task.get("domains", [])} if task else set()
         for path in sorted(directory.glob("*.md")):
             Core.public_path(root_abs, path.relative_to(root_abs).as_posix())
-            if not domains or path.stem in domains:
+            if not domains or B.norm_domain(path.stem) in domains:
                 selected["domain:" + path.stem] = B.read(path) or ""
     return fingerprint(
         {k: re.sub(r"\s+", " ", re.sub(r"\[[ xX]\]", "[]", v)).strip() for k, v in selected.items()}
@@ -210,18 +210,24 @@ def reconcile(B, root, task, note, independent=False, keep_evidence=False):
         raise ValueError("Confirm Target before reconciling implementation work")
     if not independent:
         goal = " ".join(B.sections(B.read(B.bp(root) / "target.md") or "").get("goal", [])).strip()
-        if not goal or re.search(r"<[^>]+>", goal):
+        if (
+            not goal
+            or any(p in goal for p in B.PLACEHOLDERS)
+            or re.search(r"<(?:todo|tbd|placeholder|fill\b|describe\b|your\b)[^>]*>", goal, re.I)
+        ):
             raise ValueError("Implementation requires the actual user Goal, not an empty/scaffold target")
     risk = effective_risk(B, task)
+    path = record_path(B, root, task["id"], "intent")
+    old = read_json(path)
+    projected = dict(task, risk=risk)
+    con = B.contract(projected)
+    if keep_evidence and (not old or old.get("contract") != con):
+        raise ValueError("--keep-evidence requires an existing unchanged task contract")
     if task.get("risk") != risk:
         B.set_header(task["file"], "Risk", risk)
         task.update(B.find_task(root, task["id"]))
-    path = record_path(B, root, task["id"], "intent")
-    old = read_json(path)
-    con = B.contract(task)
+        con = B.contract(task)
     epoch = old.get("epoch") if keep_evidence and old.get("contract") == con else fingerprint([intent(B, root, task), con])
-    if keep_evidence and (not old or old.get("contract") != con):
-        raise ValueError("--keep-evidence requires an existing unchanged task contract")
     data = {
         "protocol": PROTOCOL,
         "intent": intent(B, root, task),
@@ -270,35 +276,59 @@ def task_digest(B, root, task, allow_stopping=False, check_session=True):
     if not enabled(B, root):
         return digest(B, root, task["areas"])
     binding = guard(B, root, task, allow_stopping=allow_stopping, check_session=check_session)
+    if not task.get("areas"):
+        raise ValueError("Task has no Areas; evidence cannot be bound to source")
     explicit = []
     for pattern in task.get("areas", []) + task.get("inputs", []):
         probe = re.sub(r"\[[^]]*\]|[*?]", "glob", pattern)
         Core.public_path(root, probe)
         if Core.PRIVATE.search(pattern):
             raise ValueError("Private verification input refused; use the approved external binding")
-        architecture_input = pattern == B.BRAIN_DIR + "/current.md" or pattern.startswith(B.BRAIN_DIR + "/current/")
-        if pattern.startswith(B.BRAIN_DIR + "/") and not pattern.startswith(B.BRAIN_DIR + "/decisions/") and not architecture_input:
+        pat_low = pattern.replace("\\", "/").lower()
+        architecture_input = pat_low == B.BRAIN_DIR + "/current.md" or pat_low.startswith(B.BRAIN_DIR + "/current/")
+        if pat_low.startswith(B.BRAIN_DIR + "/") and not pat_low.startswith(B.BRAIN_DIR + "/decisions/") and not architecture_input:
             raise ValueError("Brain state is bound separately; do not include mutable evidence/cache as verification input")
     state_inputs = [
         pattern
         for pattern in task.get("areas", [])
-        if pattern == B.BRAIN_DIR + "/current.md" or pattern.startswith(B.BRAIN_DIR + "/current/")
+        if pattern.replace("\\", "/").lower() == B.BRAIN_DIR + "/current.md"
+        or pattern.replace("\\", "/").lower().startswith(B.BRAIN_DIR + "/current/")
+        or pattern.replace("\\", "/").lower().startswith(B.BRAIN_DIR + "/decisions/")
     ]
+    state_input_set = set(state_inputs)
+    area_state_matched = False
     root_abs = Path(root).resolve()
     for pattern in list(dict.fromkeys(task.get("inputs", []) + state_inputs)):
+        from_area_state = pattern in state_input_set
         for candidate in root_abs.glob(pattern):
             rel = candidate.relative_to(root_abs).as_posix()
+            if Core.PRIVATE.search(rel) or Core.is_generated_noise(rel):
+                continue
             public_cand = Core.public_path(root_abs, rel)
             if public_cand.is_dir():
                 for path in Core.iter_files(public_cand):
                     sub_rel = path.relative_to(root_abs).as_posix()
-                    if Core.is_generated_noise(sub_rel):
+                    if Core.PRIVATE.search(sub_rel) or Core.is_generated_noise(sub_rel):
                         continue
                     pub = Core.public_path(root_abs, sub_rel)
                     if pub.is_file():
                         explicit.append((sub_rel, pub.read_bytes()))
-            elif public_cand.is_file() and not Core.is_generated_noise(rel):
+                        if from_area_state:
+                            area_state_matched = True
+            elif public_cand.is_file():
                 explicit.append((rel, public_cand.read_bytes()))
+                if from_area_state:
+                    area_state_matched = True
+    non_brain_areas = [p for p in task.get("areas", []) if not p.startswith(B.BRAIN_DIR + "/")]
+    area_repo_matched = False
+    if non_brain_areas:
+        try:
+            digest(B, root, non_brain_areas)
+            area_repo_matched = True
+        except ValueError:
+            area_repo_matched = False
+    if not area_repo_matched and not area_state_matched:
+        raise ValueError("Areas match no files: " + ", ".join(task["areas"]))
     try:
         files_digest, count = digest(B, root, inputs(task))
     except ValueError:
@@ -319,8 +349,15 @@ def task_digest(B, root, task, allow_stopping=False, check_session=True):
         "tools": tools,
         "configured": B.parse_config(root).get("verification", {}),
     }
+    spec_secs = B.sections(task.get("text", ""))
+    spec_body = "\n".join(
+        line
+        for sec_name, sec_lines in spec_secs.items()
+        if sec_name not in ("evidence", "review", "resume")
+        for line in sec_lines
+    )
     adrs = {}
-    for number in re.findall(r"ADR-(\d+)", task.get("text", "")):
+    for number in re.findall(r"ADR-(\d+)", spec_body):
         matched = resolve_adr_files(B, root, number)
         adrs[number] = "\n".join(B.read(p) or "" for p in matched) if matched else None
     if task.get("secrets", "none") != "none":

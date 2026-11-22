@@ -267,7 +267,7 @@ def git_paths(root, *args):
 
 def read(path):
     try:
-        return Path(path).read_text(encoding="utf-8", errors="replace")
+        return Path(path).read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return None
 
@@ -532,13 +532,29 @@ def _cached_task_digest(root, task, digest_cache=None):
     return res
 
 
-def _is_locally_done(root, task):
-    """True when a task file is DONE with valid evidence (started Protocol-1 tasks require `- accept: DONE`)."""
+def _is_committed_done(root, task):
+    """True when a committed task snapshot is DONE with valid evidence (started/executable Protocol-1 tasks require `- accept: DONE`)."""
     if task.get("status") != "DONE" or not task.get("has_evidence"):
         return False
     ev_lines = task.get("evidence_lines", [])
-    if any(line.startswith("- start:") for line in ev_lines) and R.enabled(sys.modules[__name__], root):
-        return any(ACCEPT_RE.match(line) for line in ev_lines)
+    if any(ACCEPT_RE.match(line) for line in ev_lines):
+        return True
+    if R.enabled(sys.modules[__name__], root) and (
+        any(line.startswith("- start:") for line in ev_lines)
+        or bool(task.get("owner"))
+        or (bool(task.get("areas")) and bool(task.get("verify_cmds")))
+    ):
+        return False
+    return True
+
+
+def _is_locally_done(root, task, digest_cache=None):
+    """True when a task file on disk is DONE with intact evidence (Protocol-1 accepted tasks must still match digest/contract)."""
+    if not _is_committed_done(root, task):
+        return False
+    ev_lines = task.get("evidence_lines", [])
+    if any(ACCEPT_RE.match(line) for line in ev_lines):
+        return _done_task_intact(root, task, digest_cache=digest_cache)
     return True
 
 
@@ -651,13 +667,32 @@ def brain_exists(root):
 
 
 def set_headers(path, updates):
-    """Update or insert header fields at the top of a task file atomically."""
+    """Update or insert header fields at the top of a task file atomically, fence-aware."""
     text = read(path) or ""
     lines = text.splitlines()
-    end_head = next((i for i, l in enumerate(lines) if l.startswith("## ")), len(lines))
+    headings = list(Core.iter_markdown_headings(lines))
+    end_head = headings[0][0] if headings else len(lines)
     remaining = dict(updates)
     new_head = []
+    fence = None
+    first_fence_idx = None
     for line in lines[:end_head]:
+        fm = Core._FENCE_RE.match(line)
+        if fm:
+            tok = fm.group(1)
+            rest = line[fm.end():]
+            if fence is None:
+                if not (tok[0] == "`" and "`" in rest):
+                    fence = (tok[0], len(tok))
+                    if first_fence_idx is None:
+                        first_fence_idx = len(new_head)
+            elif tok[0] == fence[0] and len(tok) >= fence[1] and not rest.strip():
+                fence = None
+            new_head.append(line)
+            continue
+        if fence is not None:
+            new_head.append(line)
+            continue
         m = HEADER_RE.match(line.strip())
         if m:
             raw_k = m.group(1)
@@ -669,7 +704,7 @@ def set_headers(path, updates):
                 continue
         new_head.append(line)
     if remaining:
-        insert_at = len(new_head)
+        insert_at = first_fence_idx if first_fence_idx is not None else len(new_head)
         while insert_at > 0 and not new_head[insert_at - 1].strip():
             insert_at -= 1
         for k, v in remaining.items():
@@ -712,12 +747,29 @@ def parse_task(path, text=None):
         return None
     sec = sections(text)
     head = {}
+    title = path.stem
+    title_found = False
+    fence = None
     for line in sec[""]:
+        fm = Core._FENCE_RE.match(line)
+        if fm:
+            tok = fm.group(1)
+            rest = line[fm.end():]
+            if fence is None:
+                if not (tok[0] == "`" and "`" in rest):
+                    fence = (tok[0], len(tok))
+            elif tok[0] == fence[0] and len(tok) >= fence[1] and not rest.strip():
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        if not title_found and line.startswith("# "):
+            title = line[2:].strip()
+            title_found = True
         m = HEADER_RE.match(line.strip())
         if m:
             key = m.group(1).lower()
             head.setdefault(HEADER_ALIAS.get(key, key), m.group(2).strip())
-    title = next((l[2:].strip() for l in sec[""] if l.startswith("# ")), path.stem)
     title = re.sub(r"^PB-\d+\s*[—–-]\s*", "", title)
     raw = head.get("status") or first_line(sec.get("status", []))
     m = STATUS_RE.match(raw)
@@ -1026,7 +1078,7 @@ def closed_ids(root, sha, body):
             present.add(tid)
             if tid in ids:
                 task = parse_task(Path(p), git(root, "show", f"{sha}:{p}") or "")
-                if task["status"] == "DONE" and task["has_evidence"]:
+                if _is_committed_done(root, task):
                     recorded.add(tid)
     return (ids - present) | recorded
 
@@ -1063,9 +1115,11 @@ def legacy_kind(root):
     """'v0' (only PROJECT_BRAIN.md), 'v<N>' (.project-brain schema < 4), or None."""
     if brain_exists(root):
         v = str(parse_config(root).get("schema_version", "")).strip()
-        if (bp(root) / "migration-backup" / LEGACY_FILE).exists() and (not v.isdigit() or int(v) < SCHEMA):
+        if v.isdigit():
+            return None if int(v) >= SCHEMA else f"v{v}"
+        if (Path(root) / LEGACY_FILE).exists() or (bp(root) / "migration-backup" / LEGACY_FILE).exists():
             return "v0"
-        return None if v.isdigit() and int(v) >= SCHEMA else f"v{v or '?'}"
+        return "v?"
     return "v0" if (Path(root) / LEGACY_FILE).exists() else None
 
 
@@ -1205,13 +1259,19 @@ def detect_commands(root):
 def committed_exact(root, path):
     """Current file and index both match a recoverable HEAD blob (including filters)."""
     try:
-        rel = Path(path).relative_to(root).as_posix()
-        file = Core.public_path(root, rel)
+        root_abs = Path(root).absolute()
+        p = Path(path)
+        p_abs = p if p.is_absolute() else (root_abs / p)
+        try:
+            rel = p_abs.relative_to(root_abs).as_posix()
+        except ValueError:
+            rel = p_abs.relative_to(root_abs.resolve()).as_posix()
+        file = Core.public_path(root_abs, rel)
         if not file.is_file():
             return False
-        head = git(root, "rev-parse", "--verify", "HEAD:" + rel)
-        index = git(root, "rev-parse", "--verify", ":" + rel)
-        actual = git(root, "hash-object", "--path=" + rel, rel)
+        head = git(root_abs, "rev-parse", "--verify", "HEAD:" + rel)
+        index = git(root_abs, "rev-parse", "--verify", ":" + rel)
+        actual = git(root_abs, "hash-object", "--path=" + rel, rel)
         return bool(head and head == index == actual)
     except (ValueError, OSError):
         return False
@@ -1225,7 +1285,7 @@ def watch_status(root, heal=False):
     total_tasks = len(tasks)
     # Match boot & brief: IN_PROGRESS takes precedence over REVIEW.
     active = next((t for st in ("IN_PROGRESS", "REVIEW") for t in tasks if t["status"] == st), None)
-    done_count = sum(1 for t in tasks if t["status"] == "DONE")
+    done_count = sum(1 for t in tasks if _is_locally_done(root, t))
     left_count = total_tasks - done_count
     rem_pct = int(round((left_count / total_tasks * 100))) if total_tasks > 0 else 0
     cur_str = "none"
@@ -1285,19 +1345,20 @@ def gc_brain(root, has_git=None, completed=None):
         return []
     if completed is None:
         _, completed = history_task_ids(root)
+    root_abs = Path(root).resolve()
     removed = []
-    for task in list_tasks(root):
-        if task["status"] == "DONE" and task["has_evidence"] and task["id"] in completed and committed_exact(root, task["file"]):
+    for task in list_tasks(root_abs):
+        if _is_committed_done(root_abs, task) and task["id"] in completed and committed_exact(root_abs, task["file"]):
             try:
                 task["file"].unlink()
                 removed.append(f"tasks/{task['id']}.md")
             except FileNotFoundError:
                 pass
-    retained = {t["id"] for t in list_tasks(root)}
+    retained = {t["id"] for t in list_tasks(root_abs)}
     closed = completed - retained
     active_checkpoints = set()
     try:
-        st = RL.read(sys.modules[__name__], root)
+        st = RL.read(sys.modules[__name__], root_abs)
         if st:
             for cp in ((st.get("pending") or {}).get("checkpoint"), st.get("last_checkpoint")):
                 if cp and cp.get("path"):
@@ -1306,7 +1367,6 @@ def gc_brain(root, has_git=None, completed=None):
                         active_checkpoints.add(parts[2])
     except (ValueError, OSError):
         pass
-    root_abs = Path(root).resolve()
     ev_root = Core.public_path(root_abs, BRAIN_DIR + "/evidence")
     if ev_root.is_dir():
         for directory in sorted(ev_root.iterdir()):
@@ -1327,7 +1387,7 @@ def gc_brain(root, has_git=None, completed=None):
                         break
                 if has_link:
                     continue
-                if all(committed_exact(root, f) for f in files):
+                if all(committed_exact(root_abs, f) for f in files):
                     shutil.rmtree(directory)
                     removed.append(f"evidence/{directory.name}/")
             except (ValueError, OSError):
@@ -1375,6 +1435,14 @@ def _set_config_scalar(root, key, value):
     pat = re.compile(rf"^{re.escape(key)}:\s*.*$")
     for idx, line in enumerate(lines):
         if pat.match(line):
+            after = line.split(":", 1)[1].split("#", 1)[0].strip()
+            if not after:
+                for nxt in lines[idx + 1:]:
+                    if not nxt.strip() or nxt.lstrip().startswith("#"):
+                        continue
+                    if nxt[:1] in (" ", "\t"):
+                        raise ValueError(f"config.yaml: `{key}` is a YAML section, cannot set scalar")
+                    break
             lines[idx] = rendered
             write_atomic(cfg_path, "\n".join(lines) + "\n")
             return
@@ -1435,12 +1503,12 @@ def board_lines(root, focus_id=None, all_tasks=None, hist_done=None, digest_cach
         done_tampered = False
         done_unproven = False
         if st == "DONE":
-            if not _is_locally_done(root, t):
-                is_done, done_unproven = False, True
-            elif has_accept and not _done_task_intact(root, t, digest_cache=digest_cache):
+            if _is_locally_done(root, t, digest_cache=digest_cache):
+                is_done = True
+            elif has_accept:
                 is_done, done_tampered = False, True
             else:
-                is_done = True
+                is_done, done_unproven = False, True
         else:
             is_done = False
         if is_done:
@@ -1649,8 +1717,9 @@ def cmd_boot(root, maintain=True, new_session=False):
         sample = ", ".join(gc_removed[:10])
         suffix = f" (+{len(gc_removed) - 10} more)" if len(gc_removed) > 10 else ""
         auto_mig_notes.append(f"GC_CLEANUP: removed {sample}{suffix}")
+    digest_cache = {}
     all_tasks = list_tasks(root)
-    tasks = [t for t in all_tasks if not _is_locally_done(root, t)]
+    tasks = [t for t in all_tasks if not _is_locally_done(root, t, digest_cache=digest_cache)]
     open_ids = {t["id"] for t in tasks}
     notes, state = list(auto_mig_notes), None
     other = []
@@ -1668,7 +1737,13 @@ def cmd_boot(root, maintain=True, new_session=False):
         notes.append(f"several IN_PROGRESS: {', '.join(t['id'] for t in ip)}: keep one, set the rest READY")
     if kept:
         notes.append(f"finished task files still present: {', '.join(kept)}: retain until evidence is committed (or while Git is unavailable)")
-    unproven = [t["id"] for t in tasks if t["status"] == "DONE"]
+    tampered_done = [
+        t["id"] for t in tasks
+        if t["status"] == "DONE" and any(ACCEPT_RE.match(l) for l in t.get("evidence_lines", []))
+    ]
+    unproven = [t["id"] for t in tasks if t["status"] == "DONE" and t["id"] not in tampered_done]
+    if tampered_done:
+        notes.append(f"DONE modified after accept (reverify): {', '.join(tampered_done)}: source or spec changed after accept")
     if unproven:
         notes.append(f"DONE without Evidence: {', '.join(unproven)}: verify or reopen; these tasks remain unfinished")
     if legacy:
@@ -1689,8 +1764,7 @@ def cmd_boot(root, maintain=True, new_session=False):
         notes.append("READBACK_FIRST unresolved external operations: " + ext_sample + ext_more)
 
     active = ip[0] if ip else (rev_tasks[0] if rev_tasks else None)
-    done_tasks = [t for t in all_tasks if _is_locally_done(root, t)]
-    digest_cache = {}
+    done_tasks = [t for t in all_tasks if _is_locally_done(root, t, digest_cache=digest_cache)]
     intact_done_tasks = []
 
     stale, unmapped, done, recent, since_audit = {}, [], set(), [], 0
@@ -2076,6 +2150,9 @@ def cmd_new(root, title, depends, risk, priority=None, tier=None):
     if not brain_exists(root):
         print("NO_BRAIN: run `init` first")
         return 3
+    if not isinstance(title, str) or not title.strip() or any(ord(c) < 32 for c in title):
+        raise ValueError("Task title must be one nonempty line without control characters")
+    title = title.strip()
     with checkout_lock(root):
         RL.require_free_or_director(sys.modules[__name__], root)
         tdir = Core.public_path(root, BRAIN_DIR + "/tasks")
@@ -2114,6 +2191,8 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
     if not brain_exists(root):
         print("NO_BRAIN")
         return 3
+    if takeover and any(ord(c) < 32 for c in takeover):
+        raise ValueError("--takeover reason must be one line without control characters")
     with checkout_lock(root):
         task = find_task(root, task_id)
         actor = agent_id(agent, "--agent")
@@ -2243,16 +2322,20 @@ def cmd_validate(root):
         if n > BUDGETS[key]:
             warns.append(f"{name}: {n} lines > {BUDGETS[key]}")
 
+    digest_cache = {}
     all_tasks = list_tasks(root)
-    tasks = [t for t in all_tasks if not _is_locally_done(root, t)]
+    tasks = [t for t in all_tasks if not _is_locally_done(root, t, digest_cache=digest_cache)]
     ids = {t["id"] for t in tasks}
     every, completed = history_task_ids(root) if has_git else (set(), set())
-    completed |= {t["id"] for t in all_tasks if _is_locally_done(root, t)}
+    completed |= {t["id"] for t in all_tasks if _is_locally_done(root, t, digest_cache=digest_cache)}
     if len({t["id"] for t in all_tasks}) != len(all_tasks):
         fails.append("duplicate task IDs (including differently padded filenames)")
     for t in all_tasks:
-        if t["status"] == "DONE" and not _is_locally_done(root, t):
-            warns.append(f"{t['id']}: finished task file kept without valid accept/Evidence; verify before checkpointing")
+        if t["status"] == "DONE" and not _is_locally_done(root, t, digest_cache=digest_cache):
+            if any(ACCEPT_RE.match(l) for l in t.get("evidence_lines", [])):
+                warns.append(f"{t['id']}: DONE task no longer matches its recorded accept digest/contract; reverify or reopen")
+            else:
+                warns.append(f"{t['id']}: finished task file kept without valid accept/Evidence; verify before checkpointing")
     if len(tasks) > BUDGETS["open_tasks"]:
         warns.append(f"{len(tasks)} open tasks > {BUDGETS['open_tasks']} (merge or defer distant work)")
     ip = [t["id"] for t in tasks if t["status"] == "IN_PROGRESS"]
@@ -2434,6 +2517,8 @@ def _resolve_root_and_task(pos1, pos2, default_root="."):
         return Path(pos1).resolve(), None
     if pos1 and not pos2:
         return Path(default_root).resolve(), pos1
+    if pos1 and not Path(pos1).is_dir() and pos2 and Path(pos2).is_dir():
+        return Path(pos2).resolve(), pos1
     return Path(pos1 or default_root).resolve(), pos2
 
 
@@ -2742,6 +2827,9 @@ def main():
             with checkout_lock(root):
                 RL.require_free_or_director(B_mod, root)
                 if a.cmd == "protocol":
+                    M.require_supported(root)
+                    if legacy_kind(root):
+                        raise ValueError("Migrate legacy Brain (`migrate --apply`) before changing protocol version")
                     _set_config_scalar(root, "protocol_version", "1")
                     print("PROTOCOL: " + ("1" if R.enabled(B_mod, root) else "0"))
                 else:

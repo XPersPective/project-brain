@@ -25,7 +25,7 @@ import uuid
 
 _LOCK_TLS = threading.local()
 
-VERSION = "4.0.5"
+VERSION = "4.0.6"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -349,7 +349,7 @@ def read_json(path, max_bytes=1024 * 1024, strict_constants=True, unique_keys=Fa
     if unique_keys:
         kwargs["object_pairs_hook"] = _unique_pairs
     try:
-        data = json.loads(raw.decode("utf-8"), **kwargs)
+        data = json.loads(raw.decode("utf-8-sig"), **kwargs)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise ValueError("Malformed JSON in %s: %s" % (path.name, exc)) from exc
     if expect_dict and not isinstance(data, dict):

@@ -774,6 +774,318 @@ def check_cycle2_authority_and_security_regressions():
         assert rc_h4 == 0 and "SCAN PASS:" in out_h4, out_h4
 
 
+def check_v406_redteam_regressions():
+    """Permanent regression suite covering all 22 Red-Team findings fixed in 4.0.6."""
+    import runtime_adopt as AD
+
+    with tempfile.TemporaryDirectory(prefix="pb-v406-rt-") as tmp:
+        # 1. Typo'd Areas must fail task_digest even when DEFAULT_INPUTS (AGENTS.md) exists
+        r1 = Path(tmp) / "rt-areas"
+        r1.mkdir()
+        make_project(r1, legacy=False)
+        B.write_atomic(B.bp(r1) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nReturn Result<T, E> and render <Modal>.\n")
+        assert run_cli(r1, "policy", "--source", "solo", "--schedule", "serial", "--confirm")[0] == 0
+        # Finding #18: Technical angle brackets in Goal work; --keep-evidence validates BEFORE mutating Risk
+        t1_path = B.bp(r1) / "tasks/PB-001.md"
+        orig_t1 = B.read(t1_path)
+        B.write_atomic(t1_path, orig_t1.replace("Areas: `src/**`", "Areas: `src/typo_nonexistent/**`"))
+        assert run_cli(r1, "reconcile", "PB-001", "--note", "Generic Result<T, E> goal allowed")[0] == 0
+        try:
+            R.task_digest(B, r1, B.find_task(r1, "PB-001"))
+            raise AssertionError("Typo'd Areas should fail task_digest even when AGENTS.md exists")
+        except ValueError as exc:
+            assert "Areas match no files" in str(exc), exc
+        # Verify --keep-evidence fails WITHOUT mutating Risk on disk
+        B.write_atomic(t1_path, orig_t1.replace("1. Read the source.", "1. Edit `src/a.py` auth migration."))
+        before_raw = B.read(t1_path)
+        try:
+            R.reconcile(B, r1, B.find_task(r1, "PB-001"), "keep check", keep_evidence=True)
+            raise AssertionError("keep_evidence should fail when contract changed")
+        except ValueError:
+            pass
+        assert B.read(t1_path) == before_raw, "Failed reconcile --keep-evidence mutated task file!"
+
+        # 2. ADR-001 in Evidence/Review notes must NOT self-invalidate task_digest (#8)
+        #    AND evidence defaults actor, enforces status, rejects comma in --file (#12)
+        #    AND --self-review checks reviewer == owner at review time (#13)
+        #    AND Inputs glob skips .env (#21)
+        #    AND R.intent normalizes domain filenames (#14)
+        r2 = Path(tmp) / "rt-verify"
+        r2.mkdir()
+        make_project(r2, legacy=False)
+        B.write_atomic(r2 / "config/app.txt", "ok\n")
+        B.write_atomic(r2 / "config/.env", "SECRET=1\n")
+        B.write_atomic(B.bp(r2) / "decisions/ADR-001.md", "# ADR-001\nUse tokens.\n")
+        B.write_atomic(B.bp(r2) / "target/User_Auth.md", "# User Auth\nStrong auth.\n")
+        B.write_atomic(B.bp(r2) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nDeliver <Modal> flow.\n")
+        t2_path = B.bp(r2) / "tasks/PB-001.md"
+        B.write_atomic(
+            t2_path,
+            "# PB-001 — Verify Flow\nStatus: READY\nPriority: P2\nTier: L\nRisk: MEDIUM\nOwner:\nDepends: -\n"
+            "Areas: `src/a.py`\nInputs: `config/**`\nDomains: `user-auth`\n\n"
+            "## Objective\nCheck flow.\n\n## Steps\n1. Edit `src/a.py`.\n\n"
+            "## Acceptance\n- [ ] [machine] unit test passes\n- [ ] [integration] workflow step succeeds\n\n"
+            "## Verify\n- `python -c \"assert True\"`\n\n## Evidence\n\n## Review\n",
+        )
+        assert run_cli(r2, "policy", "--source", "solo", "--schedule", "serial", "--confirm")[0] == 0
+        # Domain stem User_Auth normalized to user-auth -> included in R.intent
+        i_before = R.intent(B, r2, B.find_task(r2, "PB-001"))
+        B.write_atomic(B.bp(r2) / "target/User_Auth.md", "# User Auth\nChanged requirement.\n")
+        i_after = R.intent(B, r2, B.find_task(r2, "PB-001"))
+        assert i_before != i_after, "R.intent failed to normalize target/User_Auth.md"
+        assert run_cli(r2, "reconcile", "PB-001", "--note", "Confirmed")[0] == 0
+        # Evidence refused before start (status=READY)
+        rc_pre_ev, _ = run_cli(r2, "evidence", "PB-001", "--kind", "integration", "--note", "service ok")
+        assert rc_pre_ev != 0
+        rc_st2, out_st2 = run_cli(r2, "start", "PB-001", "--agent", "lead")
+        assert rc_st2 == 0, out_st2
+        dig_before, _ = R.task_digest(B, r2, B.find_task(r2, "PB-001"))
+        # Evidence without --as defaults to Owner; mentioning ADR-001 does NOT change digest
+        rc_ev, out_ev = run_cli(r2, "evidence", "PB-001", "--kind", "integration", "--note", "matches ADR-001 boundary")
+        assert rc_ev == 0, out_ev
+        dig_after, _ = R.task_digest(B, r2, B.find_task(r2, "PB-001"))
+        assert dig_before == dig_after, "Mentioning ADR-001 in Evidence self-invalidated task_digest!"
+        # Evidence rejects comma in --file
+        B.write_atomic(r2 / "shot,1.txt", "trace\n")
+        rc_comma, out_comma = run_cli(r2, "evidence", "PB-001", "--kind", "integration", "--note", "ok", "--file", "shot,1.txt")
+        assert rc_comma != 0 and "," in out_comma, out_comma
+        # --self-review rejects mismatched reviewer alias at review time (#13)
+        rc_sr_bad, out_sr_bad = run_cli(r2, "review", "PB-001", "--reviewer", "other-alias", "--verdict", "PASS", "--self-review")
+        assert rc_sr_bad == 2 and "match Owner" in out_sr_bad, out_sr_bad
+        # Matching owner succeeds and mentioning ADR-001 in review finding does not change digest
+        assert run_cli(r2, "check", "PB-001")[0] == 0
+        rc_sr_ok, out_sr_ok = run_cli(r2, "review", "PB-001", "--reviewer", "lead", "--verdict", "PASS", "--self-review", "--finding", "MINOR: see ADR-001 | accepted: tracked | owner: user")
+        assert rc_sr_ok == 0, out_sr_ok
+        assert R.task_digest(B, r2, B.find_task(r2, "PB-001"))[0] == dig_before
+        # Complete acceptance + accept, then tamper source -> ALL views must agree PB-001 is NOT done (#9)
+        B.write_atomic(t2_path, B.read(t2_path).replace("- [ ]", "- [x]"))
+        rc_acc, out_acc = run_cli(r2, "accept", "PB-001", "--self-review")
+        assert rc_acc == 0 and "DONE PB-001" in out_acc, out_acc
+        B.write_atomic(
+            B.bp(r2) / "tasks/PB-002.md",
+            "# PB-002 — Downstream\nStatus: READY\nPriority: P2\nTier: L\nRisk: LOW\nDepends: PB-001\nAreas: `src/a.py`\n\n"
+            "## Objective\nNext.\n\n## Steps\n1. Edit `src/a.py`.\n\n## Acceptance\n- [ ] [machine] ok\n\n## Verify\n- `python -c \"assert True\"`\n",
+        )
+        assert run_cli(r2, "reconcile", "PB-002", "--note", "ok")[0] == 0
+        # Tamper src/a.py after PB-001 accept
+        B.write_atomic(r2 / "src/a.py", "x = 999\n")
+        assert not B._is_locally_done(r2, B.find_task(r2, "PB-001"))
+        rc_b, out_b = run_cli(r2, "boot")
+        assert rc_b == 0 and "PLAN: 2 open, 0 done" in out_b and "DONE modified after accept" in out_b, out_b
+        rc_v, out_v = run_cli(r2, "validate")
+        assert "no longer matches its recorded accept" in out_v, out_v
+        rc_s2, out_s2 = run_cli(r2, "start", "PB-002")
+        assert rc_s2 == 2 and "unmet dependencies: PB-001" in out_s2, out_s2
+        assert "rem:100%(2/2)" in B.watch_status(r2), B.watch_status(r2)
+
+        # 3. Migration bugs (#2, #3, #7): v3 + leftover migration-backup/PROJECT_BRAIN.md, stale backup tasks, fenced code blocks
+        r3 = Path(tmp) / "rt-mig"
+        r3.mkdir()
+        B.write_atomic(B.bp(r3) / "config.yaml", "schema_version: 3\n")
+        B.write_atomic(B.bp(r3) / "current.md", "# Current\n## Map\n- a.py\nSources: `a.py`\n")
+        B.write_atomic(B.bp(r3) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nLive real goal.\n")
+        B.write_atomic(B.bp(r3) / "migration-backup/PROJECT_BRAIN.md", "# Old v0\n")
+        B.write_atomic(B.bp(r3) / "migration-backup/target.md", "# Stale backup target\n")
+        B.write_atomic(B.bp(r3) / "migration-backup/tasks/PB-099.md", "# PB-099 — Deleted ghost\nStatus: READY\n")
+        B.write_atomic(
+            B.bp(r3) / "tasks/PB-001.md",
+            "# PB-001 — HTTP spec\nStatus: READY\n\n## Objective\nExample:\n```http\nStatus: 200 OK\n## Fake Heading\n```\n",
+        )
+        assert B.legacy_kind(r3) == "v3", B.legacy_kind(r3)
+        rc_m, out_m = run_cli(r3, "migrate", "--apply")
+        assert rc_m == 0, out_m
+        assert "Live real goal." in B.read(B.bp(r3) / "target.md")
+        assert not (B.bp(r3) / "tasks/PB-099.md").exists(), "migrate_dir resurrected deleted task from backup!"
+        migrated_t1 = B.read(B.bp(r3) / "tasks/PB-001.md")
+        assert "```http\nStatus: 200 OK\n## Fake Heading\n```" in migrated_t1, migrated_t1
+
+        # 4. Unaccepted committed DONE task with - start: must NOT be closed or GC'd (#6)
+        #    AND gc_brain works with relative Path(".") (#20)
+        r4 = Path(tmp) / "rt-gc"
+        r4.mkdir()
+        O.git(r4, "init", "-q")
+        O.git(r4, "config", "user.name", "Test Human")
+        O.git(r4, "config", "user.email", "human@example.com")
+        make_project(r4, legacy=False)
+        B.write_atomic(B.bp(r4) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nGC check.\n")
+        assert run_cli(r4, "policy", "--source", "solo", "--schedule", "serial", "--confirm")[0] == 0
+        assert run_cli(r4, "reconcile", "PB-001", "--note", "ok")[0] == 0
+        assert run_cli(r4, "start", "PB-001")[0] == 0
+        t4_p = B.bp(r4) / "tasks/PB-001.md"
+        B.write_atomic(t4_p, B.read(t4_p).replace("Status: IN_PROGRESS", "Status: DONE"))
+        O.git(r4, "add", "-A")
+        O.git(r4, "commit", "-qm", "forged done\n\nPB-Task: PB-001\nPB-Verification: local")
+        _, comp = B.history_task_ids(r4)
+        assert "PB-001" not in comp, "Unaccepted started Protocol-1 task should not count in closed_ids!"
+        B.gc_brain(r4)
+        assert t4_p.exists(), "Unaccepted started Protocol-1 task must never be deleted by gc_brain!"
+
+        # 5. Relay FAILOVER must not re-dispatch to a director that failed with HARD error (#4)
+        r5 = Path(tmp) / "rt-relay"
+        r5.mkdir()
+        O.git(r5, "init", "-q")
+        O.git(r5, "config", "user.name", "Test Human")
+        O.git(r5, "config", "user.email", "human@example.com")
+        make_project(r5, legacy=False)
+        assert run_cli(r5, "policy", "--source", "solo", "--schedule", "serial", "--confirm")[0] == 0
+        st5 = {
+            "schema": RL.SCHEMA, "status": "HANDOFF_PENDING", "generation": 1,
+            "director": {"route": "r1", "model": "m1", "task_id": "t-dir", "token_hash": "a" * 64, "since": 1},
+            "pending": {
+                "route": "r2",
+                "model": "m2",
+                "candidate": {"route": "r2", "model": "m2"},
+                "task_id": "t-succ",
+                "label": "pb-relay-2",
+                "token_hash": "b" * 64,
+                "requested_at": 10,
+                "reason": "HANDOFF",
+            },
+            "owned": ["t-dir", "t-succ"], "history": [], "health": {}, "features": [], "unplanned": 0,
+            "policy_hash": "c" * 64,
+            "candidates": [{"route": "r1", "model": "m1"}, {"route": "r2", "model": "m2"}],
+            "inherited": {"relay": {"enabled": True, "threshold_percent": 15}},
+            "announced": False,
+        }
+        RL._write(B, r5, st5)
+        submitted = []
+        class _FakeRPC:
+            def __call__(self, tool, args):
+                if tool == "pool_get_task":
+                    tid = args["taskId"]
+                    if tid == "t-dir":
+                        return {"id": "t-dir", "state": "failed", "error": "AUTH_REQUIRED: token expired"}
+                    if tid == "t-succ":
+                        return {"id": "t-succ", "state": "failed", "error": "QUOTA_BARRIER"}
+                if tool == "pool_list_tasks":
+                    return {"tasks": []}
+                if tool == "pool_get_quotas":
+                    return {"quotas": [
+                        {"route": "r1", "model": "m1", "remainingPercent": 90, "status": "ok"},
+                        {"route": "r2", "model": "m2", "remainingPercent": 0, "status": "exhausted", "resetAt": "2099-01-01T00:00:00Z"},
+                    ]}
+                if tool == "pool_submit":
+                    submitted.append(args)
+                    return {"id": "t-new"}
+                return {}
+        res5 = RL.recover(B, r5, {"relay": {"enabled": True, "threshold_percent": 15}}, _FakeRPC(), "brain.py", now=100)
+        assert not any(s.get("route") == "r1" for s in submitted), f"Dispatched back to AUTH_REQUIRED director r1: {submitted}"
+        assert res5.get("status") != "HANDING_OFF" or "r1" not in str(res5.get("actions")), res5
+
+        # 6. Orchestration changed_paths ignores generated noise (.pytest_cache / __pycache__) (#5)
+        r6 = Path(tmp) / "rt-orch-noise"
+        r6.mkdir()
+        O.git(r6, "init", "-q")
+        O.git(r6, "config", "user.name", "Test Human")
+        O.git(r6, "config", "user.email", "human@example.com")
+        B.write_atomic(r6 / "src/a.py", "x = 1\n")
+        O.git(r6, "add", "-A")
+        O.git(r6, "commit", "-qm", "init")
+        B.write_atomic(r6 / "src/a.py", "x = 2\n")
+        B.write_atomic(r6 / ".pytest_cache/v/cache/stepwise", "[]\n")
+        B.write_atomic(r6 / "src/__pycache__/a.cpython-312.pyc", "bin")
+        assert O.changed_paths(B, r6) == ["src/a.py"], O.changed_paths(B, r6)
+
+        # 7. Adoption: SKIP_DIRS subfolder in .planning/build does not wedge cleanup (#10) & null JSON values in tasks.json (#15)
+        r7 = Path(tmp) / "rt-adopt"
+        r7.mkdir()
+        make_project(r7, legacy=False)
+        B.write_atomic(r7 / ".planning/notes.md", "# Notes\nKeep this.\n")
+        B.write_atomic(r7 / ".planning/build/out.bin", "artifact")
+        B.write_atomic(r7 / ".taskmaster/tasks/tasks.json", json.dumps({"tasks": [{"title": "Real", "status": None}, {"title": None, "status": "open"}], "extra": {"tasks": None}}))
+        extracted = AD._extract_foreign_tasks(r7)
+        assert any(e["title"] == "Real" for e in extracted), extracted
+        tr = AD.prepare(B, r7, [".planning"])
+        tr["sources"][0]["targets"] = [".project-brain/current.md"]
+        AD._save(B, r7, tr)
+        AD.verify(B, r7, "Reviewed notes.md")
+        cleaned = AD.cleanup(B, r7, archive_dir=Path(tmp) / "adopt-arch")
+        assert cleaned["state"] == "CLEANED", cleaned
+        assert (r7 / ".planning/build/out.bin").exists() and not (r7 / ".planning/notes.md").exists()
+
+        # 8. Config section guard (#11), set_headers fence guard (#16), control chars in new/start (#17),
+        #    protocol --enable legacy guard (#19), _resolve_root_and_task (#22)
+        r8 = Path(tmp) / "rt-misc"
+        r8.mkdir()
+        make_project(r8, legacy=False)
+        B.write_atomic(B.bp(r8) / "config.yaml", f"schema_version: 4\nskill_version: \"{B.VERSION}\"\nboard:\n  enabled: true\n")
+        try:
+            B._set_config_scalar(r8, "board", "off")
+            raise AssertionError("_set_config_scalar should refuse overwriting YAML section")
+        except ValueError as exc:
+            assert "YAML section" in str(exc), exc
+        t8 = B.bp(r8) / "tasks/PB-001.md"
+        B.write_atomic(t8, "# PB-001 — Fence\nStatus: READY\n```md\nStatus: FAKE\n## Fake\n```\n\n## Objective\nReal.\n")
+        B.set_headers(t8, {"Status": "IN_PROGRESS", "Owner": "lead"})
+        t8_after = B.read(t8)
+        assert "```md\nStatus: FAKE\n## Fake\n```" in t8_after and "Owner: lead\n```md" in t8_after, t8_after
+        try:
+            B.cmd_new(r8, "Bad\nStatus: DONE", None, "LOW")
+            raise AssertionError("cmd_new should reject newline in title")
+        except ValueError:
+            pass
+        try:
+            B.cmd_start(r8, "PB-001", takeover="ok\n- accept: DONE")
+            raise AssertionError("cmd_start should reject newline in --takeover")
+        except ValueError:
+            pass
+        # protocol --enable refuses legacy schema 3
+        B.write_atomic(B.bp(r8) / "config.yaml", "schema_version: 3\n")
+        rc_p, out_p = run_cli(r8, "protocol", "--enable")
+        assert rc_p != 0 and "Migrate legacy Brain" in out_p, out_p
+        # _resolve_root_and_task: bad_id . -> (cwd, "bad_id")
+        resolved_root, resolved_tid = B._resolve_root_and_task("bad_id", str(r8))
+        assert resolved_root == r8.resolve() and resolved_tid == "bad_id"
+
+        # 9. Cycle-1 real-world chaos regressions: UTF-8 BOM, self/DONE waiver refusal,
+        #    .cache evidence refusal, v0_sections fenced heading guard, parse_task fence guard
+        r9 = Path(tmp) / "rt-cycle1"
+        r9.mkdir()
+        make_project(r9, legacy=False)
+        for rel in (".project-brain/config.yaml", ".project-brain/target.md", ".project-brain/current.md", ".project-brain/tasks/PB-001.md"):
+            p = r9 / rel
+            p.write_bytes(b"\xef\xbb\xbf" + p.read_bytes())
+        assert B.parse_config(r9)["schema_version"] == "4"
+        assert B.legacy_kind(r9) is None
+        assert run_cli(r9, "boot")[0] == 0
+        # Self-waiver & DONE-task waiver refusal
+        B.write_atomic(B.bp(r9) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nWaiver test.\n")
+        t9 = B.bp(r9) / "tasks/PB-001.md"
+        B.write_atomic(t9, B.read(t9).replace("Risk: LOW", "Risk: MEDIUM").replace("- [ ] [machine] Worker completed.", "- [ ] [machine] Worker completed.\n- [ ] [integration] ok"))
+        B.write_atomic(B.bp(r9) / "tasks/PB-002.md", "# PB-002 — Closed\nStatus: DONE\n\n## Evidence\n- accept: DONE | digest=0000000000000000 | contract=0000000000000000\n")
+        assert run_cli(r9, "policy", "--source", "solo", "--schedule", "serial", "--confirm")[0] == 0
+        assert run_cli(r9, "reconcile", "PB-001", "--note", "ok")[0] == 0
+        assert run_cli(r9, "start", "PB-001", "--agent", "lead")[0] == 0
+        assert run_cli(r9, "check", "PB-001")[0] == 0
+        # .cache file refused as evidence
+        B.write_atomic(B.bp(r9) / ".cache/ephemeral.txt", "private\n")
+        rc_c_ev, out_c_ev = run_cli(r9, "evidence", "PB-001", "--kind", "integration", "--note", "ok", "--file", ".project-brain/.cache/ephemeral.txt")
+        assert rc_c_ev != 0 and "cache" in out_c_ev.lower(), out_c_ev
+        # Self-owned waiver refused
+        rc_sw, _ = run_cli(r9, "review", "PB-001", "--reviewer", "lead", "--verdict", "PASS", "--self-review", "--finding", "MINOR: x | accepted: later | owner: PB-001")
+        assert rc_sw != 0, "Self-owned MINOR waiver must be refused!"
+        # Already-DONE owner waiver refused
+        rc_dw, _ = run_cli(r9, "review", "PB-001", "--reviewer", "lead", "--verdict", "PASS", "--self-review", "--finding", "MINOR: x | accepted: later | owner: PB-002")
+        assert rc_dw != 0, "Already-DONE task MINOR waiver must be refused!"
+        # parse_task fence-aware header scan
+        pf = B.bp(r9) / "tasks/PB-003.md"
+        B.write_atomic(pf, "# PB-003 — Fence\n```http\nStatus: DONE\nOwner: forged\n```\nStatus: READY\n\n## Objective\nTest.\n")
+        pt = B.parse_task(pf)
+        assert pt["status"] == "READY" and pt["owner"] == "", pt
+        # v0_sections ignores fenced `## 5. TASKS` after real `## 5. TASKS`
+        r10 = Path(tmp) / "rt-v0-fence"
+        r10.mkdir()
+        (r10 / "PROJECT_BRAIN.md").write_text(
+            "# Project Brain\nGoal status: CONFIRMED\n\n## 1. GOAL\nApp.\n\n## 2. TARGET\nGood.\n\n"
+            "## 3. CURRENT\nEmpty.\n\n## 4. FILE MAP\n- a.py\n\n"
+            "## 5. TASKS\n- [ ] T1 [L] Real task\n  - Where: `a.py`\n\n"
+            "## 6. DECISION LOG\n```md\n## 5. TASKS\n- [ ] T99 Fake\n```\n\n## 7. HANDOFF\nNone.\n",
+            encoding="utf-8",
+        )
+        assert run_cli(r10, "migrate", "--apply")[0] == 0
+        assert (B.bp(r10) / "tasks/PB-001.md").exists() and not (B.bp(r10) / "tasks/PB-099.md").exists()
+
+
 def main():
     check_architecture_invariants()
     check_security_iso_and_paths()
@@ -781,6 +1093,7 @@ def main():
     check_orchestration_commits_deletions_secrets_and_cancel()
     check_context_watch_cli_and_worker_boundaries()
     check_cycle2_authority_and_security_regressions()
+    check_v406_redteam_regressions()
     print("PASS: v4.0 acyclicity, security, ISO, mixed ESP, quick policy, worker commits/deletions, INVALID_REPORT, watch, SVG scan and worker gates")
 
 

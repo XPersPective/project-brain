@@ -50,10 +50,39 @@ PATH_RE = re.compile(r"(?<![\w`/])((?:[\w.-]+/)+[\w.*-]*)")
 LEVELS = ("LOW", "MEDIUM", "HIGH")
 
 
+def _safe_path(root, path):
+    """Validate a path under root via Core.public_path BEFORE resolving links."""
+    root_abs = Path(root).absolute()
+    p = Path(path)
+    p_abs = p if p.is_absolute() else (root_abs / p)
+    try:
+        rel = p_abs.relative_to(root_abs).as_posix()
+    except ValueError:
+        try:
+            rel = p_abs.relative_to(root_abs.resolve()).as_posix()
+        except ValueError as exc:
+            raise ValueError("Path escapes project: " + str(path)) from exc
+    return Core.public_path(root_abs, rel)
+
+
 def split_sections(text):
-    """(title, [(name, lines)]) from '## X' sections and v3-inline 'X: value' paragraphs."""
-    title, secs, resume_to = "", [("", [])], None
+    """(title, [(name, lines)]) from '## X' sections and v3-inline 'X: value' paragraphs, fence-aware."""
+    title, secs, resume_to, fence = "", [("", [])], None, None
     for line in text.splitlines():
+        fm = Core._FENCE_RE.match(line)
+        if fm:
+            tok = fm.group(1)
+            rest = line[fm.end():]
+            if fence is None:
+                if not (tok[0] == "`" and "`" in rest):
+                    fence = (tok[0], len(tok))
+            elif tok[0] == fence[0] and len(tok) >= fence[1] and not rest.strip():
+                fence = None
+            secs[-1][1].append(line)
+            continue
+        if fence is not None:
+            secs[-1][1].append(line)
+            continue
         if not title and line.startswith("# "):
             title = line[2:].strip()
             continue
@@ -256,10 +285,13 @@ def convert_task(path):
 
 def migrate_dir(root, plan, todo):
     bm = _brain()
-    b = bm.bp(root)
+    b = _safe_path(root, bm.BRAIN_DIR)
     plan.append((b / "config.yaml", bm.config_text(root, bm.parse_config(root)), "schema 4 (old values kept)"))
-    backup = b / "migration-backup"
-    target_source = backup / "target.md" if (backup / "target.md").exists() else b / "target.md"
+    backup = _safe_path(root, b / "migration-backup")
+    resuming = _safe_path(root, backup / ".in-progress").is_file()
+    target_path = _safe_path(root, b / "target.md")
+    backup_target = _safe_path(root, backup / "target.md")
+    target_source = backup_target if (resuming and backup_target.is_file()) else target_path
     target = bm.read(target_source)
     if target is not None and not re.search(r"^Status:\s*(DRAFT|CONFIRMED)\b", target, re.M | re.I):
         lines = target.splitlines()
@@ -268,21 +300,30 @@ def migrate_dir(root, plan, todo):
         text = "\n".join(lines) + "\n"
         if "## Goal" not in text:
             text = re.sub(r"^## (Objective)\s*$", "## Goal", text, count=1, flags=re.M)
-        plan.append((b / "target.md", text, "Status: DRAFT (approval absent; verify user intent)"))
+        plan.append((target_path, text, "Status: DRAFT (approval absent; verify user intent)"))
     cur = "\n".join(bm.read(f) or "" for f, _ in bm.current_files(root))
     if "## Map" not in cur:
         todo.append("current.md has no `## Map` (path -> role): write it from the code (<=40 lines)")
     if not re.search(r"^\W*sources\W*:", cur, re.I | re.M):
         todo.append("current.md has no `Sources:` lines: add globs per domain")
-    if not (b / ".gitignore").exists():
+    if not _safe_path(root, b / ".gitignore").exists():
         plan.append((b / ".gitignore", ".cache/\n", "ignore cache"))
-    tdir = b / "tasks"
+    tdir = _safe_path(root, b / "tasks")
     tasks = bm.list_tasks(root)
     ip = [t["id"] for t in tasks if t["status"] == "IN_PROGRESS"]
     if len(ip) > 1:
         todo.append(f"several IN_PROGRESS ({', '.join(ip)}): keep the one really active, set the rest READY")
-    files = {f.name: f for f in tdir.glob("PB-*.md") if bm.TASK_FILE_RE.match(f.name)}
-    files.update({f.name: f for f in (backup / "tasks").glob("PB-*.md") if bm.TASK_FILE_RE.match(f.name)})
+    files = {}
+    if tdir.is_dir():
+        for f in sorted(tdir.glob("PB-*.md")):
+            if bm.TASK_FILE_RE.match(f.name):
+                files[f.name] = _safe_path(root, f)
+    if resuming:
+        btasks = _safe_path(root, backup / "tasks")
+        if btasks.is_dir():
+            for f in sorted(btasks.glob("PB-*.md")):
+                if bm.TASK_FILE_RE.match(f.name) and f.name in files:
+                    files[f.name] = _safe_path(root, f)
     for name, source in sorted(files.items()):
         f = tdir / name
         new, issue = convert_task(source)
@@ -297,8 +338,24 @@ FIELD_RE = re.compile(r"^\s+-\s+(Where|Do|Done when|Needs|Note)\s*:\s*(.*)$", re
 
 
 def v0_sections(text):
-    secs, cur = {}, None
+    secs, cur, fence = {}, None, None
     for line in text.splitlines():
+        fm = Core._FENCE_RE.match(line)
+        if fm:
+            tok = fm.group(1)
+            rest = line[fm.end():]
+            if fence is None:
+                if not (tok[0] == "`" and "`" in rest):
+                    fence = (tok[0], len(tok))
+            elif tok[0] == fence[0] and len(tok) >= fence[1] and not rest.strip():
+                fence = None
+            if cur:
+                secs[cur]["lines"].append(line)
+            continue
+        if fence is not None:
+            if cur:
+                secs[cur]["lines"].append(line)
+            continue
         m = re.match(r"^## (\d+(?:\.\d+)?)\.?\s+(.+?)\s*$", line)
         if m:
             cur = m.group(1)
@@ -337,10 +394,25 @@ def v0_tasks(lines):
     return items
 
 
+def _v0_source(root):
+    bm = _brain()
+    primary = _safe_path(root, bm.LEGACY_FILE)
+    if primary.exists():
+        return primary
+    if not _safe_path(root, bm.BRAIN_DIR + "/config.yaml").exists():
+        backup = _safe_path(root, bm.BRAIN_DIR + "/migration-backup/" + bm.LEGACY_FILE)
+        if backup.exists():
+            return backup
+    return None
+
+
 def migrate_v0(root, plan, todo):
     bm = _brain()
-    b, legacy = bm.bp(root), Path(root) / bm.LEGACY_FILE
-    text = bm.read(legacy) or ""
+    b = _safe_path(root, bm.BRAIN_DIR)
+    legacy = _v0_source(root)
+    text = (bm.read(legacy) or "") if legacy else ""
+    if not text.strip():
+        raise ValueError("Legacy PROJECT_BRAIN.md missing or empty; refusing to overwrite Brain with empty templates")
     secs = v0_sections(text)
     sec = lambda key: "\n".join(trim(secs.get(key, {}).get("lines", [])))
     header_and_s1 = text.split("\n## 2", 1)[0]
@@ -446,8 +518,9 @@ def migrate_v0(root, plan, todo):
 
 def migrate_v3_upgrade(root, plan, todo, force_all=True):
     bm = _brain()
-    b = bm.bp(root)
-    target = bm.read(b / "target.md")
+    b = _safe_path(root, bm.BRAIN_DIR)
+    target_path = _safe_path(root, b / "target.md")
+    target = bm.read(target_path)
     if target is not None and not re.search(r"^Status:\s*(DRAFT|CONFIRMED)\b", target, re.M | re.I):
         lines = target.splitlines()
         i = next((k + 1 for k, l in enumerate(lines) if l.startswith("# ")), 0)
@@ -455,10 +528,10 @@ def migrate_v3_upgrade(root, plan, todo, force_all=True):
         text = "\n".join(lines) + "\n"
         if "## Goal" not in text:
             text = re.sub(r"^## (Objective)\s*$", "## Goal", text, count=1, flags=re.M)
-        plan.append((b / "target.md", text, "Status: DRAFT (approval absent; verify user intent)"))
-    if not (b / ".gitignore").exists():
+        plan.append((target_path, text, "Status: DRAFT (approval absent; verify user intent)"))
+    if not _safe_path(root, b / ".gitignore").exists():
         plan.append((b / ".gitignore", ".cache/\n", "ignore cache"))
-    tdir = b / "tasks"
+    tdir = _safe_path(root, b / "tasks")
     if tdir.is_dir():
         legacy_secs = {
             "status", "acceptance criteria", "verification", "affected areas", "dependencies",
@@ -468,6 +541,7 @@ def migrate_v3_upgrade(root, plan, todo, force_all=True):
         for f in sorted(tdir.glob("PB-*.md")):
             if not bm.TASK_FILE_RE.match(f.name):
                 continue
+            f = _safe_path(root, f)
             raw = bm.read(f) or ""
             secs = bm.sections(raw)
             parsed = bm.parse_task(f, raw)
@@ -519,16 +593,18 @@ def auto_upgrade_v34(root, force_all=None):
     backup_inputs(root, [p for p, _, _ in plan] + ([cfg_path] if old_ver != bm.VERSION else []))
     actions = []
     for path, text, why in plan:
-        rel = path.relative_to(root).as_posix()
-        Core.write_atomic(path, text)
+        safe_p = _safe_path(root, path)
+        rel = safe_p.relative_to(Path(root).absolute()).as_posix()
+        Core.write_atomic(safe_p, text)
         actions.append(f"{rel} ({why})")
     if old_ver != bm.VERSION:
         for name, action in bm.ensure_pointers(root, write=True):
             actions.append(f"{name} ({action})")
     if old_ver != bm.VERSION or not cfg_path.exists():
+        safe_cfg = _safe_path(root, cfg_path)
         new_cfg_text = bm.config_text(root, old_cfg)
-        if not cfg_path.exists() or bm.read(cfg_path) != new_cfg_text:
-            Core.write_atomic(cfg_path, new_cfg_text)
+        if not safe_cfg.exists() or bm.read(safe_cfg) != new_cfg_text:
+            Core.write_atomic(safe_cfg, new_cfg_text)
             if old_ver != bm.VERSION:
                 actions.append(f"config.yaml (skill_version {old_ver or 'pre-3.4'} -> {bm.VERSION})")
     return actions
@@ -538,7 +614,8 @@ def require_known_legacy(root):
     bm = _brain()
     kind = bm.legacy_kind(root)
     if kind == "v0":
-        sections = v0_sections(bm.read(Path(root) / bm.LEGACY_FILE) or "")
+        legacy = _v0_source(root)
+        sections = v0_sections((bm.read(legacy) or "") if legacy else "")
         expected = {"1": "GOAL", "3": "CURRENT", "5": "TASKS"}
         if not all(key in sections and word in sections[key]["title"].upper() for key, word in expected.items()):
             raise ValueError("Unrecognized legacy PROJECT_BRAIN.md; inspect before explicit migration")
@@ -595,19 +672,17 @@ def require_supported(root):
 def backup_inputs(root, paths):
     """Retain each distinct raw input atomically before conversion; never overwrite an earlier backup."""
     bm = _brain()
-    root = Path(root).resolve()
+    root_abs = Path(root).absolute()
     for source in paths:
-        src_abs = Path(source).resolve() if Path(source).is_absolute() else (root / source).resolve()
-        rel = src_abs.relative_to(root).as_posix()
-        source = Core.public_path(root, rel)
+        source = _safe_path(root_abs, source)
         if not source.is_file():
             continue
-        name = source.relative_to(bm.bp(root)) if source != root / bm.LEGACY_FILE else Path(bm.LEGACY_FILE)
+        name = source.relative_to(bm.bp(root_abs)) if source != root_abs / bm.LEGACY_FILE else Path(bm.LEGACY_FILE)
         saved_rel = bm.BRAIN_DIR + "/migration-backup/" + name.as_posix()
-        saved = Core.public_path(root, saved_rel)
+        saved = Core.public_path(root_abs, saved_rel)
         raw = source.read_bytes()
         if saved.exists() and saved.read_bytes() != raw:
-            saved = Core.public_path(root, saved_rel + "." + hashlib.sha256(raw).hexdigest()[:16])
+            saved = Core.public_path(root_abs, saved_rel + "." + hashlib.sha256(raw).hexdigest()[:16])
         if not saved.exists():
             Core.write_atomic_bytes(saved, raw)
 
@@ -641,25 +716,31 @@ def run(root, apply, sync_skills=False):
     else:
         print("NOTHING TO MIGRATE: no legacy Brain found (use `init` for a new one)")
         return 0
+    in_progress = _safe_path(root, bm.BRAIN_DIR + "/migration-backup/.in-progress")
     if not apply:
         print(f"PREVIEW ({kind}): nothing written. Run `migrate --apply` to write.")
     else:
         backup_inputs(root, [root / bm.LEGACY_FILE] + [p for p, _, _ in plan])
+        Core.write_atomic(in_progress, kind + "\n")
         print("BACKUP .project-brain/migration-backup/: original input retained; review before removing")
     config = [(p, t, why) for p, t, why in plan if p.name == "config.yaml"]
     plan = [(p, t, why) for p, t, why in plan if p.name != "config.yaml"]
     for path, text, why in plan:
-        rel = path.relative_to(root).as_posix()
-        verb = ("UPDATE" if path.exists() else "CREATE") if apply else ("would update" if path.exists() else "would create")
+        safe_p = _safe_path(root, path)
+        rel = safe_p.relative_to(Path(root).absolute()).as_posix()
+        verb = ("UPDATE" if safe_p.exists() else "CREATE") if apply else ("would update" if safe_p.exists() else "would create")
         print(f"{verb} {rel}: {why}")
         if apply:
-            Core.write_atomic(path, text)
+            Core.write_atomic(safe_p, text)
     for name, action in bm.ensure_pointers(root, write=apply):
         print(f"{'POINTER' if apply else 'would add pointer to'} {name} ({action})")
     for path, text, why in config:
-        print(f"{'FINALIZE' if apply else 'would finalize'} {path.relative_to(root).as_posix()}: {why}")
+        safe_p = _safe_path(root, path)
+        print(f"{'FINALIZE' if apply else 'would finalize'} {safe_p.relative_to(Path(root).absolute()).as_posix()}: {why}")
         if apply:
-            Core.write_atomic(path, text)
+            Core.write_atomic(safe_p, text)
+    if apply and in_progress.exists():
+        in_progress.unlink()
     for t in todo:
         print(f"TODO {t}")
     print(

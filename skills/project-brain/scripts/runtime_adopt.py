@@ -52,7 +52,7 @@ STORE_RELEASE_SKIP_RE = re.compile(
 
 def _read_safe(path):
     try:
-        return Path(path).read_text(encoding="utf-8", errors="replace")
+        return Path(path).read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return None
 
@@ -86,22 +86,31 @@ def _extract_foreign_tasks(root):
     if tm_json.exists():
         try:
             tdata = json.loads(_read_safe(Core.public_path(root, tm_json.relative_to(root).as_posix())) or "{}")
-            items = tdata.get("tasks", []) if isinstance(tdata, dict) else []
+            raw_items = tdata.get("tasks") if isinstance(tdata, dict) else None
+            items = raw_items if isinstance(raw_items, list) else []
             if isinstance(tdata, dict) and not items:
-                items = [item for tag in tdata.values() if isinstance(tag, dict) for item in tag.get("tasks", [])]
-            for item in items or []:
+                items = [
+                    item
+                    for tag in tdata.values()
+                    if isinstance(tag, dict) and isinstance(tag.get("tasks"), list)
+                    for item in tag["tasks"]
+                ]
+            for item in items:
+                title_val = item.get("title") if isinstance(item, dict) else None
+                status_val = item.get("status") if isinstance(item, dict) else None
                 if (
                     isinstance(item, dict)
-                    and item.get("title")
-                    and item.get("status", "").lower() not in ("done", "completed", "cancelled", "canceled")
+                    and isinstance(title_val, str)
+                    and title_val.strip()
+                    and str(status_val or "").lower() not in ("done", "completed", "cancelled", "canceled")
                 ):
                     text = json.dumps(item, ensure_ascii=False, indent=2)
                     if STORE_RELEASE_SKIP_RE.search(text):
                         continue
                     extracted.append({
                         "source": ".taskmaster/tasks/tasks.json",
-                        "title": item["title"],
-                        "objective": item.get("description") or item["title"],
+                        "title": title_val.strip(),
+                        "objective": item.get("description") or title_val.strip(),
                         "text": text,
                     })
         except ValueError:
@@ -358,7 +367,7 @@ def _source_snapshot(root, roots):
 
 
 def _read_text(path):
-    return path.read_text(encoding="utf-8", errors="replace")
+    return path.read_text(encoding="utf-8-sig", errors="replace")
 
 
 def _validate_targets(B, root, data):
@@ -649,7 +658,10 @@ def cleanup(B, root, archive_dir=None):
             if path.is_dir():
                 for base, _dirs, names in os.walk(str(path), topdown=True, followlinks=False):
                     base_p = Path(base)
-                    _dirs[:] = [d for d in _dirs if not Core.is_link(base_p / d)]
+                    _dirs[:] = [
+                        d for d in _dirs
+                        if d.lower() not in SKIP_DIRS and not Core.is_link(base_p / d)
+                    ]
                     for name in names:
                         candidate = base_p / name
                         relname = _rel(root, candidate)
@@ -676,16 +688,28 @@ def cleanup(B, root, archive_dir=None):
     _remove_instruction_blocks(B, root, data)
     _remove_ignore_lines(B, root, data)
     dirs = set()
+    skipped_parents = set()
     for rel in data["roots"]:
         p = _safe(root, rel)
         if p.is_dir():
             for base, children, _names in os.walk(str(p), topdown=True, followlinks=False):
                 basep = Path(base)
                 dirs.add(basep)
+                kept_children = []
                 for child in children:
+                    if child.lower() in SKIP_DIRS:
+                        cur = basep
+                        while True:
+                            skipped_parents.add(cur)
+                            if cur == p or cur.parent == cur:
+                                break
+                            cur = cur.parent
+                        continue
                     childp = basep / child
                     _safe(root, _rel(root, childp))
                     dirs.add(childp)
+                    kept_children.append(child)
+                children[:] = kept_children
     for path in sorted(dirs, key=lambda p: len(p.parts), reverse=True):
         rel = _rel(root, path)
         _safe(root, rel)
@@ -693,6 +717,13 @@ def cleanup(B, root, archive_dir=None):
             path.rmdir()
         except OSError:
             if path.exists():
+                if path in skipped_parents:
+                    leftovers = list(path.iterdir())
+                    if leftovers and all(
+                        entry.is_dir() and (entry.name.lower() in SKIP_DIRS or entry in skipped_parents)
+                        for entry in leftovers
+                    ):
+                        continue
                 raise ValueError("unexpected content prevents tracking directory removal: " + rel)
     data["state"] = "CLEANED"
     _save(B, root, data)

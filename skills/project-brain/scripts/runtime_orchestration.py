@@ -84,7 +84,7 @@ def changed_paths(B, root):
     untracked = B.git_paths(root, "ls-files", "--others", "--exclude-standard")
     if tracked is None or untracked is None:
         raise ValueError("Cannot enumerate all changed paths safely")
-    return sorted(set(tracked + untracked))
+    return sorted(p for p in set(tracked + untracked) if not Core.is_generated_noise(p))
 
 
 @contextmanager
@@ -713,7 +713,7 @@ def snapshot(B, root, db, directory, rid):
         branch_diff = B.git_paths(path, "diff", "--name-only", row["spec"]["base"])
         if branch_diff is None:
             raise ValueError("Cannot enumerate worker commit changes safely")
-        changed = sorted(set(changed) | set(branch_diff))
+        changed = sorted(p for p in (set(changed) | set(branch_diff)) if not Core.is_generated_noise(p))
     if not changed or any(
         not any(B.matches(p, a) for a in row["spec"]["areas"]) or p.startswith(B.BRAIN_DIR + "/") or Core.PRIVATE.search(p)
         for p in changed
