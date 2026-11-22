@@ -65,11 +65,10 @@ Same-session questions reuse context then resume `Next` — no boot, reset, or
 history/skill reload. Use `PB watch` for compact status or `PB brief` (≤4 KiB)
 only for missing focus.
 
-- **Progress Board (`İlerleme Panosu` / `PB board`, default `on`):** Echo the
-  deterministic `PROGRESS_BOARD` block emitted by `PB` commands verbatim in chat
-  (0 layout tokens). When the user asks to hide/show it (*"ilerleme panosunu
-  gösterme/kapat"*, *"ilerleme panosunu göster/aç"*, *"hide/show board"*), run
-  `PB board off` or `PB board on`.
+- **Progress Board (`İlerleme Panosu` / `PB board`, default `on`):** Echo
+  `PROGRESS_BOARD` lines from `PB` commands verbatim in chat (0 layout tokens).
+  If asked to hide/show it (*"ilerleme panosunu gösterme/göster"*, *"panoyu
+  kapat/aç"*, *"hide/show board"*), run `PB board off` or `PB board on`.
 
 ## 3. Work, quality and review
 
