@@ -23,8 +23,9 @@ Stable policy only — never HEAD, active task, timestamps, model, or test resul
 
 ```yaml
 schema_version: 4
-skill_version: "4.0.1"
+skill_version: "4.0.2"
 protocol_version: "1"
+board: "on"             # optional: "on" (default) | "off" (toggled via `brain.py board on|off`)
 architecture:
   mode: single          # domains: current/<d>.md, optional target/<d>.md; target.md always holds Goal/Status
 git:

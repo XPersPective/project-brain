@@ -418,7 +418,7 @@ def check_cycle2_authority_and_security_regressions():
         O.git(root, "reset", "HEAD", "src/evil_link")
 
         # 5. migrate.require_supported rejects future non-X.Y.Z versions, and migrate_v0 ignores Goal status in task body
-        for future_ver in ("4.1", "5.0", "4.0.1-rc1", "5.0.0-alpha"):
+        for future_ver in ("4.1", "5.0", f"{Core.VERSION}-rc1", "5.0.0-alpha"):
             B.write_atomic(
                 B.bp(root) / "config.yaml",
                 f'schema_version: 4\nskill_version: "{future_ver}"\nprotocol_version: 1\n',
@@ -496,9 +496,37 @@ def check_cycle2_authority_and_security_regressions():
         assert V.accept(B, root, "PB-001", actor="lead")[0] == 0
         code, boot_done_ok = run_cli(root, "boot", "--read-only")
         assert code == 0 and "TAKEOVER_CHECK: SKIP (uncommitted DONE task edits present: PB-001" in boot_done_ok, boot_done_ok
+        assert "PROGRESS_BOARD (İlerleme Panosu):" in boot_done_ok and "100% | Phase: COMPLETE | Tasks: 1/1 DONE" in boot_done_ok, boot_done_ok
         (root / "src/a.py").write_text("x = 999\n", encoding="utf-8")
         code, boot_done_tampered = run_cli(root, "boot", "--read-only")
         assert code == 0 and "STATE: DIRTY" in boot_done_tampered and "TAKEOVER_CHECK: REQUIRED" in boot_done_tampered, boot_done_tampered
+
+        # 8. Default-on Progress Board (İlerleme Panosu) & persistent Turkish/English toggle (`board on|off|göster|gösterme`)
+        code, b_default = run_cli(root, "board")
+        assert code == 0 and "PROGRESS_BOARD (İlerleme Panosu):" in b_default and "C1✓" in b_default, b_default
+
+        # Hide via Turkish alias `gösterme` (action before root)
+        code, b_off = run_cli(root, "board", "gösterme")
+        assert code == 0 and "BOARD: OFF" in b_off and B.parse_config(root).get("board") == "off", b_off
+        code, boot_hidden = run_cli(root, "boot", "--read-only")
+        assert code == 0 and "PROGRESS_BOARD" not in boot_hidden, boot_hidden
+        code, b_when_off = run_cli(root, "board")
+        assert code == 0 and "BOARD: OFF" in b_when_off and "PROGRESS_BOARD" not in b_when_off, b_when_off
+        code, b_forced = run_cli(root, "board", "--force")
+        assert code == 0 and "PROGRESS_BOARD (İlerleme Panosu):" in b_forced, b_forced
+
+        # Pool worker can read `board` / `board status` but cannot toggle `board on`/`board off`
+        code, w_ro = run_cli(root, "board", "--force", extra_env={"CLI_AGENT_POOL_WORKER": "1"})
+        assert code == 0 and "PROGRESS_BOARD" in w_ro, w_ro
+        code, w_mut = run_cli(root, "board", "on", extra_env={"CLI_AGENT_POOL_WORKER": "1"})
+        assert code == 2 and "Pool workers cannot run" in w_mut, w_mut
+
+        # Re-enable via Turkish alias `göster`
+        code, b_on = run_cli(root, "board", "göster")
+        assert code == 0 and "BOARD: ON" in b_on and "PROGRESS_BOARD (İlerleme Panosu):" in b_on, b_on
+        assert B.parse_config(root).get("board") == "on"
+        code, boot_restored = run_cli(root, "boot", "--read-only")
+        assert code == 0 and "PROGRESS_BOARD (İlerleme Panosu):" in boot_restored, boot_restored
 
 
 def main():

@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.0.2 — 2026-11-22
+
+- **Default-on zero-token Progress Board (`İlerleme Panosu` / `PB board`):** `boot`, `start`, `check`, `review`, `accept`, and `PB board` now emit a deterministic, cross-agent `PROGRESS_BOARD (İlerleme Panosu)` block (10-step visual progress bar, project phase, committed + active task completion, per-criterion status pills `C1✓ C2·`, active owner/CAP worker, review cache status, and next step) that works across every chat and CLI agent with zero LLM layout/reasoning tokens.
+- **Persistent natural-language show/hide toggle (`PB board on|off`):** enabled by default (`board: "on"`); users can ask the agent to hide or show the board in Turkish or English (*"ilerleme panosunu gösterme/kapat"*, *"ilerleme panosunu göster/aç"*, *"hide/show board"*), which persists `board: "off"` or `board: "on"` in `.project-brain/config.yaml` via `PB board off` / `PB board on` (accepting both English and Turkish action aliases in either positional order).
+
 ## 4.0.1 — 2026-11-22
 
 - **Cold-session takeover & zero-rework resumption:** `boot --new-session` now evaluates read-only task digests (`check_session=False` for observational boot status only) so tasks with intact `Verify` logs and clean `PASS` reviews immediately display `TAKEOVER_CHECK: SKIP` and `review: PASS valid on current digest (DO NOT re-review; run accept)` instead of falsely prompting a test/review rerun.

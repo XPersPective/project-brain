@@ -47,9 +47,11 @@ leave commits pending; never invent one.
 
 At a new top-level implementation session run `PB orient`, then
 `PB boot --new-session`. Orientation uses metadata/manifests without model calls.
-Do not edit source before the session-choice gate is `READY`. Within that session
-reuse context; use `PB watch` for ultra-compact status, `PB brief` only for
-missing focus, and normal `PB boot` only for actual takeover/recovery. A fresh
+Do not edit source before the session-choice gate is `READY`. within that session
+reuse context; use `PB board` (`on`/`off`, default `on`) for the deterministic
+chat Progress Board (`İlerleme Panosu`), `PB watch` for 1-line timer status,
+`PB brief` only for missing focus, and normal `PB boot` only for actual
+takeover/recovery. A fresh
 read-only audit may use `PB orient --read-only` and `PB boot --read-only`; an
 intervening question does not. For no Brain, `PB map` gives a cheap overview.
 Protocol 1 is enabled on init/upgrade unless compatibility `0` was explicitly set;

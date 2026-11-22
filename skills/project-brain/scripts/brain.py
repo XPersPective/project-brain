@@ -1307,6 +1307,202 @@ def gc_brain(root, has_git=None, completed=None):
     return removed
 
 
+BOARD_ON_TOKENS = {"on", "show", "true", "1", "yes", "enable", "enabled", "goster", "göster", "ac", "aç"}
+BOARD_OFF_TOKENS = {"off", "hide", "false", "0", "no", "disable", "disabled", "gosterme", "gösterme", "gizle", "kapat"}
+BOARD_ACTIONS = BOARD_ON_TOKENS | BOARD_OFF_TOKENS | {"status"}
+
+
+def board_enabled(root):
+    if not brain_exists(root):
+        return False
+    try:
+        raw = str(parse_config(root).get("board", "on")).strip().lower()
+    except ValueError:
+        return True
+    return raw not in BOARD_OFF_TOKENS
+
+
+def board_lines(root, focus_id=None):
+    """Zero-token deterministic Progress Board (İlerleme Panosu) for all chat & CLI agents."""
+    if not brain_exists(root):
+        return []
+    all_tasks = list_tasks(root)
+    has_git = git(root, "rev-parse", "--is-inside-work-tree") == "true"
+    _, hist_done = history_task_ids(root) if has_git else (set(), set())
+    disk_ids = {t["id"] for t in all_tasks}
+    gc_done_ids = sorted(hist_done - disk_ids)
+    disk_done = [t for t in all_tasks if t["status"] == "DONE" and t["has_evidence"]]
+    total_tasks = len(gc_done_ids) + len(all_tasks)
+    done_tasks = len(gc_done_ids) + len(disk_done)
+    if total_tasks == 0:
+        phase = "INTAKE" if target_status(root) != "CONFIRMED" else "PLANNING"
+        return [f"PROGRESS_BOARD (İlerleme Panosu): [░░░░░░░░░░] 0% | Phase: {phase} | Tasks: 0/0 DONE | Criteria: 0/0"]
+
+    orch_tasks = {}
+    orch_path = bp(root) / ".cache/orchestration.json"
+    if orch_path.is_file():
+        try:
+            orch_data = json.loads(read(orch_path) or "{}")
+            if isinstance(orch_data.get("tasks"), dict):
+                orch_tasks = orch_data["tasks"]
+        except (ValueError, OSError):
+            pass
+
+    if not focus_id:
+        active = next((t for st in ("IN_PROGRESS", "REVIEW") for t in all_tasks if t["status"] == st), None)
+        focus_id = active["id"] if active else ""
+
+    rows, weights = [], []
+    total_c_done, total_c_total = len(gc_done_ids), len(gc_done_ids)
+    for t in all_tasks:
+        tid = t["id"]
+        st = t["status"]
+        is_done = st == "DONE" and t["has_evidence"]
+        proven = set() if is_done else proven_criteria_ids(root, t)
+        items = t.get("items", [])
+        c_total = len(items)
+        c_done = c_total if is_done else sum(1 for it in items if it["done"] or it["id"] in proven)
+        total_c_done += c_done
+        total_c_total += c_total
+        if c_total == 0:
+            crit_str = "0/0"
+        elif c_total <= 5:
+            pills = " ".join(
+                f"C{idx}{'✓' if (is_done or it['done'] or it['id'] in proven) else '·'}"
+                for idx, it in enumerate(items, 1)
+            )
+            crit_str = f"{c_done}/{c_total} ({pills})"
+        else:
+            crit_str = f"{c_done}/{c_total}✓"
+
+        if is_done:
+            w = 1.0
+        elif st == "REVIEW":
+            w = 0.9
+        elif c_total > 0:
+            w = max((c_done / c_total) * 0.85, 0.15 if st == "IN_PROGRESS" else 0.0)
+        else:
+            w = 0.25 if st == "IN_PROGRESS" else 0.0
+        weights.append(w)
+
+        orec = orch_tasks.get(tid) if isinstance(orch_tasks.get(tid), dict) else {}
+        owner = t.get("owner") or ""
+        if orec.get("model") or orec.get("route"):
+            worker_label = "/".join(x for x in (orec.get("route", ""), orec.get("model", "")) if x)
+            ostate = orec.get("status", "")
+            owner_str = f"{worker_label}[{ostate}]" if ostate else worker_label
+        else:
+            owner_str = owner or "-"
+
+        rev_valid = False
+        if not is_done and st in ("IN_PROGRESS", "REVIEW"):
+            try:
+                dig, _ = V.task_digest(sys.modules[__name__], root, t, check_session=False)
+                con = contract(t)
+                rev_rec = V.latest_review(t.get("review_lines", []))
+                rev_valid = bool(
+                    rev_rec
+                    and rev_rec.get("verdict") == "PASS"
+                    and rev_rec.get("digest") == dig
+                    and rev_rec.get("contract") == con
+                    and all(
+                        V.finding_accepted(sys.modules[__name__], root, sev, rsn, own)
+                        for sev, _, rsn, own in rev_rec.get("findings", [])
+                    )
+                )
+            except ValueError:
+                rev_valid = False
+
+        if is_done:
+            tail = "accept=DONE"
+        elif rev_valid:
+            tail = "review=PASS (run accept)"
+        elif st == "BLOCKED":
+            tail = f"blocked={(t.get('blocked') or 'yes')[:28]}"
+        elif t.get("next"):
+            tail = f"next={t['next'][:32]}"
+        elif st == "IN_PROGRESS":
+            tail = f"next=check ({c_done}/{c_total})"
+        elif st == "REVIEW":
+            tail = "next=review"
+        elif st == "READY":
+            tail = "next=start"
+        else:
+            tail = f"deps={','.join(t.get('deps') or []) or '-'}"
+
+        icon = "✓" if is_done else ("▶" if (tid == focus_id or st in ("IN_PROGRESS", "REVIEW")) else ("!" if st == "BLOCKED" else "○"))
+        title = (t.get("title") or tid)[:26]
+        prio = 0 if (tid == focus_id or st in ("IN_PROGRESS", "REVIEW", "BLOCKED")) else 1
+        rows.append((prio, tid, f"  {icon} {tid} [{st}] {title} | {crit_str} | owner={owner_str} | {tail}"))
+
+    earned = float(len(gc_done_ids)) + sum(weights)
+    pct = min(100, max(0, int(round((earned / total_tasks) * 100)))) if total_tasks else 0
+    filled = min(10, max(0, int(round(pct / 10.0))))
+    bar = "█" * filled + "░" * (10 - filled)
+    if done_tasks == total_tasks:
+        phase = "COMPLETE"
+    elif any(t["status"] == "REVIEW" for t in all_tasks):
+        phase = "REVIEW"
+    elif any(t["status"] == "IN_PROGRESS" for t in all_tasks) or done_tasks > 0:
+        phase = "EXECUTION"
+    elif any(t["status"] == "READY" for t in all_tasks):
+        phase = "READY"
+    else:
+        phase = "PLANNING"
+
+    lines = [
+        f"PROGRESS_BOARD (İlerleme Panosu): [{bar}] {pct}% | Phase: {phase} | Tasks: {done_tasks}/{total_tasks} DONE | Criteria: {total_c_done}/{total_c_total}"
+    ]
+    if gc_done_ids:
+        sample = ", ".join(gc_done_ids[:4]) + (f" (+{len(gc_done_ids) - 4} more)" if len(gc_done_ids) > 4 else "")
+        lines.append(f"  ✓ {sample} [DONE] (committed in Git)")
+    shown = sorted(rows, key=lambda item: (item[0], item[1]))[:8]
+    for _, _, rline in sorted(shown, key=lambda item: item[1]):
+        lines.append(rline)
+    if len(rows) > 8:
+        lines.append(f"  ... (+{len(rows) - 8} more tasks)")
+    return lines
+
+
+def cmd_board(root, action=None, force=False):
+    if not brain_exists(root):
+        print("NO_BRAIN: run `init` first")
+        return 3
+    act = (action or "").strip().lower()
+    if act in BOARD_ON_TOKENS:
+        _require_not_worker(sys.modules[__name__], root, "`board on`")
+        with checkout_lock(root):
+            RL.require_free_or_director(sys.modules[__name__], root)
+            cfg = parse_config(root)
+            cfg["board"] = "on"
+            write_atomic(bp(root) / "config.yaml", config_text(root, cfg))
+        print("BOARD: ON (İlerleme Panosu açık — varsayılan olarak gösterilecek)")
+        for line in board_lines(root):
+            print(line)
+        return 0
+    if act in BOARD_OFF_TOKENS:
+        _require_not_worker(sys.modules[__name__], root, "`board off`")
+        with checkout_lock(root):
+            RL.require_free_or_director(sys.modules[__name__], root)
+            cfg = parse_config(root)
+            cfg["board"] = "off"
+            write_atomic(bp(root) / "config.yaml", config_text(root, cfg))
+        print("BOARD: OFF (İlerleme Panosu gizlendi — tekrar açmak için: `brain.py board on`)")
+        return 0
+    if act and act != "status":
+        raise ValueError(f"Unknown board action {action!r}; use `on` (`show`/`göster`) or `off` (`hide`/`gösterme`)")
+    enabled = board_enabled(root)
+    if act == "status":
+        print("BOARD: " + ("ON" if enabled else "OFF"))
+    if not enabled and not force:
+        if act != "status":
+            print("BOARD: OFF (İlerleme Panosu kapalı — açmak için: `brain.py board on`)")
+        return 0
+    for line in board_lines(root):
+        print(line)
+    return 0
+
+
 def cmd_boot(root, maintain=True, new_session=False):
     has_git = git(root, "rev-parse", "--is-inside-work-tree") == "true"
     maintain = maintain and not merge_op(root)
@@ -1552,6 +1748,9 @@ def cmd_boot(root, maintain=True, new_session=False):
         print(f"  hint: deps done, write full specs and set READY: {', '.join(promote)}")
     if since_audit >= 5:
         print(f"  hint: {since_audit} tasks closed since the last plan audit -> run Plan audit (WORKFLOW.md §6)")
+    if board_enabled(root):
+        for bline in board_lines(root, focus_id=focus["id"] if focus else None):
+            print(bline)
     if recent:
         print("RECENT: " + "; ".join(f"{ids} by {agent} ({sha})" for ids, agent, sha in recent))
     if stale or unmapped:
@@ -1839,6 +2038,9 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
         print(f"STARTED {task['id']} owner={actor} risk={risk} files={count} digest={dig} contract={con}")
         if policy.get("qualification_warning"):
             print("WARN " + policy["qualification_warning"])
+        if board_enabled(root):
+            for bline in board_lines(root, focus_id=task["id"]):
+                print(bline)
         return 0
 
 
@@ -1877,6 +2079,8 @@ def cmd_validate(root):
     cfg = parse_config(root)
     if not (b / "config.yaml").exists():
         warns.append("config.yaml missing (defaults used)")
+    if "board" in cfg and str(cfg.get("board", "")).strip().lower() not in (BOARD_ON_TOKENS | BOARD_OFF_TOKENS):
+        warns.append("config.yaml: board must be on|off")
     mode = cfg.get("architecture", {}).get("mode", "single")
     if mode == "domains" and not (b / "current").is_dir():
         fails.append("config mode=domains but current/ missing")
@@ -2085,6 +2289,21 @@ def _resolve_root_and_task(pos1, pos2, default_root="."):
     return Path(pos1 or default_root).resolve(), pos2
 
 
+def _resolve_root_and_board(pos1, pos2, default_root="."):
+    """Allow flexible positional order: `board [root] [action]` OR `board [action] [root]`."""
+    p1 = (pos1 or "").strip()
+    p2 = (pos2 or "").strip()
+    if p1.lower() in BOARD_ACTIONS:
+        return Path(p2 or default_root).resolve(), p1
+    if p2.lower() in BOARD_ACTIONS:
+        return Path(pos1 or default_root).resolve(), p2
+    if p1 and Path(p1).is_dir() and not p2:
+        return Path(p1).resolve(), ""
+    if p1 and not p2:
+        return Path(default_root).resolve(), p1
+    return Path(p1 or default_root).resolve(), p2
+
+
 def _relay_token_argv(argv):
     """`--relay-token <t>` works on every command and in shells that drop environment changes."""
     out, i = [], 0
@@ -2139,6 +2358,11 @@ def main():
     p_watch = sub.add_parser("watch", help="Token-thrifty 1-line project monitor for observers and timers")
     p_watch.add_argument("root", nargs="?", default=".")
     p_watch.add_argument("--heal", action="store_true", help="Report active runs needing readback (never unlinks OS locks)")
+
+    p_board = sub.add_parser("board", help="Zero-token Progress Board (İlerleme Panosu); default on, toggle with on/off")
+    p_board.add_argument("pos1", nargs="?", default=None)
+    p_board.add_argument("pos2", nargs="?", default=None)
+    p_board.add_argument("--force", action="store_true", help="Print board even when disabled")
 
     for name in ("boot", "brief", "map", "init", "changed", "validate", "doctor"):
         parser = sub.add_parser(name)
@@ -2308,6 +2532,12 @@ def main():
     if a.cmd == "watch":
         print(watch_status(a.root, getattr(a, "heal", False)))
         return 0
+    if a.cmd == "board":
+        root, act = _resolve_root_and_board(a.pos1, a.pos2)
+        if not root.is_dir():
+            print(f"error: not a directory: {root}", file=sys.stderr)
+            return 1
+        return cmd_board(root, action=act, force=getattr(a, "force", False))
     if a.cmd == "relay":
         result = RL.command(B_mod, a)
         code = result.pop("exit_code", 0) if isinstance(result, dict) else 0
@@ -2421,6 +2651,9 @@ def main():
                 rc, lines = V.check(B_mod, root, tid, timeout=a.timeout, actor=a.actor, rerun=a.rerun)
             for l in lines:
                 print(l)
+            if board_enabled(root):
+                for bline in board_lines(root, focus_id=tid):
+                    print(bline)
             return rc
         if a.cmd == "evidence":
             _require_not_worker(B_mod, root, "`evidence`")
@@ -2439,6 +2672,9 @@ def main():
                 )
             for l in lines:
                 print(l)
+            if board_enabled(root):
+                for bline in board_lines(root, focus_id=tid):
+                    print(bline)
             return rc
         if a.cmd == "accept":
             _require_not_worker(B_mod, root, "`accept`")
@@ -2447,6 +2683,9 @@ def main():
                 rc, lines = V.accept(B_mod, root, tid, actor=a.actor, agents_path=a.registry, self_review=a.self_review)
             for l in lines:
                 print(l)
+            if board_enabled(root):
+                for bline in board_lines(root, focus_id=tid):
+                    print(bline)
             return rc
         if a.cmd == "delegate":
             if Core.worker_env_active() and not RL.authorized(B_mod, root):
