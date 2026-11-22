@@ -23,7 +23,7 @@ Stable policy only — never HEAD, active task, timestamps, model, or test resul
 
 ```yaml
 schema_version: 4
-skill_version: "4.0.4"
+skill_version: "4.0.5"
 protocol_version: "1"
 board: "on"             # optional: "on" (default) | "off" (toggled via `brain.py board on|off`)
 architecture:
@@ -217,7 +217,7 @@ re-open or misread the decision (always write an ADR for the UI Design System & 
 | `PB-Verification: local/domain/global` | breadth of verification actually run | — |
 | `PB-Task: PB-014` / `PB-Tasks: PB-1,PB-2` | task work; completion also needs Verification and either deletion or DONE+Evidence in that commit | task mention alone proves completion |
 | `PB-Agent: <model id>` | who implemented the task; boot's RECENT line uses it for the takeover check | — |
-| `PB-Reviewer: <model id>` | independent reviewer who passed `PB review` on MEDIUM/HIGH risk tasks | — |
+| `PB-Reviewer: <model id>` | reviewer who passed `PB review` on MEDIUM/HIGH risk tasks (independent reviewer, or self-audit owner under explicit SOLO `--self-review`) | — |
 | `PB-Plan-Audit: <scope>` / `final` | a plan audit ran; resets boot's audit counter | the plan is perfect |
 | `PB-WIP: true` | unverified work preserved for continuity | completion; never with Checkpoint/Verification |
 | `PB-Genesis: true` | Brain baseline | — |
@@ -245,7 +245,7 @@ evidence, title/file ID mismatch, missing ADR, tracked `.cache/` files, size bud
 
 - `.project-brain/.cache/` is gitignored and disposable (`runs/*.log` check/delegation logs, `writer.lock`). Deleting it must never lose intent, target, constraints, tasks, or rationale.
 - `~/.project-brain/agents.json` stores machine-local registered actor aliases and identities (used for independent review checks and CAP/native actor mapping). External CLI discovery, catalogs and quotas are managed exclusively by CLI Agent Pool.
-- Project schema remains 4 in v4.0.0. `WAITING_USER` is BLOCKED with a reason; `READBACK_FIRST` is a boot result, and failed reviews are handled through REVIEW/start, not extra persisted task statuses.
+- Project schema remains 4 in v4.0.x. `WAITING_USER` is BLOCKED with a reason; `READBACK_FIRST` is a boot result, and failed reviews are handled through REVIEW/start, not extra persisted task statuses.
 - IDs and hashes provide freshness/integrity checks, not signatures or authenticated identities. A trusted agent must observe evidence, and actual user approval is needed for a user-owned waiver.
 
 # Migration (`brain.py migrate`)

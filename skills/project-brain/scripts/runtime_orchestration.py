@@ -706,7 +706,7 @@ def snapshot(B, root, db, directory, rid):
                 has_worker_commits = True
             else:
                 raise ValueError("Unexpected worker commit; inspect before continuing")
-        except Exception:
+        except (ValueError, OSError):
             raise ValueError("Unexpected worker commit; inspect before continuing")
     changed = changed_paths(B, path)
     if has_worker_commits:
@@ -1188,7 +1188,7 @@ def cancel(B, root, db, directory, rid, force=False):
         if row["spec"]["backend"] == "pool" and row["backend_id"]:
             try:
                 P.rpc("pool_cancel_task", {"taskId": row["backend_id"]})
-            except Exception:
+            except (ValueError, OSError):
                 pass
         db.event(rid, "FORCE_CANCELLED", {"prev_state": row["state"], "backend_id": row["backend_id"]})
         return summary(db.transition(rid, "CANCELLED", row["version"]))

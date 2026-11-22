@@ -317,8 +317,7 @@ def require_free_or_director(B, root, allow_stopping=False):
 
 
 def worker_reserve(B, root, policy):
-    relay = policy.get("relay") if isinstance(policy, dict) else None
-    return relay["threshold_percent"] if isinstance(relay, dict) and relay.get("enabled") is True else 0
+    return E.relay_worker_reserve(policy)
 
 
 # ---------------------------------------------------------------- quota
@@ -1270,14 +1269,20 @@ def _strays(state, rpc, root):
     return found, strays
 
 
-def _earliest_limiting_reset(state, policy, rpc, now):
-    """Earliest future reset across HEALTHY candidates: max(limiting windows) per candidate, min across candidates."""
+def _earliest_limiting_reset(state, policy, rpc, now, allow_current=True):
+    """Earliest future reset across selectable HEALTHY candidates: max(limiting windows) per candidate, min across candidates."""
     pol = state.get("inherited") or policy
     if not isinstance(pol, dict) or not isinstance(pol.get("relay"), dict):
         return None
     relay = validate_policy(pol["relay"])
     threshold = relay["threshold_percent"]
-    candidates = [c for c in _candidates(state, relay) if state["health"].get(key(c), {}).get("status") != "unhealthy"]
+    cur_dir = state.get("director") or {}
+    cur_key = (cur_dir.get("route"), cur_dir.get("model"))
+    candidates = [
+        c for c in _candidates(state, relay)
+        if state["health"].get(key(c), {}).get("status") != "unhealthy"
+        and (allow_current or (c.get("route"), c.get("model")) != cur_key)
+    ]
     if not candidates:
         return None
     quotas = fetch_quotas(rpc, candidates)
@@ -1529,7 +1534,7 @@ def recover(B, root, policy, rpc, brain_script=None, now=None, sleep=time.sleep,
         else:
             reason = reason or "no ready candidate has quota above the threshold"
         if "wakeAt" in state["features"] and from_hook and not (state["unplanned"] >= UNPLANNED_LIMIT):
-            earliest_reset = _earliest_limiting_reset(state, policy, rpc, now)
+            earliest_reset = _earliest_limiting_reset(state, policy, rpc, now, allow_current=allow_cur)
             if earliest_reset:
                 wake_seconds = max(60, min(3600, int(earliest_reset - now + 15)))
                 wake_iso = _iso(now + wake_seconds)
@@ -1761,7 +1766,7 @@ def command(B, args, pool=None):
                 raise ValueError("RELAY_NOT_ACTIVE: no relay director to assess")
             try:
                 snapshot = rpc("pool_get_quotas", {"routeId": state["director"]["route"]})
-            except Exception as exc:
+            except (ValueError, OSError, KeyError, RuntimeError) as exc:
                 snapshot = {"status": "UNKNOWN", "offline": True, "reason": str(exc)}
         return assess(snapshot, policy, args.model or (state or {}).get("director", {}).get("model"))
     if args.action == "next":

@@ -25,7 +25,7 @@ import uuid
 
 _LOCK_TLS = threading.local()
 
-VERSION = "4.0.4"
+VERSION = "4.0.5"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"

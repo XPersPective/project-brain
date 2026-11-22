@@ -32,7 +32,7 @@
   <main id="main">
     <section class="hero wrap">
       <div>
-        <p class="eyebrow">Open-source agent skill · MIT · <span data-version>v4.0.4</span></p>
+        <p class="eyebrow">Open-source agent skill · MIT · <span data-version>v4.0.5</span></p>
         <h1>One plan, many agents, <span class="accent">verified handoffs.</span></h1>
         <p class="lead">Long projects outlive sessions: tokens run out, sessions crash, you switch models or vendors.
           Project Brain keeps the goal, architecture, task plan and evidence <strong>in the repository</strong>,
@@ -99,13 +99,13 @@
 
 <pre class="code" tabindex="0" aria-label="Example boot output"><code>$ python skills/project-brain/scripts/brain.py boot
 STATE: RESUME
+SESSION_GATE: READY | PROTOCOL: 1 | TAKEOVER_CHECK: SKIP
 TARGET: CONFIRMED
-PLAN: 3 open, 12 done
-   PB-013 READY       P1 L Add Turkish date parser
-   PB-014 PLANNED     P2 M Export to JSON  [deps PB-013]
-FOCUS PB-013 (READY, P1, tier L, risk LOW): 2/2 acceptance open
+PROGRESS_BOARD: [████████░░] 80% | EXECUTION | Tasks 12/15 | Criteria 0/2
+  ▶ PB-013 [READY] Add Turkish date parser | 0/2 (C1· C2·) | next=start
+  ○ PB-014 [PLANNED] Export to JSON | 0/0 | deps=PB-013
 LOAD: .project-brain/tasks/PB-013.md .project-brain/current.md (lines 3-40)
-NEXT: 'continue' starts the queue.</code></pre>
+NEXT: Confirm session policy if pending, then start PB-013.</code></pre>
     </section>
 
     <section id="install" class="wrap section">

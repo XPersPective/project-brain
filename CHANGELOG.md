@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.0.5 — 2026-11-22
+
+- **Zero broad `except Exception:` & release-gate `BOOLEAN_FLAGS` parity:** narrowed every remaining `except Exception` handler across all 20 runtime modules (`brain.py`, `runtime_orchestration.py`, `runtime_relay.py`, `runtime_verify.py`) to explicit exception tuples and enforced both zero-broad-`except` and `BOOLEAN_FLAGS` ↔ `argparse` parity in `tools/build_release.py` and `test_v4_hardening.py`.
+- **Protocol-1 unaccepted `DONE` guard (`_is_locally_done`):** started Protocol-1 tasks hand-edited to `Status: DONE` without an `- accept: DONE` record are no longer accepted as completed dependencies in `start`, are warned in `validate`, and remain open in `boot`/`board`.
+- **BRP `wakeAt` candidate alignment & deduplicated worker reserve:** `_earliest_limiting_reset()` now respects `allow_current=allow_cur` to stay aligned with `_select()`, and `E.relay_worker_reserve()` unifies `runtime_relay.worker_reserve()` and `runtime_agent_pool._relay_worker_reserve()`.
+- **Accurate `review` `next_step`, bilingual Progress Board docs & updated 4.0 examples:** `V.review()` accounts for open unticked criteria before suggesting `accept`; restored explicit English/Turkish Progress Board (`İlerleme Panosu` / `PB board`) mapping in `SKILL.md` and `WORKFLOW.md`; clarified `PB start` vs `PB runs` parallel worktrees; refreshed `README.md`, `site/index.html`, and `SCHEMAS.md` to 4.0.5; and added permanent regression tests for `H-1`, `H-2`, `H-3`, `H-4`, and `_is_locally_done`.
+
 ## 4.0.4 — 2026-11-22
 
 - **Core `native` mode independent review without `PB runs EXECUTE` deadlock:** `runtime_orchestration.native_gate()` now verifies model independence directly against concrete lead implementer model IDs recorded via `PB start <id> --agent <model>` (still strictly rejecting generic `lead`/`unknown` aliases, same-model reviewers, and missing `native/<hash>` execution receipts), and uses `check_session=False` for digest verification so `boot`/`board` cold-takeover checks recognize valid native reviews. `PB start` emits a helpful hint if `lead` starts a `MEDIUM`/`HIGH` task under `native` review policy.

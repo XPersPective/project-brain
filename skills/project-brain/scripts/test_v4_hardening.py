@@ -66,6 +66,25 @@ def check_architecture_invariants():
         if mod not in visited:
             dfs(mod, [mod])
 
+    # Zero broad/bare `except Exception` and 100% BOOLEAN_FLAGS vs argparse parity across all runtime modules
+    bool_flags_used = set()
+    for p in runtime_files:
+        tree = ast.parse(p.read_text(encoding="utf-8"), filename=p.name, feature_version=(3, 8))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler):
+                if node.type is None or (isinstance(node.type, ast.Name) and node.type.id == "Exception"):
+                    raise AssertionError(f"Broad/bare except in {p.name}:{node.lineno}")
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument":
+                if any(
+                    kw.arg == "action" and isinstance(kw.value, ast.Constant) and kw.value.value in ("store_true", "store_false")
+                    for kw in node.keywords
+                ):
+                    for arg in node.args:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.startswith("-"):
+                            bool_flags_used.add(arg.value)
+    missing_bool = sorted(bool_flags_used - set(B.BOOLEAN_FLAGS))
+    assert not missing_bool, f"Boolean CLI flags missing from brain.BOOLEAN_FLAGS: {missing_bool}"
+
 
 def check_security_iso_and_paths():
     # Expanded secret redaction: JWT, Google API key, Slack token, URL credentials, --relay-token, longest-first env
@@ -669,6 +688,90 @@ def check_cycle2_authority_and_security_regressions():
                 pass
         rc_done, out_done = run_cli(nat_root, "accept", "PB-001", "--as", rev_actor)
         assert rc_done == 0 and "DONE PB-001" in out_done, out_done
+
+        # 11. 4.0.5 permanent regressions: `_is_locally_done` forged DONE refusal, H-1 concurrent boot/gc,
+        #     H-2 bystander boot --new-session active-relay protection, and H-4 staged Git submodule (160000)
+        forge_root = Path(tmp) / "forge-done"
+        forge_root.mkdir()
+        make_project(forge_root, legacy=False)
+        B.write_atomic(B.bp(forge_root) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nForge check.\n")
+        assert run_cli(forge_root, "policy", "--source", "solo", "--schedule", "serial", "--confirm")[0] == 0
+        assert run_cli(forge_root, "reconcile", "PB-001", "--note", "ok")[0] == 0
+        assert run_cli(forge_root, "start", "PB-001")[0] == 0
+        # Hand-edit Status: DONE after start without accept -> must NOT count as done!
+        t_f1 = B.bp(forge_root) / "tasks/PB-001.md"
+        B.write_atomic(t_f1, B.read(t_f1).replace("Status: IN_PROGRESS", "Status: DONE"))
+        assert not B._is_locally_done(forge_root, B.find_task(forge_root, "PB-001"))
+        rc_val_f, out_val_f = run_cli(forge_root, "validate")
+        assert "finished task file kept without valid accept/Evidence" in out_val_f, out_val_f
+        B.write_atomic(
+            B.bp(forge_root) / "tasks/PB-002.md",
+            "# PB-002 — Dependent\nStatus: READY\nPriority: P2\nTier: L\nRisk: LOW\nDepends: PB-001\nAreas: `src/a.py`\n\n"
+            "## Objective\nDep.\n\n## Steps\n1. Edit `src/a.py`.\n\n## Acceptance\n- [ ] [machine] ok\n\n## Verify\n- `python -c \"assert True\"`\n",
+        )
+        assert run_cli(forge_root, "reconcile", "PB-002", "--note", "ok")[0] == 0
+        rc_st2, out_st2 = run_cli(forge_root, "start", "PB-002")
+        assert rc_st2 == 2 and "unmet dependencies: PB-001" in out_st2, out_st2
+
+        # H-1: 4 concurrent `boot` processes with 6 committed DONE tasks -> all exit 0
+        import concurrent.futures as _cf
+        h1_root = Path(tmp) / "h1-conc"
+        h1_root.mkdir()
+        O.git(h1_root, "init", "-q")
+        O.git(h1_root, "config", "user.name", "Test Human")
+        O.git(h1_root, "config", "user.email", "human@example.com")
+        make_project(h1_root, legacy=False)
+        for i in range(1, 7):
+            tid = f"PB-{i:03d}"
+            (B.bp(h1_root) / "tasks" / f"{tid}.md").write_text(
+                f"# {tid} — Task {i}\nStatus: DONE\nRisk: LOW\nAreas: src/a.py\n\n## Evidence\n- check: PASS\n",
+                encoding="utf-8",
+            )
+        O.git(h1_root, "add", "-A")
+        trailers = "\n".join(f"PB-Task: PB-{i:03d}" for i in range(1, 7))
+        O.git(h1_root, "commit", "-qm", f"complete 6 tasks\n\n{trailers}\nPB-Verification: local")
+        with _cf.ThreadPoolExecutor(max_workers=4) as ex:
+            results = [f.result() for f in [ex.submit(run_cli, h1_root, "boot") for _ in range(4)]]
+        for idx, (rc_c, out_c) in enumerate(results):
+            assert rc_c == 0, f"H-1 concurrent boot thread {idx} failed: {out_c}"
+
+        # H-2: Bystander boot --new-session during active Relay preserves policy receipt & session modes
+        h2_root = Path(tmp) / "h2-relay-prot"
+        h2_root.mkdir()
+        O.git(h2_root, "init", "-q")
+        O.git(h2_root, "config", "user.name", "Test Human")
+        O.git(h2_root, "config", "user.email", "human@example.com")
+        make_project(h2_root, legacy=False)
+        assert run_cli(h2_root, "policy", "--source", "solo", "--schedule", "serial", "--confirm")[0] == 0
+        assert E.receipt_matches_file(B, h2_root)
+        rpath = RL._path(B, h2_root)
+        rpath.parent.mkdir(parents=True, exist_ok=True)
+        rpath.write_text(
+            json.dumps({
+                "schema": RL.SCHEMA, "status": "ACTIVE", "generation": 1,
+                "director": {"route": "r1", "model": "m1", "task_id": "t1", "token_hash": "a" * 64, "since": 1},
+                "pending": None, "owned": ["t1"], "history": [], "health": {}, "features": [], "unplanned": 0,
+                "policy_hash": "b" * 64, "candidates": [{"route": "r1", "model": "m1"}], "inherited": {},
+            }),
+            encoding="utf-8",
+        )
+        rc_h2, out_h2 = run_cli(h2_root, "boot", "--new-session")
+        assert rc_h2 == 0 and "RELAY_ACTIVE_PROTECTED" in out_h2, out_h2
+        assert E.receipt_matches_file(B, h2_root) and B.get_session_modes(h2_root)["exec"] == "solo"
+
+        # H-4: Staged Git submodule (mode 160000) passes security --scan cleanly
+        sub_dir = Path(tmp) / "h4-sub"
+        sub_dir.mkdir()
+        O.git(sub_dir, "init", "-q")
+        O.git(sub_dir, "config", "user.name", "Test Human")
+        O.git(sub_dir, "config", "user.email", "human@example.com")
+        (sub_dir / "x.txt").write_text("ok\n", encoding="utf-8")
+        O.git(sub_dir, "add", "x.txt")
+        O.git(sub_dir, "commit", "-qm", "sub init")
+        sub_sha = O.git(sub_dir, "rev-parse", "HEAD")
+        O.git(h1_root, "update-index", "--add", "--cacheinfo", f"160000,{sub_sha},libs/sub")
+        rc_h4, out_h4 = run_cli(h1_root, "security", "--scan")
+        assert rc_h4 == 0 and "SCAN PASS:" in out_h4, out_h4
 
 
 def main():

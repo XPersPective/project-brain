@@ -49,8 +49,9 @@ At a new top-level implementation session run `PB orient`, then
 `PB boot --new-session`. Orientation uses metadata/manifests without model calls.
 Do not edit source before the session-choice gate is `READY`. Within that session
 reuse context; use `PB board` (`on`/`off`, default `on`) for the deterministic
-chat Progress Board, `PB watch` for 1-line timer status, `PB brief` only for
-missing focus, and normal `PB boot` only for actual takeover/recovery. A fresh
+chat Progress Board (TR: *İlerleme Panosu*), `PB watch` for 1-line timer status,
+`PB brief` only for missing focus, and normal `PB boot` only for actual
+takeover/recovery. A fresh
 read-only audit may use `PB orient --read-only` and `PB boot --read-only`; an
 intervening question does not. For no Brain, `PB map` gives a cheap overview.
 Protocol 1 is enabled on init/upgrade unless compatibility `0` was explicitly set;
@@ -83,7 +84,9 @@ dependencies, environment, acceptance or reviewer concerns justify fresh checks.
 
 ESP is the named, binding choice of worker resources. The director remains the
 director in every mode. Scheduling Policy (SP) separately selects `serial` or
-`parallel` (auto ceiling up to 32, or explicit cap).
+`parallel` (auto ceiling up to 32, or explicit cap). Direct single-checkout
+`PB start` runs one `IN_PROGRESS` task at a time; concurrent parallel tasks
+execute in isolated worktrees via `PB runs`.
 
 | Choice | Scope |
 |---|---|

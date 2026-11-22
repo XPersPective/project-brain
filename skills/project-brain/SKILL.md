@@ -7,11 +7,11 @@ description: >-
   store publishing.
 license: MIT
 metadata:
-  version: 4.0.4
+  version: 4.0.5
   author: XPersPective
 ---
 
-# Project Brain 4.0.4
+# Project Brain 4.0.5
 
 `PB` = `python <this-skill>/scripts/brain.py` (Python 3.8+, stdlib only).
 
@@ -64,9 +64,10 @@ successors inherit settings. On CAP failure: `PB setup recover-cap --role exec|r
 Same-session questions reuse context then resume `Next` (no boot/reset/reloads).
 Use `PB board` for progress, `PB watch` (1-line), or `PB brief` (≤4 KiB) only for missing focus.
 
-- **Progress Board (`PB board`, default `on`):** On boot, transitions, or status
-  queries, echo only the latest `PROGRESS_BOARD` block verbatim once per reply
-  (0 layout tokens; never on errors). To hide/show (any language): `PB board off|on`.
+- **Progress Board (`PB board`, TR: *İlerleme Panosu*, default `on`):** On boot,
+  transitions, or status queries, echo only the latest `PROGRESS_BOARD` block
+  verbatim once per reply (0 layout tokens; never on errors). To hide/show (EN/TR:
+  *gösterme/kapat*, *göster/aç*): `PB board off|on`.
 
 ## 3. Work, quality and review
 

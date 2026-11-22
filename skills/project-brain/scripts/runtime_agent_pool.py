@@ -458,8 +458,7 @@ def _candidate_rows(source, selector, kind, category_filter=None):
 
 
 def _relay_worker_reserve(policy):
-    relay = policy.get("relay") if isinstance(policy, dict) else None
-    return relay["threshold_percent"] if isinstance(relay, dict) and relay.get("enabled") is True else 0
+    return E.relay_worker_reserve(policy)
 
 
 def select_policy(B, root, tier="M", role="worker", route="", model="", effort="", group="", mode=None):

@@ -135,7 +135,7 @@ def run_command(root, argv, log_path, timeout=900, input_bytes=None, strip_secre
                 if proc is not None:
                     try:
                         proc.wait(timeout=10)
-                    except Exception:
+                    except (OSError, subprocess.SubprocessError):
                         pass
         finally:
             if cache:
@@ -546,11 +546,15 @@ def review(B, root, task_id, reviewer, verdict, findings=(), agents_path=None, s
             if (m := FINDING_RE.match("- finding " + f.strip()))
             and not finding_accepted(B, root, m.group(1), m.group(3), m.group(4))
         ]
-        next_step = (
-            "Review passed on current digest; run `accept` and commit"
-            if verdict == "PASS" and not blocking_findings
-            else "Fix review findings, recheck, then re-review"
-        )
+        has_open_items = any(not it.get("done") for it in task.get("items", []))
+        if verdict == "PASS" and not blocking_findings:
+            next_step = (
+                "Finish open acceptance criteria, then run `accept` and commit"
+                if has_open_items
+                else "Review passed on current digest; run `accept` and commit"
+            )
+        else:
+            next_step = "Fix review findings, recheck, then re-review"
         fail_msg = ""
         if verdict != "PASS" or blocking_findings:
             fail_msg = (

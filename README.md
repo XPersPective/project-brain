@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **4.0.4** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
+Current release: **4.0.5** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
@@ -51,16 +51,24 @@ script computes the mechanical state; the agent still reviews its output and ver
 $ python skills/project-brain/scripts/brain.py boot
 STATE: RESUME
 git: main @ 4f1c2aa | current baseline 4f1c2aa (= HEAD) | dirty 0 (+0 brain)
+SESSION_GATE: READY
+WORK: execute | parallel | max_parallel=4
+PROTOCOL: 1 (intent/input guards active)
+TAKEOVER_CHECK: SKIP (clean tree at verified checkpoint HEAD; do not re-run test suite)
 TARGET: CONFIRMED
 PLAN: 3 open, 12 done
    PB-013 READY       P1 L Add Turkish date parser
    PB-014 PLANNED     P2 M Export to JSON  [deps PB-013]
    PB-015 BLOCKED     P2 H Verify service recovery  [needs test environment access]
-FOCUS PB-013 (READY, P1, tier L, risk LOW): 2/2 acceptance open
-RECENT: PB-012 by claude-haiku-5-5 (4f1c2aa); PB-011 by codex-agent (9ab01de)
+FOCUS PB-013 (READY, P1, tier L->L, risk LOW->LOW, score 18/100, effort low, role=worker): 2/2 acceptance open
+PROGRESS_BOARD: [████████░░] 80% | EXECUTION | Tasks 12/15 | Criteria 0/2
+  ✓ PB-001, PB-002, PB-003, PB-004 (+8 more) [DONE] (committed in Git)
+  ▶ PB-013 [READY] Add Turkish date parser | 0/2 (C1· C2·) | next=start
+  ○ PB-014 [PLANNED] Export to JSON | 0/0 | deps=PB-013
+  ! PB-015 [BLOCKED] Verify service recovery | 0/0 | blocked=needs test environment
 LOAD: .project-brain/tasks/PB-013.md .project-brain/current.md (lines 3-40, 88-120) .project-brain/target.md .project-brain/constraints.md
 CMDS: test=python -m pytest -q | lint=ruff check .
-NEXT: Route the user's request before tests or writes. If authorized, run the takeover check; 'continue' starts the queue.
+NEXT: Confirm session policy if pending (`setup confirm`). For authorized work, start PB-013 and keep working the queue.
 ```
 
 ## Protocol 1

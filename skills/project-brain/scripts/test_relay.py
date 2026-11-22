@@ -804,6 +804,31 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(RL.remaining(snap, "gemini-3.8-pro"), 84)
         self.assertEqual(RL.remaining(snap, "gemini-4-argon"), 45)
 
+    def test_earliest_limiting_reset_respects_allow_current(self):
+        policy = {
+            "relay": {
+                "enabled": True,
+                "threshold_percent": 15,
+                "candidates": [
+                    {"route": "r1", "model": "m1"},
+                    {"route": "r2", "model": "m2"},
+                ],
+            }
+        }
+        state = {
+            "director": {"route": "r1", "model": "m1"},
+            "candidates": policy["relay"]["candidates"],
+            "health": {},
+            "inherited": policy,
+        }
+        now = 1000.0
+        def rpc(tool, args):
+            if args["routeId"] == "r1":
+                return {"windows": [{"remainingPercent": 0, "resetAt": now + 300}]}
+            return {"windows": [{"remainingPercent": 0, "resetAt": now + 3600}]}
+        self.assertEqual(RL._earliest_limiting_reset(state, policy, rpc, now, allow_current=True), now + 300)
+        self.assertEqual(RL._earliest_limiting_reset(state, policy, rpc, now, allow_current=False), now + 3600)
+
 
 if __name__ == "__main__":
     unittest.main()

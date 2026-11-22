@@ -532,6 +532,16 @@ def _cached_task_digest(root, task, digest_cache=None):
     return res
 
 
+def _is_locally_done(root, task):
+    """True when a task file is DONE with valid evidence (started Protocol-1 tasks require `- accept: DONE`)."""
+    if task.get("status") != "DONE" or not task.get("has_evidence"):
+        return False
+    ev_lines = task.get("evidence_lines", [])
+    if any(line.startswith("- start:") for line in ev_lines) and R.enabled(sys.modules[__name__], root):
+        return any(ACCEPT_RE.match(line) for line in ev_lines)
+    return True
+
+
 def _done_task_intact(root, task, digest_cache=None):
     """True only when an uncommitted DONE task's current digest and contract still match its recorded `accept`."""
     if task.get("status") != "DONE" or not task.get("areas"):
@@ -1241,7 +1251,7 @@ def watch_status(root, heal=False):
     relay_st = None
     try:
         relay_st = RL.read(sys.modules[__name__], root)
-    except Exception:
+    except (ValueError, OSError):
         pass
     if relay_st and relay_st.get("status") in RL.BLOCKING and relay_st.get("director"):
         d = relay_st["director"]
@@ -1256,7 +1266,7 @@ def watch_status(root, heal=False):
             pending_runs = O.L.peek(sys.modules[__name__], root)
             if pending_runs:
                 heal_note = " | runs:%d" % len(pending_runs)
-        except Exception:
+        except (ValueError, OSError, sqlite3.Error):
             pass
     return "%s | %s/%s/%s/%s | cur:%s | rem:%d%%(%d/%d)%s" % (
         now_iso, mode_str, route_str, quota_str, pool_str, cur_str, rem_pct, left_count, total_tasks, heal_note
@@ -1294,7 +1304,7 @@ def gc_brain(root, has_git=None, completed=None):
                     parts = Path(cp["path"]).parts
                     if len(parts) >= 3 and parts[0] == BRAIN_DIR and parts[1] == "evidence":
                         active_checkpoints.add(parts[2])
-    except Exception:
+    except (ValueError, OSError):
         pass
     root_abs = Path(root).resolve()
     ev_root = Core.public_path(root_abs, BRAIN_DIR + "/evidence")
@@ -1425,7 +1435,7 @@ def board_lines(root, focus_id=None, all_tasks=None, hist_done=None, digest_cach
         done_tampered = False
         done_unproven = False
         if st == "DONE":
-            if not t["has_evidence"]:
+            if not _is_locally_done(root, t):
                 is_done, done_unproven = False, True
             elif has_accept and not _done_task_intact(root, t, digest_cache=digest_cache):
                 is_done, done_tampered = False, True
@@ -1640,7 +1650,7 @@ def cmd_boot(root, maintain=True, new_session=False):
         suffix = f" (+{len(gc_removed) - 10} more)" if len(gc_removed) > 10 else ""
         auto_mig_notes.append(f"GC_CLEANUP: removed {sample}{suffix}")
     all_tasks = list_tasks(root)
-    tasks = [t for t in all_tasks if t["status"] != "DONE" or not t["has_evidence"]]
+    tasks = [t for t in all_tasks if not _is_locally_done(root, t)]
     open_ids = {t["id"] for t in tasks}
     notes, state = list(auto_mig_notes), None
     other = []
@@ -1679,7 +1689,7 @@ def cmd_boot(root, maintain=True, new_session=False):
         notes.append("READBACK_FIRST unresolved external operations: " + ext_sample + ext_more)
 
     active = ip[0] if ip else (rev_tasks[0] if rev_tasks else None)
-    done_tasks = [t for t in all_tasks if t["status"] == "DONE" and t["has_evidence"]]
+    done_tasks = [t for t in all_tasks if _is_locally_done(root, t)]
     digest_cache = {}
     intact_done_tasks = []
 
@@ -2117,7 +2127,7 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
         if pending:
             print("FAIL READBACK_FIRST unresolved external operations: " + ", ".join(sorted(set(pending))))
             return 2
-        open_tasks = [t for t in all_tasks if t["status"] != "DONE" or not t["has_evidence"]]
+        open_tasks = [t for t in all_tasks if not _is_locally_done(root, t)]
         other_ip = [t["id"] for t in open_tasks if t["status"] == "IN_PROGRESS" and t["id"] != task["id"]]
         if other_ip:
             print(f"FAIL another task is already IN_PROGRESS: {', '.join(other_ip)}")
@@ -2130,7 +2140,7 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
             print(f"FAIL {task['id']} is not an executable spec: {'; '.join(errs)}")
             return 2
         has_git = git(root, "rev-parse", "--is-inside-work-tree") == "true"
-        local_done = {t["id"] for t in all_tasks if t["status"] == "DONE" and t["has_evidence"]}
+        local_done = {t["id"] for t in all_tasks if _is_locally_done(root, t)}
         _, completed = history_task_ids(root) if has_git else (set(), set())
         done_ids = (completed | local_done) - {t["id"] for t in open_tasks}
         unmet = [d for d in task["deps"] if d not in done_ids]
@@ -2234,15 +2244,15 @@ def cmd_validate(root):
             warns.append(f"{name}: {n} lines > {BUDGETS[key]}")
 
     all_tasks = list_tasks(root)
-    tasks = [t for t in all_tasks if t["status"] != "DONE" or not t["has_evidence"]]
+    tasks = [t for t in all_tasks if not _is_locally_done(root, t)]
     ids = {t["id"] for t in tasks}
     every, completed = history_task_ids(root) if has_git else (set(), set())
-    completed |= {t["id"] for t in all_tasks if t["status"] == "DONE" and t["has_evidence"]}
+    completed |= {t["id"] for t in all_tasks if _is_locally_done(root, t)}
     if len({t["id"] for t in all_tasks}) != len(all_tasks):
         fails.append("duplicate task IDs (including differently padded filenames)")
     for t in all_tasks:
-        if t["status"] == "DONE" and not t["has_evidence"]:
-            warns.append(f"{t['id']}: finished task file kept without Evidence; verify before checkpointing")
+        if t["status"] == "DONE" and not _is_locally_done(root, t):
+            warns.append(f"{t['id']}: finished task file kept without valid accept/Evidence; verify before checkpointing")
     if len(tasks) > BUDGETS["open_tasks"]:
         warns.append(f"{len(tasks)} open tasks > {BUDGETS['open_tasks']} (merge or defer distant work)")
     ip = [t["id"] for t in tasks if t["status"] == "IN_PROGRESS"]
@@ -2362,7 +2372,7 @@ def cmd_doctor(root):
         with Core.ProcessTree():
             containment = "Windows JobObject" if os.name == "nt" else "POSIX process group"
         print(f"CONTAINMENT: OK ({containment})")
-    except Exception as exc:
+    except (Core.ContainmentError, OSError, ValueError) as exc:
         print(f"CONTAINMENT: FAIL ({exc})")
         return 2
     has_git = git(root, "rev-parse", "--is-inside-work-tree") == "true"

@@ -686,3 +686,9 @@ def cap_unavailable(value, role="exec"):
             "wait for recovery or switch policy to native (`PB policy --source native --confirm`)." + tail
         ),
     }
+
+
+def relay_worker_reserve(policy):
+    """Single source of truth for CAP worker quota reserve when Baton Relay is enabled."""
+    relay = policy.get("relay") if isinstance(policy, dict) else None
+    return relay["threshold_percent"] if isinstance(relay, dict) and relay.get("enabled") is True else 0

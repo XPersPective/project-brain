@@ -69,6 +69,32 @@ def check_runtime_invariants(entries):
     for mod in sorted(graph):
         if mod not in visited:
             dfs(mod, [mod])
+    bool_flags_used = set()
+    declared_bool = set()
+    for mod, src in scripts.items():
+        tree = ast.parse(src, filename=f"{mod}.py", feature_version=(3, 8))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler):
+                if node.type is None or (isinstance(node.type, ast.Name) and node.type.id == "Exception"):
+                    raise ValueError(f"Broad/bare except in {mod}.py:{node.lineno}; catch specific exception types")
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument":
+                is_bool = any(
+                    kw.arg == "action" and isinstance(kw.value, ast.Constant) and kw.value.value in ("store_true", "store_false")
+                    for kw in node.keywords
+                )
+                if is_bool:
+                    for arg in node.args:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.startswith("-"):
+                            bool_flags_used.add(arg.value)
+            if mod == "brain" and isinstance(node, ast.Assign):
+                if any(isinstance(t, ast.Name) and t.id == "BOOLEAN_FLAGS" for t in node.targets):
+                    if isinstance(node.value, (ast.Set, ast.Tuple, ast.List)):
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                declared_bool.add(elt.value)
+    missing_bool = sorted(bool_flags_used - declared_bool)
+    if missing_bool:
+        raise ValueError("CLI boolean flags missing from brain.BOOLEAN_FLAGS: " + ", ".join(missing_bool))
 
 
 def check_versions(entries, version):
