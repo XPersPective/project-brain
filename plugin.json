@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "project-brain",
-  "version": "4.0.3",
+  "version": "4.0.4",
   "description": "Git-native project memory, UI/Backend quality enforcement, task complexity scoring, source-bound verification, and economical orchestration.",
   "author": {
     "name": "XPersPective",
@@ -27,7 +27,7 @@
       "interface": {
         "displayName": "Project Brain",
         "shortDescription": "Plan, verify, review, and resume projects with Git-native memory and optional CLI Agent Pool orchestration",
-        "longDescription": "Project Brain 4.0.3 keeps plans, architecture and verification evidence in Git with an acyclic, dependency-free Python 3.8+ runtime. Core mode runs standalone with safe defaults (solo or host native agents, single-line session confirmation, source-bound proof and independent review); optional power features integrate with the separate CLI Agent Pool (CAP) companion for multi-CLI execution, durable SQLite runs, Quota Recovery (QRP), and Baton Relay (BRP).",
+        "longDescription": "Project Brain 4.0.4 keeps plans, architecture and verification evidence in Git with an acyclic, dependency-free Python 3.8+ runtime. Core mode runs standalone with safe defaults (solo or host native agents, single-line session confirmation, source-bound proof and independent review); optional power features integrate with the separate CLI Agent Pool (CAP) companion for multi-CLI execution, durable SQLite runs, Quota Recovery (QRP), and Baton Relay (BRP).",
         "developerName": "XPersPective",
         "category": "Productivity",
         "websiteURL": "https://github.com/XPersPective/project-brain",

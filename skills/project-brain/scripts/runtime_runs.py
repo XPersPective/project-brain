@@ -110,15 +110,19 @@ def board_summary(B, root):
             return {}
         out = {}
         rows = db.execute(
-            "SELECT id,task,kind,state,backend FROM runs WHERE state IN "
+            "SELECT id,task,kind,state,spec FROM runs WHERE state IN "
             "('PREPARED','SUBMITTING','RUNNING','CANCEL_REQUESTED','UNKNOWN') OR "
             "(state='SUCCEEDED' AND integration!='REJECTED' AND (verification!='PASS' OR integration='PENDING')) "
             "ORDER BY created DESC LIMIT 16"
         ).fetchall()
-        for rid, tid, kind, state, backend in rows:
+        for rid, tid, kind, state, raw_spec in rows:
             if tid in out:
                 continue
-            worker = backend or ""
+            try:
+                spec_obj = json.loads(raw_spec) if raw_spec else {}
+            except ValueError:
+                spec_obj = {}
+            worker = ""
             for (raw,) in db.execute("SELECT data FROM events WHERE run=? ORDER BY seq DESC LIMIT 8", (rid,)):
                 try:
                     ev = json.loads(raw)
@@ -127,11 +131,17 @@ def board_summary(B, root):
                 if not isinstance(ev, dict):
                     continue
                 req = ev.get("request") if isinstance(ev.get("request"), dict) else {}
-                route = ev.get("routeId") or ev.get("route") or req.get("routeId") or ""
+                route = ev.get("routeId") or ev.get("route") or req.get("routeId") or ev.get("host") or ""
                 model = ev.get("modelId") or ev.get("model") or req.get("modelId") or ev.get("actor") or ""
                 if route or model:
                     worker = "/".join(x for x in (route, model) if x)
                     break
+            if not worker and isinstance(spec_obj, dict):
+                nc = spec_obj.get("native_candidate")
+                if isinstance(nc, dict) and (nc.get("host") or nc.get("model")):
+                    worker = "/".join(x for x in (nc.get("host", ""), nc.get("model", "")) if x)
+                else:
+                    worker = str(spec_obj.get("backend") or "")
             out[tid] = {"run": rid, "kind": kind, "state": state, "worker": worker}
         return out
     except (sqlite3.Error, ValueError, OSError):

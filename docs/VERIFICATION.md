@@ -1,4 +1,11 @@
-# Verification guide — Project Brain 4.0.3
+# Verification guide — Project Brain 4.0.4
+
+4.0.4 resolves all 5 real-world defects uncovered by an independent end-to-end live probe of 4.0.3:
+- **Core `native` mode `MEDIUM`/`HIGH` review unlocked (`runtime_orchestration.native_gate`):** lead implementations started with a concrete model ID (`PB start <id> --agent <model>`) can now be independently audited via `PB runs prepare --kind REVIEW --backend native` + `submit` + `receipt` without forcing a full 7-step `PB runs EXECUTE` worktree ceremony, while still strictly rejecting generic aliases (`lead`, `unknown`), same-model reviews, and missing `native/<hash>` execution receipts; `native_gate` digest check also uses `check_session=False` so cold `boot`/`board` review-status checks succeed on native-reviewed tasks.
+- **Real SQLite `runs.sqlite3` worker tracking in `PROGRESS_BOARD` (`runtime_runs.board_summary`):** fixed the SQL query to read `spec` JSON (`native_candidate` / `backend`) instead of a nonexistent `backend` column, and added a live SQLite regression test verifying active `PB runs` workers appear on `PB board`.
+- **Fence-aware Markdown section parsing (`runtime_core.iter_markdown_headings` & `replace_markdown_section`):** `brain.sections()`, `brain.append_section()`, `runtime_protocol.progress()`, and `runtime_verify` evidence compaction now ignore `## ` headings inside fenced code blocks (` ``` ` / ` ~~~ `).
+- **Accurate `REVIEW_PENDING` progress handoff (`runtime_verify.accept`):** transitioning a task to `Status: REVIEW` now updates `progress.next` (`Independent review -> accept` or `SOLO review --self-review`) so `board` and `boot` never show stale pre-review steps.
+- **`validate` shell-operator warnings & `PB new` ergonomics:** `cmd_validate` warns when a `## Verify` command contains shell operators/builtins (`&&`, `||`, `;`, `|`, `cd`, `ENV=val`) because `PB check` executes without a shell; `PB new [root] "title"` now supports omitting `root` (defaulting to `.`) like all other CLI subcommands.
 
 4.0.3 resolves all critical, high, and medium findings from a fresh-eyes two-agent adversarial audit of 4.0.2:
 - **Unified review gate & non-contradictory `boot` (`V.review_status`):** `boot`, `board`, and `accept` now share the exact same review validity rules (`R.review_guard`, `A.gate`, implementer independence, `allow_self`, `finding_accepted`), and `boot` `NEXT:` now aligns with `review: PASS valid` instead of telling the agent to re-review.

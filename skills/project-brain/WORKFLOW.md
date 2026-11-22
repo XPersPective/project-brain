@@ -217,14 +217,14 @@ by behavior; never score them down artificially.
    logs (`--rerun` forces a fresh run). Record non-machine criteria via
    `PB evidence <id> --kind <kind> --criterion <id> --note "<obs>" [--file <path>]`.
    UI requires `[visual]`, `[interaction]`, `[accessibility]` proof.
-5. `MEDIUM`/`HIGH` risk: `PB accept <id>` transitions to `REVIEW` (`REVIEW_PENDING`)
-   once implementation evidence is complete. Dispatch an independent qualified
-   reviewer (registered via `PB runs prepare --kind REVIEW --backend native|pool`
-   and `PB runs receipt` / CAP) and record `PB review <id> --reviewer <alias>
-   --verdict PASS|BLOCKED [--finding "SEVERITY: text"]`. Under `solo` review
-   policy (`PB policy --review-source solo --confirm`), use explicit
-   `--self-review`. `BLOCKER`, `MAJOR`, unwaived `QUALITY`, and unowned `MINOR`
-   findings block closure.
+5. `MEDIUM`/`HIGH` risk: pass your actual model ID on `PB start <id> --agent <model>`
+   so independent review can verify a different model audited the work. `PB accept <id>`
+   transitions to `REVIEW` (`REVIEW_PENDING`) once implementation evidence is complete.
+   Dispatch an independent qualified reviewer (registered via `PB runs prepare --kind REVIEW
+   --backend native|pool` + `submit` + `receipt` or CAP) and record `PB review <id>
+   --reviewer <alias> --verdict PASS|BLOCKED [--finding "SEVERITY: text"]`. Under `solo`
+   review policy (`PB policy --review-source solo --confirm`), use explicit `--self-review`.
+   `BLOCKER`, `MAJOR`, unwaived `QUALITY`, and unowned `MINOR` findings block closure.
 6. `PB accept <id>` checks all ticked criteria, current logs/artifacts, staged
    secret scan and review; `HIGH` also requires the configured full test command.
    Reconcile Current when structure changes, run `PB validate`, and checkpoint.

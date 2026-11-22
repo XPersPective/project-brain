@@ -568,6 +568,108 @@ def check_cycle2_authority_and_security_regressions():
         dig_arch, cnt_arch = V.task_digest(B, arch_root, B.find_task(arch_root, "PB-001"), check_session=False)
         assert len(dig_arch) == 16 and cnt_arch >= 1
 
+        # 10. 4.0.4 regressions: fence-aware sections/append_section, validate shell-op warning, optional-root `new`,
+        #     REVIEW_PENDING progress.next, live SQLite board_summary, and Core native lead->independent review flow!
+        fenced_md = (
+            "# PB-001 — Doc\nStatus: READY\nPriority: P2\nTier: L\nRisk: LOW\nAreas: `docs/a.md`\n\n"
+            "## Objective\nExample:\n```markdown\n## Evidence\n- fake\n## Acceptance\n- [x] fake\n```\n\n"
+            "## Steps\n1. Write `docs/a.md`.\n\n## Acceptance\n- [ ] [machine] Real\n\n"
+            "## Verify\n- `pytest -q && ruff check .`\n\n## Evidence\n\n## Review\n"
+        )
+        parsed_secs = B.sections(fenced_md)
+        assert not any("fake" in l for l in parsed_secs.get("evidence", [])), parsed_secs
+        assert not any("fake" in l for l in parsed_secs.get("acceptance", [])), parsed_secs
+        assert list(Core.iter_markdown_headings("## A\n```inline```\n## B\nok\n".splitlines())) == [(0, "A"), (2, "B")]
+        fenced_file = B.bp(arch_root) / "tasks/PB-001.md"
+        B.write_atomic(fenced_file, fenced_md)
+        B.append_section(fenced_file, "Evidence", "- real proof line")
+        after_app = B.sections(B.read(fenced_file))
+        assert [l for l in after_app.get("evidence", []) if l.strip()] == ["- real proof line"], after_app
+        code, val_out = run_cli(arch_root, "validate")
+        assert "shell operators/builtins" in val_out, val_out
+
+        # Optional-root `PB new "Title"` works from repo cwd
+        import subprocess as _sub, sys as _sys
+        from test_helpers import BRAIN as _BRAIN, clean_env as _clean_env
+        r_new = _sub.run(
+            [_sys.executable, "-B", str(_BRAIN), "new", "Task from cwd"],
+            cwd=str(arch_root), capture_output=True, text=True, encoding="utf-8", env=_clean_env(),
+        )
+        assert r_new.returncode == 0 and "CREATED .project-brain/tasks/PB-002.md" in r_new.stdout, r_new.stdout + r_new.stderr
+
+        # Core native flow: concrete lead model (`claude-sonnet-4`) -> REVIEW_PENDING updates progress.next ->
+        # `PB runs` native review shows live SQLite worker on `PB board` -> independent `claude-opus-4-6` PASS -> DONE!
+        nat_root = Path(tmp) / "native-core"
+        nat_root.mkdir()
+        O.git(nat_root, "init", "-q")
+        O.git(nat_root, "config", "user.name", "Test Human")
+        O.git(nat_root, "config", "user.email", "human@example.com")
+        run_cli(nat_root, "init")
+        (nat_root / "src").mkdir()
+        (nat_root / "src/app.py").write_text("x = 1\n", encoding="utf-8")
+        B.write_atomic(B.bp(nat_root) / "target.md", "# Target\nStatus: CONFIRMED\n\n## Goal\nNative core flow.\n")
+        B.write_atomic(
+            B.bp(nat_root) / "tasks/PB-001.md",
+            "# PB-001 — Core feature\nStatus: READY\nPriority: P1\nTier: M\nRisk: MEDIUM\nOwner:\nDepends: -\n"
+            "Areas: `src/app.py`\nDomains: core\n\n## Objective\nAdd core.\n\n## Steps\n1. Edit `src/app.py`.\n\n"
+            "## Acceptance\n- [x] [machine] Works\n\n## Verify\n- `python -c \"assert True\"`\n\n## Evidence\n\n## Review\n",
+        )
+        O.git(nat_root, "add", "-A")
+        O.git(nat_root, "commit", "-qm", "genesis\n\nPB-Genesis: true\nPB-Current-Checkpoint: all")
+        assert run_cli(nat_root, "boot", "--new-session")[0] == 0
+        assert run_cli(nat_root, "setup", "confirm")[0] == 0
+        assert run_cli(nat_root, "reconcile", "PB-001", "--note", "ok")[0] == 0
+        assert run_cli(nat_root, "start", "PB-001", "--agent", "claude-sonnet-4")[0] == 0
+        assert run_cli(nat_root, "check", "PB-001", "--as", "claude-sonnet-4")[0] == 0
+        rc_acc1, out_acc1 = run_cli(nat_root, "accept", "PB-001", "--as", "claude-sonnet-4")
+        assert rc_acc1 == 1 and "REVIEW_PENDING PB-001" in out_acc1, out_acc1
+        assert "next=Independent review -> accept" in out_acc1, out_acc1
+        rc_prep, out_prep = run_cli(
+            nat_root, "runs", "prepare", "--task", "PB-001", "--kind", "REVIEW",
+            "--backend", "native", "--host", "host", "--model", "claude-opus-4-6",
+        )
+        assert rc_prep == 0, out_prep
+        rid = json.loads(out_prep)["run"]
+        rc_bd, out_bd = run_cli(nat_root, "board")
+        assert rc_bd == 0 and "@host/claude-opus-4-6[REVIEW:PREPARED]" in out_bd, out_bd
+        rc_sub, out_sub = run_cli(nat_root, "runs", "submit", "--run", rid)
+        assert rc_sub == 0, out_sub
+        req_key = json.loads(out_sub)["request_key"]
+        rec_path = Path(tmp) / "native-review-receipt.json"
+        rec_path.write_text(
+            json.dumps({
+                "host": "host", "model": "claude-opus-4-6", "tier": "M", "state": "SUCCEEDED",
+                "request_key": req_key, "job_id": "job-rev-1",
+                "report": {
+                    "status": "completed", "summary": "Audited",
+                    "files": [], "checks": [], "research": [], "blockers": [],
+                    "verdict": "PASS", "findings": [],
+                },
+            }),
+            encoding="utf-8",
+        )
+        rc_rec, out_rec = run_cli(nat_root, "runs", "receipt", "--run", rid, "--file", str(rec_path))
+        assert rc_rec == 0, out_rec
+        rev_actor = json.loads(out_rec)["actor"]
+        rc_rev, out_rev = run_cli(nat_root, "review", "PB-001", "--reviewer", rev_actor, "--verdict", "PASS")
+        assert rc_rev == 0, out_rev
+        # Cold boot --new-session recognizes the valid native review on current digest!
+        rc_cb, out_cb = run_cli(nat_root, "boot", "--new-session")
+        assert rc_cb == 0 and "review: PASS valid on current digest=" in out_cb, out_cb
+        assert run_cli(nat_root, "setup", "confirm")[0] == 0
+        # Negative checks on native_gate: prefixed generic `host/lead` and receipt-less `pool/<24hex>` are refused!
+        for bad_imp in ("host/lead", "anthropic/claude-opus-4-6", "pool/" + "a" * 24):
+            fake_task = dict(B.find_task(nat_root, "PB-001"))
+            fake_task["owner"] = bad_imp
+            fake_task["evidence_lines"] = [f"- start: IN_PROGRESS | owner={bad_imp} | risk=MEDIUM | digest=1 | contract=1"]
+            try:
+                O.native_gate(B, nat_root, fake_task, rev_actor, "review")
+                raise AssertionError(f"native_gate should have refused implementer {bad_imp}")
+            except ValueError:
+                pass
+        rc_done, out_done = run_cli(nat_root, "accept", "PB-001", "--as", rev_actor)
+        assert rc_done == 0 and "DONE PB-001" in out_done, out_done
+
 
 def main():
     check_architecture_invariants()

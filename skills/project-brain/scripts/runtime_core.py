@@ -25,7 +25,7 @@ import uuid
 
 _LOCK_TLS = threading.local()
 
-VERSION = "4.0.3"
+VERSION = "4.0.4"
 SCHEMA = 4
 BRAIN_DIR = ".project-brain"
 LEGACY_FILE = "PROJECT_BRAIN.md"
@@ -33,6 +33,7 @@ LEGACY_FILE = "PROJECT_BRAIN.md"
 _GENERATED_NOISE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
 _GENERATED_NOISE_FILES = frozenset({".DS_Store", "Thumbs.db"})
 _GENERATED_NOISE_EXTS = (".pyc", ".pyo")
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 
 
 def is_generated_noise(path):
@@ -42,6 +43,40 @@ def is_generated_noise(path):
         return True
     name = parts[-1] if parts else ""
     return name in _GENERATED_NOISE_FILES or name.endswith(_GENERATED_NOISE_EXTS)
+
+
+def iter_markdown_headings(lines):
+    """Yield (line_index, heading_text) for `## ` headings outside fenced code blocks."""
+    fence = None
+    for idx, line in enumerate(lines):
+        m = _FENCE_RE.match(line)
+        if m:
+            tok = m.group(1)
+            rest = line[m.end():]
+            if fence is None:
+                if tok[0] == "`" and "`" in rest:
+                    continue
+                fence = (tok[0], len(tok))
+            elif tok[0] == fence[0] and len(tok) >= fence[1] and not rest.strip():
+                fence = None
+            continue
+        if fence is None and line.startswith("## "):
+            yield idx, line[3:].strip()
+
+
+def replace_markdown_section(text, heading, body_lines):
+    """Replace `## <heading>` body outside fenced code blocks, or append at EOF if absent."""
+    lines = text.splitlines()
+    target = heading.strip().lower()
+    headings = list(iter_markdown_headings(lines))
+    for pos, (idx, name) in enumerate(headings):
+        if name.lower() == target:
+            end = headings[pos + 1][0] if pos + 1 < len(headings) else len(lines)
+            tail_sep = [""] if end < len(lines) else []
+            new_lines = lines[:idx] + [f"## {heading}"] + list(body_lines) + tail_sep + lines[end:]
+            return "\n".join(new_lines) + "\n"
+    base = text.rstrip()
+    return (base + "\n\n" if base else "") + f"## {heading}\n" + "\n".join(body_lines) + "\n"
 
 PRIVATE = re.compile(
     r"(^|/)(?:\.env(?:\.[^/]+)?|auth\.json|credentials?|secrets?|"

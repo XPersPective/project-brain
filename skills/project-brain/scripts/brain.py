@@ -19,7 +19,7 @@
                     Opt-in durable worker orchestration with isolated Git worktrees.
   map      [root]   Compact repository overview (genesis; replaces manual exploration).
   init     [root]   Create .project-brain/ skeleton. Never overwrites.
-  new      <root> "title" [--priority P1|P2|P3] [--tier L|M|H] [--risk LOW|MEDIUM|HIGH] [--depends PB-001]
+  new      [root] "title" [--priority P1|P2|P3] [--tier L|M|H] [--risk LOW|MEDIUM|HIGH] [--depends PB-001]
   intake   [root]   Record durable multi-item user directives or questions.
   reconcile/progress/handoff <task> [root]   Protocol 1 intent reconciliation and checkpoints.
   start    <task> [root] [--agent <alias>] [--takeover "<reason>"]
@@ -608,14 +608,13 @@ def proven_criteria_ids(root, task, digest_cache=None):
 
 
 def sections(text):
-    """{'': lines before first '## ', 'heading lower': lines}."""
-    out, cur = {"": []}, ""
-    for line in text.splitlines():
-        if line.startswith("## "):
-            cur = line[3:].strip().lower()
-            out.setdefault(cur, [])
-        else:
-            out[cur].append(line)
+    """{'': lines before first '## ', 'heading lower': lines}, ignoring headings inside fenced code blocks."""
+    lines = text.splitlines()
+    headings = list(Core.iter_markdown_headings(lines))
+    out = {"": lines[: headings[0][0]] if headings else lines}
+    for pos, (idx, name) in enumerate(headings):
+        end = headings[pos + 1][0] if pos + 1 < len(headings) else len(lines)
+        out.setdefault(name.lower(), []).extend(lines[idx + 1 : end])
     return out
 
 
@@ -674,20 +673,22 @@ def set_header(path, key, value):
 
 
 def append_section(path, heading, line):
-    """Append a bullet line to `## <heading>`, creating the section before `## Notes` (or at EOF) if absent."""
+    """Append a bullet line to `## <heading>` outside fenced code blocks, creating it before `## Notes` if absent."""
     text = read(path) or ""
     lines = text.splitlines()
-    target_h = f"## {heading}".lower()
-    idx = next((i for i, l in enumerate(lines) if l.strip().lower() == target_h), None)
-    if idx is None:
-        notes_idx = next((i for i, l in enumerate(lines) if l.strip().lower() == "## notes"), None)
+    headings = list(Core.iter_markdown_headings(lines))
+    target_h = heading.strip().lower()
+    pos = next((p for p, (_, name) in enumerate(headings) if name.lower() == target_h), None)
+    if pos is None:
+        notes_idx = next((idx for idx, name in headings if name.lower() == "notes"), None)
         block = ["", f"## {heading}", line]
         if notes_idx is not None:
             lines = lines[:notes_idx] + block + [""] + lines[notes_idx:]
         else:
             lines = lines + block
     else:
-        next_h = next((i for i in range(idx + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+        idx = headings[pos][0]
+        next_h = headings[pos + 1][0] if pos + 1 < len(headings) else len(lines)
         insert_at = next_h
         while insert_at > idx + 1 and not lines[insert_at - 1].strip():
             insert_at -= 1
@@ -2155,6 +2156,11 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
         print(f"STARTED {started_id} owner={actor} risk={risk} files={count} digest={dig} contract={con}")
         if policy.get("qualification_warning"):
             print("WARN " + policy["qualification_warning"])
+        if risk in ("MEDIUM", "HIGH") and actor.lower() == "lead":
+            pol_cfg = E.load(sys.modules[__name__], root)
+            rev_src = (pol_cfg or {}).get("review", {}).get("source", "")
+            if rev_src.startswith("native") and get_session_modes(root).get("rev") != "solo":
+                print("HINT: for independent native review, pass your actual model ID (`start <id> --agent <model>`) or switch to `solo` with `--self-review`.")
     if board_enabled(root):
         for bline in board_lines(root, focus_id=started_id):
             print(bline)
@@ -2290,6 +2296,21 @@ def cmd_validate(root):
             warns.append(f"{tid}: no Acceptance")
         if not t["has_verify"]:
             warns.append(f"{tid}: no Verify")
+        for vcmd in t.get("verify_cmds", []):
+            try:
+                vargv = Core.command_argv(vcmd)
+            except ValueError:
+                warns.append(f"{tid}: Verify command has invalid quoting: {vcmd}")
+                continue
+            if (
+                any(tok in ("&&", "||", ";", "|", ">", ">>", "<") or (tok.endswith(";") and " " not in tok) for tok in vargv)
+                or vargv[0].lower() in ("cd", "export", "set")
+                or bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", vargv[0]))
+            ):
+                warns.append(
+                    f"{tid}: Verify command `{vcmd}` uses shell operators/builtins "
+                    "(`check` runs without a shell; split into separate `- `<cmd>`` lines)"
+                )
         if t["status"] == "BLOCKED" and not t["blocked"]:
             warns.append(f"{tid}: BLOCKED without 'Blocked:' reason")
         if t["status"] in ("IN_PROGRESS", "REVIEW") and not t["areas"]:
@@ -2522,8 +2543,8 @@ def main():
             p.add_argument("--strategy", default="")
 
     p = sub.add_parser("new")
-    p.add_argument("root")
-    p.add_argument("title")
+    p.add_argument("pos1")
+    p.add_argument("pos2", nargs="?", default=None)
     p.add_argument("--depends", default="")
     p.add_argument("--risk", choices=RISK_VALUES, type=str.upper)
     p.add_argument("--priority", choices=PRIORITY_VALUES, type=str.upper)
@@ -2816,6 +2837,17 @@ def main():
             task = find_task(root, tid)
             return AP.delegate(B_mod, root, task, SC.score_task(B_mod, root, task), a)
 
+    if a.cmd == "new":
+        if a.pos2 is not None:
+            root, title = Path(a.pos1).resolve(), a.pos2
+        else:
+            root, title = Path(".").resolve(), a.pos1
+        if not root.is_dir():
+            print(f"error: not a directory: {root}", file=sys.stderr)
+            return 1
+        _require_not_worker(B_mod, root, "`new`")
+        return cmd_new(root, title, a.depends, a.risk, a.priority, a.tier)
+
     root = Path(a.root).resolve()
     if not root.is_dir():
         print(f"error: not a directory: {root}", file=sys.stderr)
@@ -2844,9 +2876,6 @@ def main():
             RL.require_free_or_director(B_mod, root)
             print(json.dumps(RS.intake(B_mod, root, a.item, a.relation, a.task, a.resolve), ensure_ascii=False))
         return 0
-    if a.cmd == "new":
-        _require_not_worker(B_mod, root, "`new`")
-        return cmd_new(root, a.title, a.depends, a.risk, a.priority, a.tier)
     if a.cmd in ("migrate", "upgrade"):
         if a.apply:
             _require_not_worker(B_mod, root, f"`{a.cmd} --apply`")

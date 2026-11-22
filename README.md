@@ -1,6 +1,6 @@
 # Project Brain
 
-Current release: **4.0.3** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
+Current release: **4.0.4** — [website](https://xperspective.github.io/project-brain/) · [changelog](CHANGELOG.md) · [CLI Agent Pool](https://github.com/XPersPective/cli-agent-pool).
 
 **Git-native project memory and planning for coding agents.** Any agent — Claude, Codex, Antigravity, OpenCode or
 another — can recover a project's recorded goal, architecture and task plan from the repository.
@@ -151,7 +151,7 @@ brain.py brief    [root]   strictly read-only <=4 KiB JSON status for questions
 brain.py watch    [root] [--heal]   compact 1-line status monitor (<25 est. tokens)
 brain.py map      [root]   compact repo overview + detected test/lint/build commands
 brain.py init     [root]   create .project-brain/ skeleton + AGENTS.md pointer (never overwrites)
-brain.py new root "title" [--priority P1] [--tier L|M|H] [--risk LOW|MEDIUM|HIGH] [--depends PB-001]
+brain.py new [root] "title" [--priority P1] [--tier L|M|H] [--risk LOW|MEDIUM|HIGH] [--depends PB-001]
 brain.py score    [task] [root] [--write] [--json]
                            measure task complexity (0..100), Tier (L/M/H), effort and risk floor
 brain.py intake   [root] --item "<req>" [--relation related|question|new-work|cancel]

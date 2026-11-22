@@ -260,7 +260,7 @@ def native_gate(B, root, task_value, actor, action):
     directory = L.directory(B, root, create=False)
     if not (directory / "runs.sqlite3").exists():
         raise ValueError("Native actor has no project execution receipt")
-    db = L.Ledger(directory / "runs.sqlite3")
+    db = L.Ledger(directory / "runs.sqlite3", read_only=True)
     try:
         matches = []
         related = db.select("task=? AND state='SUCCEEDED' AND integration!='REJECTED'", (task_value["id"],))
@@ -273,10 +273,10 @@ def native_gate(B, root, task_value, actor, action):
                 continue
             if identity["actor"] == actor and row["state"] == "SUCCEEDED":
                 matches.append((row, identity))
-        kind = "REVIEW" if action == "review" else "EXECUTE"
-        matches = [(r, i) for r, i in matches if r["kind"] == kind and B.contract(task_value) == r["spec"]["contract"]]
+        allowed_kinds = ("REVIEW",) if action == "review" else (("REVIEW", "EXECUTE") if action == "accept" else ("EXECUTE",))
+        matches = [(r, i) for r, i in matches if r["kind"] in allowed_kinds and B.contract(task_value) == r["spec"]["contract"]]
         if not matches:
-            raise ValueError("Native actor lacks a completed task-bound " + kind + " receipt")
+            raise ValueError("Native actor lacks a completed task-bound " + "/".join(allowed_kinds) + " receipt")
         row, identity = matches[-1]
         if action == "review":
             report = row["report"]
@@ -288,21 +288,37 @@ def native_gate(B, root, task_value, actor, action):
                 or not isinstance(report.get("findings"), list)
             ):
                 raise ValueError("Native review needs a complete typed verdict/findings report without execution blockers")
-            if row["spec"]["source"] != R.task_digest(B, root, task_value)[0]:
+            if row["spec"]["source"] != R.task_digest(B, root, task_value, check_session=False)[0]:
                 raise ValueError("Native review receipt is stale for current source")
             if identity.get("model") == "unknown":
                 raise ValueError("Unknown native model cannot prove review independence")
+            generic_actors = frozenset({"lead", "unknown", "agent", "default", "main", "assistant", "user"})
+            normalize = lambda m: Core.norm_key(str(m).replace(":", "/").rsplit("/", 1)[-1])
             for implementer in V.implementers(B, task_value):
                 identities = [
                     actor_record(db, r)
                     for r in related
                     if r["kind"] == "EXECUTE" and actor_record(db, r)["actor"] == implementer
                 ]
-                normalize = lambda m: Core.norm_key(str(m).replace(":", "/").rsplit("/", 1)[-1])
-                if not identities or any(
-                    i.get("model") in (None, "unknown") or normalize(i["model"]) == normalize(identity["model"])
-                    for i in identities
+                if identities:
+                    if any(
+                        i.get("model") in (None, "unknown") or normalize(i["model"]) == normalize(identity["model"])
+                        for i in identities
+                    ):
+                        raise ValueError("Reviewer model implemented this task or implementation identity is missing")
+                elif implementer.lower().startswith(("native/", "pool/")):
+                    raise ValueError("Reviewer model implemented this task or implementation identity is missing")
+                elif (
+                    implementer.strip().lower() in generic_actors
+                    or normalize(implementer) in generic_actors
+                    or not normalize(implementer)
                 ):
+                    raise ValueError(
+                        "Implementer identity '%s' is generic; pass your actual model on `start --agent <model>` "
+                        "(or run `PB runs` EXECUTE) so review independence can be verified, or use `solo` with `--self-review`"
+                        % implementer
+                    )
+                elif normalize(implementer) == normalize(identity["model"]):
                     raise ValueError("Reviewer model implemented this task or implementation identity is missing")
             floors = [r.get("strength") for r in B.start_records(task_value) if r.get("strength")]
             if any(["low", "medium", "high"].index(s) > "LMH".index(identity["tier"]) for s in floors):

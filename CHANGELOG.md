@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.0.4 — 2026-11-22
+
+- **Core `native` mode independent review without `PB runs EXECUTE` deadlock:** `runtime_orchestration.native_gate()` now verifies model independence directly against concrete lead implementer model IDs recorded via `PB start <id> --agent <model>` (still strictly rejecting generic `lead`/`unknown` aliases, same-model reviewers, and missing `native/<hash>` execution receipts), and uses `check_session=False` for digest verification so `boot`/`board` cold-takeover checks recognize valid native reviews. `PB start` emits a helpful hint if `lead` starts a `MEDIUM`/`HIGH` task under `native` review policy.
+- **Fixed `runtime_runs.board_summary()` SQLite schema query:** read `spec` JSON (`native_candidate` / `backend`) instead of a nonexistent `backend` column so active `PB runs` workers actually appear on `PROGRESS_BOARD`.
+- **Fence-aware Markdown section parsing:** added `Core.iter_markdown_headings()` and `Core.replace_markdown_section()` so `brain.sections()`, `brain.append_section()`, `R.progress()`, and `V` evidence compaction never confuse `## ` headings inside fenced code blocks (` ``` ` / ` ~~~ `) with real task sections.
+- **Updated `progress.next` on `REVIEW_PENDING`:** `V.accept()` now updates `## Resume` / `progress.json` when transitioning to `Status: REVIEW`, preventing stale `next=` lines on `PROGRESS_BOARD` and `boot`.
+- **`validate` shell-operator warnings & `PB new` optional root:** `PB validate` warns on shell operators/builtins (`&&`, `||`, `;`, `|`, `cd`, `VAR=val`) inside `## Verify` lines; `PB new [root] "title"` accepts omitting `root` (default `.`).
+
 ## 4.0.3 — 2026-11-22
 
 - **Unified review gate & non-contradictory `boot`:** extracted `V.review_status()` so `boot`, `board`, and `accept` enforce identical provenance, implementer-independence, policy, and finding-acceptance gates; fixed `boot`'s `NEXT:` line so a valid `PASS` review instructs `accept` instead of contradicting `DO NOT re-review`; clarified `REVIEW_PROVENANCE_PENDING` guidance in code and docs (`native` `PB runs` receipt vs `solo --self-review`).

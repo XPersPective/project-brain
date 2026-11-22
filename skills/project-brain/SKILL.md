@@ -7,11 +7,11 @@ description: >-
   store publishing.
 license: MIT
 metadata:
-  version: 4.0.3
+  version: 4.0.4
   author: XPersPective
 ---
 
-# Project Brain 4.0.3
+# Project Brain 4.0.4
 
 `PB` = `python <this-skill>/scripts/brain.py` (Python 3.8+, stdlib only).
 

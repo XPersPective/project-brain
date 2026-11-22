@@ -226,8 +226,7 @@ def compact_machine_records(B, task, value=None, contract=None):
         compact.append(line)
     text = B.read(task["file"]) or ""
     if compact != lines:
-        replacement = "## Evidence\n" + "\n".join(compact) + "\n\n"
-        text = re.sub(r"^## Evidence\s*\n.*?(?=^## |\Z)", lambda _: replacement, text, count=1, flags=re.M | re.S)
+        text = Core.replace_markdown_section(text, "Evidence", compact)
         Core.write_atomic(task["file"], text)
 
 
@@ -725,6 +724,13 @@ def accept(B, root, task_id, actor="", agents_path=None, self_review=False):
     if review_only:
         if task["status"] != "REVIEW":
             B.set_header(task["file"], "Status", "REVIEW")
+        if R.enabled(B, root):
+            nxt_rev = (
+                "SOLO review --self-review"
+                if allow_self
+                else "Independent review -> accept"
+            )
+            R.progress(B, root, B.find_task(root, task["id"]), nxt_rev, strategy="review_pending")
         return 1, [
             f"REVIEW_PENDING {task['id']}: implementation evidence is current; a different, stronger agent "
             f"that did not implement it runs `review {task['id']}` then `accept` (SOLO: explicitly run `review --self-review` after the audit). Commit now with PB-WIP: true if you stop here."

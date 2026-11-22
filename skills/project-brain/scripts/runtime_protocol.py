@@ -380,11 +380,12 @@ def progress(B, root, task, next_step, failing="", dirty="", strategy="", allow_
     }
     Core.write_atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
     text = B.read(task["file"]) or ""
-    resume = "## Resume\nNext: " + next_step + "\nFailing: " + (failing or "none") + "\nDirty: " + (dirty or "none") + "\n"
-    if re.search(r"^## Resume\s*$", text, re.M):
-        text = re.sub(r"^## Resume\s*\n.*?(?=^## |\Z)", lambda _: resume + "\n", text, flags=re.M | re.S)
-    else:
-        text = text.rstrip() + "\n\n" + resume
+    resume_lines = [
+        "Next: " + next_step,
+        "Failing: " + (failing or "none"),
+        "Dirty: " + (dirty or "none"),
+    ]
+    text = Core.replace_markdown_section(text, "Resume", resume_lines)
     Core.write_atomic(task["file"], text)
     return data
 
