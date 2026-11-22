@@ -47,7 +47,8 @@ RELAY = {"enabled": True, "threshold_percent": 10,
          "candidates": [{"route": "codex-local"}, {"route": "codex-acc2"},
                         {"route": "agy-acc2", "model": "gemini-pro"}, {"route": "claude-local", "model": "opus"}]}
 POLICY = E._validate(dict(BASE, relay=RELAY))
-ALL = ["preflight", "onExit", "ack", "idle", "secretEnv", "resolve", "releaseLockOnFailure", "directorProfile"]
+ALL = ["preflight", "onExit", "ack", "idle", "secretEnv", "resolve", "releaseLockOnFailure", "directorProfile",
+       "quotaBarrier", "wakeAt", "supersede"]
 
 
 class FakePool:
@@ -452,8 +453,42 @@ class RelayTests(unittest.TestCase):
         self.start(task_id=OLD)
         self.pool.tasks[OLD] = {"id": OLD, "state": "failed"}
         self.start(now=5000)
-        self.assertIn("STALE_RESET", [row["event"] for row in self.record()["history"]] + ["STALE_RESET"])
         self.assertEqual(self.record()["status"], "ACTIVE")
+        self.assertEqual(self.record()["generation"], 1)
+        self.assertEqual(self.events(), ["START"])
+
+    def test_recover_retry_failover_loop_persists_failure_and_keeps_going(self):
+        """Multi-attempt failover inside a single recover() call must persist _failure & avoid RELAY_CHANGED."""
+        started = self.start()
+        first = self.handoff(started["token"])["pool_task"]
+        self.pool.tasks[first].update(state="failed", error="PERMISSION_REQUIRED")
+        attempts = [0]
+        orig_rpc = self.pool.rpc
+
+        def flaky_rpc(tool, args=None):
+            if tool == "pool_submit":
+                attempts[0] += 1
+                if attempts[0] == 1:
+                    raise ValueError("Pool NO_ROUTE: transient route error")
+            return orig_rpc(tool, args)
+
+        with patch.object(self.pool, "rpc", side_effect=flaky_rpc):
+            res = self.recover(now=4000)
+        rec = self.record()
+        self.assertEqual(rec["status"], "HANDOFF_PENDING", res)
+        self.assertEqual(rec["pending"]["route"], "claude-local")
+        self.assertEqual(rec["health"]["agy-acc2/gemini-pro"]["failures"], 1)
+
+    def test_scope_matches_token_boundaries_only(self):
+        snap = {
+            "status": "available",
+            "windows": [
+                {"name": "5h", "remainingPercent": 5, "models": ["pro"]},
+                {"name": "5h", "remainingPercent": 80, "models": ["project-model"]},
+            ],
+        }
+        self.assertEqual(RL.remaining(snap, "project-model"), 80)
+        self.assertEqual(RL.remaining(snap, "gemini-pro"), 5)
 
     def test_host_holder_still_needs_stop(self):
         self.start()
@@ -581,19 +616,35 @@ class SetupTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         (self.root / ".project-brain").mkdir()
-        for name in (RL.TOKEN_ENV, "CLI_AGENT_POOL_WORKER", "PB_SESSION_ID"):
+        env = patch.dict(os.environ, {}, clear=False)
+        env.start()
+        self.addCleanup(env.stop)
+        for name in (RL.TOKEN_ENV, "CLI_AGENT_POOL_WORKER", "CLI_AGENT_POOL_TASK_ID", "PB_SESSION_ID"):
             os.environ.pop(name, None)
 
-    def test_one_numbered_batch_with_defaults_then_timeout(self):
+    def test_streamlined_single_line_setup_and_confirm(self):
         asked = SU.ask(FakeBrain, self.root, now=1000)
+        self.assertEqual(asked["status"], "ASKED")
         text = "\n".join(asked["lines"])
-        self.assertEqual(len(re.findall(r"^\d\. ", text, re.M)), 7)
-        self.assertEqual(text.count("   Varsayılan: "), 7)
-        self.assertIn("5 dakika yanıt gelmezse", text)
-        self.assertIn("Varsayılan: Paralel", text)
-        self.assertIn("Varsayılan: Çoklu ajan", text)
-        self.assertIn("Varsayılan: Yerleşik ajanlar", text)
-        self.assertTrue((self.root / ".project-brain/.cache/setup-form.html").is_file())
+        self.assertIn("Session policy: native", text)
+        self.assertIn("parallel (auto)", text)
+        self.assertIn("QRP off", text)
+        self.assertIn("BRP off", text)
+        # No CDN HTML form written by setup ask.
+        self.assertFalse((self.root / ".project-brain/.cache/setup-form.html").exists())
+        # Immediate confirmation without blocking wait loop.
+        done = SU.confirm(FakeBrain, self.root, note="User replied ok")
+        self.assertEqual(done["status"], "CONFIRMED")
+        self.assertTrue(E.confirmed(FakeBrain, self.root))
+        loaded = E.load(FakeBrain, self.root)
+        self.assertEqual(loaded["origin"], "user")
+        self.assertEqual(loaded["execution"]["source"], "native")
+        self.assertFalse(loaded["quota_recovery"]["enabled"])
+        self.assertFalse(loaded["relay"]["enabled"])
+        self.assertNotIn("speed", loaded)
+
+    def test_optional_unattended_wait_and_defaults(self):
+        SU.ask(FakeBrain, self.root, now=1000)
         with self.assertRaisesRegex(ValueError, "SETUP_WAIT"):
             SU.apply_defaults(FakeBrain, self.root, now=1100)
         slept = []
@@ -604,25 +655,24 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(done["status"], "DEFAULTS_CONFIRMED")
         self.assertTrue(E.confirmed(FakeBrain, self.root))
         loaded = E.load(FakeBrain, self.root)
-        self.assertEqual(loaded["note"], "Defaults after 5-minute setup timeout (no reply)")
         self.assertEqual(loaded["origin"], "defaults")
 
     def test_saved_policy_is_default_only_when_it_was_confirmed(self):
         E.save(FakeBrain, self.root, dict(BASE, scheduling={"mode": "serial", "max_parallel": 1}), "explicit")
-        self.assertIn("Varsayılan: Yerleşik ajanlar", "\n".join(SU.ask(FakeBrain, self.root)["lines"]))
-        self.assertIn("Varsayılan: Paralel", "\n".join(SU.ask(FakeBrain, self.root)["lines"]), "unconfirmed file is not a default")
+        self.assertIn("Session policy: native", SU.ask(FakeBrain, self.root)["summary"])
+        self.assertIn("parallel (auto)", SU.ask(FakeBrain, self.root)["summary"], "unconfirmed file is not a default")
         E.save(FakeBrain, self.root, dict(BASE), "explicit")
         E.confirm(FakeBrain, self.root, "user said yes")
         E.begin_session(FakeBrain, self.root)
-        self.assertIn("Varsayılan: Paralel (en fazla 3)", "\n".join(SU.ask(FakeBrain, self.root)["lines"]))
-        self.assertIn("Varsayılan: Sadece yönetici", "\n".join(SU.ask(FakeBrain, self.root)["lines"]))
+        summary = SU.ask(FakeBrain, self.root)["summary"]
+        self.assertIn("solo", summary)
+        self.assertIn("parallel (max 3)", summary)
         self.assertEqual(SU.apply_defaults(FakeBrain, self.root, accepted=True)["status"], "DEFAULTS_CONFIRMED")
         self.assertEqual(E.load(FakeBrain, self.root)["origin"], "user")
 
-    def test_clarification_and_cap_unavailable_rules(self):
-        self.assertTrue(SU.needs_clarification("3: kullanıcı seçimi"))
-        self.assertTrue(SU.needs_clarification("7: kullanıcı seçimi (ayrıntı sorulsun)"))
-        self.assertFalse(SU.needs_clarification("3: kullanıcı seçimi, yalnız medium"))
+    def test_cap_unavailable_rules_and_advanced_output(self):
+        adv = SU.ask(FakeBrain, self.root, advanced=True)
+        self.assertIn("Power features", "\n".join(adv["lines"]))
         cap_auto = E._validate(dict(SU.BUILTIN, execution={"source": "cap-catalog"}, origin="defaults"))
         cap_user = E._validate(dict(SU.BUILTIN, execution={"source": "cap-catalog"}, origin="user"))
         mixed_user = E._validate(dict(SU.BUILTIN, execution={"source": "mixed", "categories": ["medium"]}, origin="user"))
@@ -631,34 +681,15 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(E.cap_unavailable(mixed_user)["action"], "CONTINUE_NATIVE")
 
     def test_worker_never_opens_setup(self):
-        args = SimpleNamespace(action="ask", root=str(self.root), accepted=False)
+        args = SimpleNamespace(action="ask", root=str(self.root), accepted=False, advanced=False)
         with patch.dict(os.environ, {"CLI_AGENT_POOL_WORKER": "1"}):
             self.assertEqual(SU.command(FakeBrain, args)["status"], "INHERITED")
         self.assertFalse((self.root / ".project-brain/.cache/setup.json").exists())
 
-    def test_followup_deadline_gates_dispatch_and_keeps_resolved_answers(self):
+    def test_stale_timeout_and_already_confirmed(self):
         SU.ask(FakeBrain, self.root, now=1000)
-        partial = dict(SU.BUILTIN, speed="turbo", execution={"source": "cap-catalog"})
-        result = SU.clarify(FakeBrain, self.root, "4: turbo; 7: kullanıcı seçimi", partial, now=1290)
-        self.assertEqual(result["status"], "CLARIFICATION_REQUIRED")
-        with self.assertRaisesRegex(ValueError, "SETUP_CLARIFICATION_PENDING"):
-            E.guard(FakeBrain, self.root, "exec", "native")
-        self.assertEqual(SU.ask(FakeBrain, self.root, now=1400)["status"], "CLARIFICATION_REQUIRED")
-        with self.assertRaisesRegex(ValueError, "SETUP_WAIT"):
-            SU.apply_defaults(FakeBrain, self.root, now=1589)
-        SU.apply_defaults(FakeBrain, self.root, now=1590)
-        value = E.load(FakeBrain, self.root)
-        self.assertEqual(value["speed"], "turbo")
-        self.assertEqual(value["execution"]["source"], "cap-catalog")
-        self.assertEqual(E.cap_unavailable(value)["action"], "WAIT")
-        self.assertFalse(SU.pending(FakeBrain, self.root))
-
-    def test_explicit_resolution_and_stale_timeout(self):
-        SU.ask(FakeBrain, self.root, now=1000)
-        SU.clarify(FakeBrain, self.root, "3: kullanıcı seçimi", now=1100)
         E.save(FakeBrain, self.root, dict(BASE), "explicit resolution")
         E.confirm(FakeBrain, self.root, "explicit resolution")
-        self.assertFalse(SU.pending(FakeBrain, self.root))
         self.assertEqual(SU.apply_defaults(FakeBrain, self.root, now=1500)["status"], "ALREADY_CONFIRMED")
         E.begin_session(FakeBrain, self.root)
         with self.assertRaisesRegex(ValueError, "SETUP_STALE"):
@@ -685,16 +716,7 @@ class SetupTests(unittest.TestCase):
         SU.recover_cap(FakeBrain, self.root, "rev")
         E.guard(FakeBrain, self.root, "rev", "native")
 
-    def test_form_escapes_script_breakout(self):
-        value = E._validate(dict(SU.BUILTIN, execution={"source": "cap-category", "categories": ["</script><script>alert(1)"]}))
-        form = Path(SU.write_form(FakeBrain, self.root, value)).read_text(encoding="utf-8")
-        self.assertNotIn("</script><script>alert", form)
-        self.assertIn("\\u003c/script>", form)
-
-    def test_clarification_requires_resolved_file_and_worker_cannot_recover(self):
-        SU.ask(FakeBrain, self.root, now=1000)
-        with self.assertRaisesRegex(ValueError, "SETUP_RESOLVED_FILE_REQUIRED"):
-            SU.clarify(FakeBrain, self.root, "4: turbo; 7: kullanıcı seçimi", now=1100)
+    def test_worker_cannot_recover_cap(self):
         args = SimpleNamespace(action="recover-cap", root=str(self.root), role="exec")
         with patch.dict(os.environ, {"CLI_AGENT_POOL_WORKER": "1"}):
             with self.assertRaisesRegex(ValueError, "Workers inherit"):
@@ -715,22 +737,22 @@ class SetupTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Workers inherit"):
                 SU.command(FakeBrain, args)
 
-    def test_cli_form_followup_then_explicit_resolution(self):
-        from test_routing import _project
+    def test_cli_setup_confirm_and_inline_policy_override(self):
+        from test_helpers import make_project as _project
         from test_brain import run
         _project(self.root)
         code, out = run(self.root, "setup", "ask")
         self.assertEqual(code, 0, out)
-        policy = dict(SU.BUILTIN, speed="turbo")
-        (self.root / "resolved.json").write_text(json.dumps(policy), encoding="utf-8")
-        code, out = run(self.root, "setup", "clarify", "--answer", "4: turbo; 7: kullanıcı seçimi", "--file", "resolved.json")
+        self.assertIn("Session policy:", out)
+        code, out = run(self.root, "setup", "confirm", "--note", "Quick confirm")
         self.assertEqual(code, 0, out)
-        self.assertIn("CLARIFICATION_REQUIRED", out)
-        self.assertTrue(SU.pending(brain, self.root))
-        code, out = run(self.root, "policy", "--file", "resolved.json", "--confirm", "--note", "User resolved selection")
+        self.assertIn("CONFIRMED", out)
+        self.assertTrue(E.confirmed(brain, self.root))
+        code, out = run(self.root, "policy", "--source", "solo", "--schedule", "serial", "--confirm", "--note", "Solo serial")
         self.assertEqual(code, 0, out)
-        self.assertFalse(SU.pending(brain, self.root))
-        self.assertEqual(E.require_confirmed(brain, self.root)["speed"], "turbo")
+        saved = E.require_confirmed(brain, self.root)
+        self.assertEqual(saved["execution"]["source"], "solo")
+        self.assertEqual(saved["scheduling"]["mode"], "serial")
 
     def test_active_relay_and_quota_wait_screens_continue_after_timeout(self):
         import runtime_quota_recovery as Q
@@ -740,7 +762,7 @@ class SetupTests(unittest.TestCase):
         RL.start(FakeBrain, self.root, POLICY, "codex-local", rpc=pool.rpc, brain_script=SCRIPT, now=100, sleep=lambda s: None)
         asked = SU.ask(FakeBrain, self.root, now=200)
         self.assertEqual(asked["status"], "RELAY_ACTIVE")
-        self.assertIn("1. Devam etsin", "\n".join(asked["lines"]))
+        self.assertIn("1. Continue in background", "\n".join(asked["lines"]))
         self.assertEqual(SU.apply_defaults(FakeBrain, self.root, now=501)["status"], "CONTINUE_BACKGROUND")
         RL.finish(FakeBrain, self.root, "STOP", "done", rpc=pool.rpc, now=600)
         # Quota waiting state:
@@ -754,7 +776,7 @@ class SetupTests(unittest.TestCase):
         Q.prepare(FakeBrain, self.root, snap, qrp_policy, ".project-brain/evidence/PB-001/handoff.json", now=700)
         q_asked = SU.ask(FakeBrain, self.root, now=800)
         self.assertEqual(q_asked["status"], "QUOTA_WAITING")
-        self.assertIn("1. Beklesin", "\n".join(q_asked["lines"]))
+        self.assertIn("1. Keep waiting", "\n".join(q_asked["lines"]))
         self.assertEqual(SU.apply_defaults(FakeBrain, self.root, now=1101)["status"], "CONTINUE_BACKGROUND")
         # Combined QRP + BRP threshold rule + 5-point prepare_checkpoint:
         combined = dict(SU.BUILTIN, quota_recovery={"enabled": True, "threshold_percent": 25},

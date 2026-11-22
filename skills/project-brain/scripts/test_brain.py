@@ -13,14 +13,16 @@ from unittest.mock import patch
 from pathlib import Path
 
 import brain as B
+import runtime_actors as AC
+from test_helpers import clean_env, scrub_environ
 
 BRAIN = Path(__file__).resolve().parent / "brain.py"
 
 
 def run(root, *args):
-    r = subprocess.run([sys.executable, str(BRAIN), *args, str(root)] if args[0] != "new"
-                       else [sys.executable, str(BRAIN), "new", str(root), *args[1:]],
-                       capture_output=True, text=True, encoding="utf-8")
+    r = subprocess.run([sys.executable, "-B", str(BRAIN), *args, str(root)] if args[0] != "new"
+                       else [sys.executable, "-B", str(BRAIN), "new", str(root), *args[1:]],
+                       capture_output=True, text=True, encoding="utf-8", env=clean_env())
     return r.returncode, r.stdout + r.stderr
 
 
@@ -488,55 +490,24 @@ def v3_checks():
         t1 = B.parse_task(root / ".project-brain/tasks/PB-001.md")
         assert t1["risk"] == "MEDIUM", t1  # UI task escalates risk floor from LOW to MEDIUM
 
-        # 2. Agent Registry, Quota Reserve Floors (10% worker, 25% director), and Model Selection
+        # 2. Actor Registry & Retired Direct Backend Refusal (CAP manages external CLIs)
         reg_payload = {
-            "pools": {
-                "codex": {"remaining_pct": 20.0, "reserve_pct": 10.0},
-                "opencode-free": {"remaining_pct": 100.0, "reserve_pct": 0.0},
-                "exhausted-pool": {"remaining_pct": 8.0, "reserve_pct": 10.0},
-                "director-pool": {"remaining_pct": 90.0, "reserve_pct": 25.0},
-            },
             "models": {
-                "exhausted/worker": {
-                    "cli": "codex", "model_id": "gpt-5.1-codex-mini", "pool": "exhausted-pool",
-                    "benchmark_key": "gpt-5.1-codex-mini", "cost_weight": 0.1,
-                    "tiers": ["L", "M"], "roles": ["worker"], "efforts": ["low", "medium"], "available": True,
-                },
                 "codex/gpt-5.2-codex": {
                     "cli": "codex", "model_id": "gpt-5.2-codex", "pool": "codex",
-                    "benchmark_key": "gpt-5.2-codex", "cost_weight": 1.0,
-                    "tiers": ["L", "M", "H"], "roles": ["worker", "reviewer"], "efforts": ["low", "medium", "high"], "available": True,
-                },
-                "opencode/minimax-m2.5-free": {
-                    "cli": "opencode", "model_id": "opencode/minimax-m2.5-free", "pool": "opencode-free",
-                    "benchmark_key": "minimax-m2.5-free", "cost_weight": 0.05,
-                    "tiers": ["L", "M"], "roles": ["worker"], "efforts": ["low", "medium"], "available": True,
+                    "tiers": ["L", "M", "H"], "roles": ["worker", "reviewer"], "available": True, "quality": 70,
                 },
                 "claude/claude-opus-4-6": {
                     "cli": "claude", "model_id": "claude-opus-4-6", "pool": "director-pool",
-                    "benchmark_key": "claude-opus-4-6", "cost_weight": 3.0,
-                    "tiers": ["H"], "roles": ["lead", "reviewer"], "efforts": ["high"], "available": True,
+                    "tiers": ["H"], "roles": ["lead", "reviewer"], "available": True, "quality": 95,
                 },
             },
         }
-        patch_file = root / "patch.json"
-        patch_file.write_text(json.dumps(reg_payload), encoding="utf-8")
-        code, out = run(root, "agents", "merge", str(patch_file), "--registry", str(reg_file))
-        assert code == 0 and "MERGED" in out, out
+        AC.save(reg_payload, reg_file)
 
-        # Exhausted pools and the director reserve are excluded, never fallback workers.
-        code, out = run(root, "agents", "select", "--role", "worker", "--tier", "L", "--risk", "LOW", "--registry", str(reg_file))
-        assert code == 0 and "SELECT opencode/minimax-m2.5-free" in out and "effort=low" in out, out
-        assert "codex/gpt-5.2-codex" not in out, out
-
-        # Explicit override still needs an eligible pool, including in a dry-run.
-        reg_payload["pools"]["codex"]["remaining_pct"] = 90.0
-        patch_file.write_text(json.dumps(reg_payload), encoding="utf-8")
-        assert run(root, "agents", "merge", str(patch_file), "--registry", str(reg_file))[0] == 0
-
-        # Preview delegation (`delegate --dry-run`)
-        code, out = run(root, "delegate", "PB-001", "--model", "codex/gpt-5.2-codex", "--dry-run", "--registry", str(reg_file))
-        assert code == 0 and "DELEGATE_PLAN PB-001: cli=codex model=gpt-5.2-codex" in out, out
+        # Retired --backend direct is refused explicitly.
+        code, out = run(root, "delegate", "PB-001", "--backend", "direct")
+        assert code == 2 and ("invalid choice" in out or "removed" in out.lower()), out
 
         # 3. Full Verification Lifecycle: `start` -> `check` -> `evidence` -> `review` -> `accept`
         code, out = run(root, "start", "PB-001", "--agent", "codex/gpt-5.2-codex", "--registry", str(reg_file))
@@ -561,18 +532,16 @@ def v3_checks():
         # Tick all checkboxes
         edit(root, ".project-brain/tasks/PB-001.md", "- [ ]", "- [x]")
 
-        # Boot reports TAKEOVER_CHECK: SKIP and proven criteria on current digest (no duplicate checks on handoff)
+        # Boot reports TAKEOVER_CHECK: REQUIRED (because agents_test.json lives outside Areas) and proven criteria on current digest
         code, out = run(root, "boot")
         assert code == 0 and "TAKEOVER_CHECK: REQUIRED (source edits outside active Areas)" in out and "proven on current digest (DO NOT repeat)" in out, out
 
         # Session EXEC/REV mode selection (`agents mode`) & tier boundary enforcement
         code, out = run(root, "agents", "mode", "--exec", "P-L", "--rev", "P-ML", "--note", "test modes")
         assert code == 0 and "exec=pool_low" in out and "rev=pool_med_low" in out, out
-        code, out = run(root, "delegate", "PB-001", "--model", "codex/gpt-5.2-codex", "--dry-run", "--registry", str(reg_file))
-        assert code == 2 and "pool_low" in out, out
         code, out = run(root, "agents", "mode", "--exec", "SOLO")
         assert code == 0 and "exec=solo" in out and "rev=solo" in out, out
-        code, out = run(root, "delegate", "PB-001", "--model", "codex/gpt-5.2-codex", "--dry-run", "--registry", str(reg_file))
+        code, out = run(root, "delegate", "PB-001", "--model", "codex/gpt-5.2-codex", "--dry-run")
         assert code == 2 and "solo" in out, out
         run(root, "agents", "mode", "--exec", "P-ALL", "--rev", "P-ALL")
 
@@ -650,54 +619,47 @@ def v3_checks():
 
 
 if __name__ == "__main__":
-    main()
-    v3_checks()
-    from test_protocol_audit import main as protocol_audit
-    from test_verify_audit import main as verify_audit
-    from test_agents_audit import main as agents_audit
-    protocol_audit()
-    verify_audit()
-    agents_audit()
-    from test_pool import main as pool_checks
-    from test_routing import main as routing_checks
-    pool_checks()
-    routing_checks()
-    from test_adopt import main as adoption_checks
-    adoption_checks()
-    from test_economy import main as economy_checks
-    economy_checks()
-    from test_discovery import main as discovery_checks
-    discovery_checks()
-    from test_agent_pool import main as agent_pool_checks
-    agent_pool_checks()
-    from test_pool_modes import main as pool_mode_checks
-    pool_mode_checks()
-    from test_session import main as session_checks
-    session_checks()
-    from test_startup import main as startup_checks
-    startup_checks()
-    from test_handoff_audit import main as handoff_checks
-    handoff_checks()
-    from test_production import main as production_checks
-    production_checks()
-    from test_orchestration import main as orchestration_checks
-    orchestration_checks()
-    from test_orchestration_production import main as orchestration_production_checks
-    orchestration_production_checks()
-    from test_executor_policy import main as executor_policy_checks
-    from test_policy_pool import main as policy_pool_checks
-    from test_policy_orchestration import main as policy_orchestration_checks
-    executor_policy_checks()
-    policy_pool_checks()
-    policy_orchestration_checks()
-    from test_control import main as control_checks
-    control_checks()
-    import unittest
-    import test_quota_recovery
-    result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_quota_recovery))
-    if not result.wasSuccessful():
-        raise SystemExit(1)
-    import test_relay
-    result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_relay))
-    if not result.wasSuccessful():
-        raise SystemExit(1)
+    with scrub_environ():
+        main()
+        v3_checks()
+        from test_protocol_audit import main as protocol_audit
+        from test_verify_audit import main as verify_audit
+        protocol_audit()
+        verify_audit()
+        from test_adopt import main as adoption_checks
+        adoption_checks()
+        from test_agent_pool import main as agent_pool_checks
+        agent_pool_checks()
+        from test_pool_modes import main as pool_mode_checks
+        pool_mode_checks()
+        from test_session import main as session_checks
+        session_checks()
+        from test_startup import main as startup_checks
+        startup_checks()
+        from test_handoff_audit import main as handoff_checks
+        handoff_checks()
+        from test_production import main as production_checks
+        production_checks()
+        from test_orchestration import main as orchestration_checks
+        orchestration_checks()
+        from test_orchestration_production import main as orchestration_production_checks
+        orchestration_production_checks()
+        from test_executor_policy import main as executor_policy_checks
+        from test_policy_pool import main as policy_pool_checks
+        from test_policy_orchestration import main as policy_orchestration_checks
+        executor_policy_checks()
+        policy_pool_checks()
+        policy_orchestration_checks()
+        from test_control import main as control_checks
+        control_checks()
+        from test_v4_hardening import main as v4_hardening_checks
+        v4_hardening_checks()
+        import unittest
+        import test_quota_recovery
+        result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_quota_recovery))
+        if not result.wasSuccessful():
+            raise SystemExit(1)
+        import test_relay
+        result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_relay))
+        if not result.wasSuccessful():
+            raise SystemExit(1)

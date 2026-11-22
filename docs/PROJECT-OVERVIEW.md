@@ -1,139 +1,98 @@
-# Project Brain 3.12.0
+# Project Brain 4.0.0
 
-Git-native project memory, executable tasks, source-bound evidence and approved
-CLI/native delegation. Python 3.8+, standard library only; project schema 4,
-session schema 1.
+Git-native project memory, executable tasks, source-bound verification and
+economical orchestration. Python 3.8+, standard library only; project schema 4,
+policy schema 1, opt-in SQLite run ledger schema 1.
 
-## Token economy contract
+## Core vs Power separation
 
-Deterministic work precedes bounded low-tier discovery. The lead retains
-architecture/planning, ambiguity and acceptance; risk, review and proof floors
-remain unchanged. Saved ESP/SP prefill a single new-session confirmation; current
-session answers and intervening questions never trigger repeated interviews.
-Intervening questions reuse active context rather than boot/history/skill reloads.
-The read-only `brief` CLI emits at most 4 KiB with explicit missing detail and
-pending/readback warnings, without migration, dispatch or session changes.
-Executor Selection Policy (ESP) names eight worker choices: Solo, Native, Native
-Cheapest, Native Pinned, Mixed, CAP Categories, CAP Catalog, CAP Pinned. CAP explicitly
-means CLI Agent Pool. Scheduling Policy (SP) separately names Serial/Parallel and
-its maximum. Solo means main-agent work with tools and no subagent delegation.
-The director records both in `.project-brain/executor-policy.json`; new sessions
-(including continue) confirm saved ESP/SP; same-session questions reuse them.
-The runtime parses and validates the policy, binds session confirmation to its
-bytes, and enforces source/model/category/effort/SP bounds before new dispatch.
-First new-session boot requires ESP/SP/QRP choices on old projects too.
-Saved-policy workers use the shared durable runs scheduler; legacy delegate is
-readback-only, preventing a parallel capacity bypass. CAP
-category labels never qualify model strength; an exact-model task-fit record is
-required, separate from acceptance evidence. Native constrained launch candidates
-and receipts must agree. Legacy missing-policy APIs remain compatibility paths,
-never authority to bypass an existing policy. CAP owns its current procedure.
+- **Core product (standalone, zero external dependencies):** Git-native memory
+  (`current.md`, `target.md`, `constraints.md`, `decisions/ADR-*.md`,
+  `tasks/PB-*.md`), deterministic task scoring, protocol-1 intent/input-bound
+  verification (`start`, `check`, `evidence`, `review`, `accept`), `solo` and
+  host `native` execution, safe core defaults (`native · parallel (auto) · QRP
+  off · BRP off`), single-line `setup ask` → `setup confirm`, inline `policy`
+  flags, `watch` (<25 tokens) and bounded read-only `brief` (≤4 KiB).
+- **Power features (strictly opt-in):**
+  - **CLI Agent Pool (CAP)** (`mixed`, `cap-category`, `cap-catalog`,
+    `cap-pinned`): external CLI discovery, auth, quotas, model catalogs and
+    process execution live exclusively in the separate `cli-agent-pool`
+    repository. Legacy `--backend direct`, OmniRoute and standalone CLI
+    discovery were removed in 4.0 (ADR-008). `PB qualify` is optional advisory/
+    override metadata rather than a fresh-repo deadlock.
+  - **Durable Orchestration (`PB runs`):** transactional SQLite WAL run ledger,
+    isolated worktrees, native host bridge, candidate verification, worker
+    commit snapshots and ff-only single-writer integration.
+  - **Quota Recovery Policy (QRP):** opt-in director checkpoint + host same-chat
+    wake intent with strict account/limit/reset validation.
+  - **Baton Relay Policy (BRP):** opt-in multi-account director circulation over
+    CAP `pb-director/1` (`preflight`, `onExit`, `ack`, `idle`, `secretEnv`,
+    `resolve`, `releaseLockOnFailure`, `directorProfile`, `quotaBarrier`,
+    `wakeAt`, `supersede`).
 
-Quota Recovery Policy (QRP) is opt-in and director-only: checkpoint before a chosen
-quota threshold, prepare an idempotent host wake intent, acknowledge its ID, and
-consume it once after same-account verified quota renewal. Account switch, cancel,
-changed policy/checkpoint or unknown observations prevent automatic coding.
-The host creates/removes the actual same-chat alarm; Python installs no scheduler.
-This session's user cancelled its alarm; no active release-task alarm remains.
-Many waves reuse state/evidence/cursors; SOLO needs no provider connection.
+## Source map (acyclic layered runtime)
 
-Baton Relay Policy (BRP) is opt-in and separate from QRP: at the user's threshold
-the director checkpoints, starts the next ready candidate (explicit CAP routes or
-a CAP category; default the launcher's own tier) as director and stops. The old
-director stays the holder until the successor confirms `takeover`. `relay start`
-probes every candidate through CAP `pool_preflight` and prints an all-green table;
-`relay recover`, run by CAP's onExit watchdog, fails over from a successor that
-never takes over, restarts after a dead director, resolves relay-owned locks and
-notifies the user only when every candidate is exhausted. Successors inherit the
-launcher's confirmed settings; only the baton-token holder (CAP `secretEnv` delivers it) may
-implement, delegate or orchestrate. New sessions ask one numbered setup batch and
-continue with the shown defaults after 5 minutes (`setup ask|wait|defaults`).
-Setup questions use Turkish names for worker choice, scheduling, quota waiting,
-director transfer and successor tier; English identifiers stay in technical data.
-The cross-repository contract is `skills/project-brain/references/director-contract.md`.
+All 20 runtime modules under `skills/project-brain/scripts/` are acyclic with
+zero lazy internal imports and Python 3.8+ syntax:
 
-The protocol governs agent behavior and CLI gates, not a host's billed-token
-counter or editor actions outside Brain. Model capability and real savings still
-need measurement; smaller context is not a guarantee of lower billed usage.
+- **Foundation layer:**
+  - `runtime_core.py`: version (`4.0.0`), crash-safe atomic writes (`fsync` +
+    Windows retry), OS file/project locks, Python 3.8–3.13 UTC ISO parsing,
+    bounded JSON loading, safe public/private path checks, secret-scrubbed Git
+    runner and `ProcessTree` containment.
+  - `runtime_scoring.py`: deterministic task surface, complexity scoring and
+    risk floor escalation.
+  - `runtime_security.py`: longest-first secret redaction, staged-byte scans,
+    public-path guard and host private-binding adapter/scanner contract.
+  - `runtime_actors.py`: slim locked actor registry, canonical identity
+    comparison, worker prompt builder and acyclic backend gate dispatcher.
+- **Policy, protocol & verification layer:**
+  - `runtime_executor_policy.py`: validated 8-source ESP, SP, QRP and relay
+    policy schema, session-byte confirmation receipts and CAP fallback rules.
+  - `runtime_protocol.py`: protocol-1 intent/input digests, check-log
+    validation, progress budgets, bounded handoffs and request ledger.
+  - `runtime_verify.py`: `check`, `evidence`, `review`, `accept`, log pruning
+    and `ProcessTree` command execution.
+  - `runtime_context.py`, `runtime_reports.py`: source-bound task packets,
+    literal read-only discovery, compact reports and metrics comparison.
+- **Orchestration & recovery layer:**
+  - `runtime_runs.py`, `runtime_orchestration.py`: SQLite WAL ledger, admission,
+    worktrees, native/CAP transport, candidate verify/integrate/rebuild/restore.
+  - `runtime_agent_pool.py`: stdlib JSON-stdin CAP RPC client, bounded policy
+    selection, advisory/explicit `qualify` and legacy journal readback.
+  - `runtime_quota_recovery.py`, `runtime_relay.py`, `runtime_setup.py`,
+    `runtime_control.py`, `runtime_session.py`: QRP, BRP, streamlined setup,
+    control CLI and bounded `orient`/`brief`/`intake`.
+- **Entry & migration layer:**
+  - `runtime_adopt.py`, `migrate.py`: legacy Brain upgrade (`v0`/schema 3/3.x)
+    and foreign tracker adoption/archive/cleanup.
+  - `brain.py`: unified CLI entry point.
+- **Tests & tooling:**
+  - `skills/project-brain/scripts/test_brain.py`: complete offline regression
+    entry point (with `test_helpers.py` environment scrubbing and
+    `test_v4_hardening.py`).
+  - `skills/project-brain/scripts/test_pool_integration.py` and
+    `tools/test_relay_integration.mjs`: optional real CAP daemon/watchdog tests.
+  - `tools/build_release.py`: reproducible Git-index ZIP builder + version/AST/
+    cycle/budget checks.
 
-## Source map
+## Design & verification
 
-- `skills/project-brain/SKILL.md`: workflow and authority rules.
-- `QUALITY.md`, `SCHEMAS.md`, `REFERENCE.md`, `AGENTS_CLI.md` in that directory:
-  quality, formats, recovery and routing contracts.
-- `scripts/brain.py`: CLI, tasks, checkpoints and validation.
-- `scripts/runtime_protocol.py`, `runtime_security.py`: intent/input guards, bounded
-  continuity, external access contracts and output checks.
-- `scripts/runtime_executor_policy.py`, `runtime_quota_recovery.py`, `runtime_control.py`:
-  validated ESP/SP/QRP, exact bounds, session receipts and host wake guards.
-- `scripts/runtime_relay.py`, `RELAY.md`: optional BRP director circulation, baton
-  authority, readiness probes, two-phase handoff and the recover reconciler.
-- `scripts/runtime_setup.py`: one batched new-session question with 5-minute defaults.
-- `scripts/runtime_session.py`: bounded metadata orientation, durable multipart
-  intake and saved-focus continuity. Session settings live in the ignored cache;
-  requests.json is durable project intent, separate from proof.
-- `scripts/runtime_context.py`, `runtime_reports.py`: source-bound task packets,
-  literal read-only discovery, validated reports and bounded lead-agent views.
-- `scripts/runtime_runs.py`, `runtime_orchestration.py`: opt-in SQLite run/request/
-  event accounting, admission, isolated workspaces, Pool/native transport boundary,
-  candidate checks, acceptance-gated integration, export, backup and safe cleanup.
-- `scripts/runtime_verify.py`: checks, evidence, review, acceptance and containment.
-- `scripts/runtime_agents.py`, `runtime_pool.py`, `runtime_discovery.py`:
-  discovery, model approval, quotas and durable job accounting.
-- `scripts/runtime_agent_pool.py`, `POOL.md`: default separate CLI Agent Pool
-  transport, owner policy and task-bound dispatch/recovery. Standalone discovery
-  and session accounting remain available explicitly with `--backend direct`.
-- `scripts/migrate.py`, `runtime_adopt.py`: conversion, archive and recovery.
-- `scripts/test_brain.py`: complete offline regression entry point.
-- `tools/test_relay_integration.mjs`: optional real CAP transport/watchdog check
-  with synthetic native execution, a private service and scratch Git remote.
-
-## Verification and design
-
-- [Setup and role decision](design/decisions/ADR-007.md): accepted Turkish form,
-  follow-up deadlines, resource failure rules and mandatory roles/economy.
-- [Verification guide](VERIFICATION.md): checks, protected invariants, limits,
-  release procedure.
-- [Evidence recovery](design/decisions/ADR-001.md).
-- [Architecture decision](design/decisions/ADR-003.md).
-- [Orchestration decision](design/decisions/ADR-004.md).
-- [Executor/recovery decision](design/decisions/ADR-005.md).
-- [Unattended setup and relay decision](design/decisions/ADR-006.md).
-
-## Orchestration development
-
-- [Orchestration roadmap](design/ORCHESTRATION-ROADMAP.md): requested future work
-  prioritizing the main agent's token consumption and end-to-end delivery time.
-  The opt-in implementation and executable checks are present. The roadmap keeps
-  release evidence and host limits explicit, including the real Codex read-only
-  lifecycle probe, relocated readback-only restore, and unknown provider counters. It is the single development ledger, not a revival
-  of the completed temporary `.project-brain/` plan.
-  [User protocol](../skills/project-brain/ORCHESTRATION.md) describes runnable
-  commands and conservative recovery boundaries.
-
-Superseded audits, prompts, completed plans and machine-specific notes remain in Git history.
-They are not active work or authorization. This source repository's temporary
-`.project-brain/` was completed and removed; do not recreate it.
-Consumer-project tracking remains part of the distributed skill.
+- [Verification guide](VERIFICATION.md): checks, measurements, protected
+  invariants, limits and release procedure.
+- Accepted ADRs: [ADR-001](design/decisions/ADR-001.md) (evidence recovery),
+  [ADR-003](design/decisions/ADR-003.md) (architecture),
+  [ADR-004](design/decisions/ADR-004.md) (orchestration),
+  [ADR-005](design/decisions/ADR-005.md) (executor/recovery),
+  [ADR-006](design/decisions/ADR-006.md) (unattended relay),
+  [ADR-007](design/decisions/ADR-007.md) (roles/economy),
+  [ADR-008](design/decisions/ADR-008.md) (4.0 acyclic core & CAP separation).
 
 ## Limits
 
-Normal `orient` and `boot` upgrade recognized old project tracking on use, with
-raw-input backups, including no-Git and unborn-Git projects. Read-only startup and
-merge/rebase defer conversion; future versions and unknown legacy shapes stop
-without conversion. Project state migration does not download a new skill release.
-Installed skill updates remain the responsibility of the deployment manager.
-
-Hashes establish freshness, not truth or product quality. Approval records are not
-authenticated identity. Process containment is not a filesystem/network sandbox.
-Unknown quota requires an approved job cap; readings cannot reserve capacity against
-other clients. OmniRoute coding work needs an explicit coding-agent adapter.
-Native launch/attach/cancel and counters depend on the calling host. This update
-was initially developed SOLO/SERIAL, then independently reviewed and exercised
-with real read-only Codex native workers on 2026-11-01. Other hosts/providers
-require their own validation; this is not blanket live-provider certification. Dirty worktrees and all dedup keys
-are retained; worktree isolation does not hide Brain or install a sandbox.
-Application store publishing remains outside scope.
-
-Foreign tracker adoption requires preview, reconciliation, verified archive and
-cleanup. No user projects were inspected or migrated for this release.
+Hashes establish freshness, not truth or product quality. Review/approval
+records are not authenticated identity. `ProcessTree` limits process lifetime,
+not filesystem/network access. Regex masking and text scans are partial
+defences, not universal DLP. Percentage quotas cannot guarantee a billed-token
+budget. Native launch/attach/cancel and token counters depend on the calling
+host. Application store publishing remains outside scope.

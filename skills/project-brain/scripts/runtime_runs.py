@@ -9,11 +9,13 @@ import re
 import sqlite3
 import uuid
 
-import runtime_agents as A
+import runtime_actors as A
+import runtime_core as Core
+import runtime_reports as RP
 import runtime_security as S
-import runtime_verify as V
 
 SCHEMA = 1
+DEFAULT_POLICY = {"schedule": "serial", "cap": 1}
 ACTIVE = ("PREPARED", "SUBMITTING", "RUNNING", "CANCEL_REQUESTED", "UNKNOWN")
 TRANSITIONS = {
     "PREPARED": ("SUBMITTING", "CANCELLED"),
@@ -21,7 +23,9 @@ TRANSITIONS = {
     "RUNNING": ("SUCCEEDED", "FAILED", "CANCEL_REQUESTED", "CANCELLED", "UNKNOWN"),
     "CANCEL_REQUESTED": ("SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"),
     "UNKNOWN": ("RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "CANCEL_REQUESTED"),
-    "SUCCEEDED": (), "FAILED": (), "CANCELLED": (),
+    "SUCCEEDED": (),
+    "FAILED": (),
+    "CANCELLED": (),
 }
 
 
@@ -40,10 +44,8 @@ def canonical(B, root):
 
 
 def private(path):
-    path = Path(path).absolute()
-    if any(V.is_link(p) for p in [path] + list(path.parents)):
-        raise ValueError("Linked orchestration state refused")
-    return path
+    p = Path(path)
+    return Core.safe_private_path(p, stop_at=p.absolute().parent)
 
 
 def directory(B, root, create=True):
@@ -58,6 +60,12 @@ def directory(B, root, create=True):
     return path
 
 
+def _connect_ro(path):
+    db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=15)
+    db.execute("PRAGMA busy_timeout=15000")
+    return db
+
+
 def peek(B, root):
     """Boot readback is read-only: no database, migration or directory creation."""
     if not (A.registry_path().parent / "orchestration").exists():
@@ -67,15 +75,19 @@ def peek(B, root):
     path = private(directory(B, root, create=False) / "runs.sqlite3")
     if not path.is_file():
         return []
-    db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+    db = _connect_ro(path)
     try:
         if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA:
             raise ValueError("Unsupported orchestration schema; preserve and upgrade")
-        return [dict(zip(("run", "task", "kind", "state", "verification", "integration"), row))
-                for row in db.execute("SELECT id,task,kind,state,verification,integration FROM runs WHERE state IN "
-                                      "('PREPARED','SUBMITTING','RUNNING','CANCEL_REQUESTED','UNKNOWN') OR "
-                                      "(state='SUCCEEDED' AND integration!='REJECTED' AND (verification!='PASS' OR integration='PENDING')) "
-                                      "ORDER BY created LIMIT 8")]
+        return [
+            dict(zip(("run", "task", "kind", "state", "verification", "integration"), row))
+            for row in db.execute(
+                "SELECT id,task,kind,state,verification,integration FROM runs WHERE state IN "
+                "('PREPARED','SUBMITTING','RUNNING','CANCEL_REQUESTED','UNKNOWN') OR "
+                "(state='SUCCEEDED' AND integration!='REJECTED' AND (verification!='PASS' OR integration='PENDING')) "
+                "ORDER BY created LIMIT 8"
+            )
+        ]
     finally:
         db.close()
 
@@ -84,17 +96,20 @@ def implementation_strength(B, root, tid, actor):
     """Read immutable execution selection for this candidate or integrated task."""
     if not (A.registry_path().parent / "orchestration").exists() or not B.git(root, "rev-parse", "--git-common-dir"):
         return None
-    path = directory(B, root, create=False) / "runs.sqlite3"
-    if not path.exists():
+    path = private(directory(B, root, create=False) / "runs.sqlite3")
+    if not path.is_file():
         return None
-    db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+    db = _connect_ro(path)
     try:
-        for rid, spec, integration in db.execute("SELECT id,spec,integration FROM runs WHERE task=? AND kind='EXECUTE' AND state='SUCCEEDED' ORDER BY created DESC", (tid,)):
+        for rid, _spec, integration in db.execute(
+            "SELECT id,spec,integration FROM runs WHERE task=? AND kind='EXECUTE' AND state='SUCCEEDED' ORDER BY created DESC",
+            (tid,),
+        ):
             if not Path(root).name.startswith(rid + "-") and integration != "MERGED":
                 continue
-            for data, in db.execute("SELECT data FROM events WHERE run=? ORDER BY seq", (rid,)):
+            for (data,) in db.execute("SELECT data FROM events WHERE run=? ORDER BY seq", (rid,)):
                 value = json.loads(data)
-                if value.get("actor") == actor:
+                if value.get("actor") == actor and value.get("tier") in ("L", "M", "H"):
                     return {"L": "low", "M": "medium", "H": "high"}[value["tier"]]
         return None
     finally:
@@ -102,33 +117,69 @@ def implementation_strength(B, root, tid, actor):
 
 
 class Ledger:
-    def __init__(self, path):
+    def __init__(self, path, read_only=False):
         self.path = private(path)
+        self.read_only = bool(read_only)
         for suffix in ("-journal", "-wal", "-shm"):
             private(str(self.path) + suffix)
+        if self.read_only:
+            self.db = _connect_ro(self.path)
+            self.db.row_factory = sqlite3.Row
+            try:
+                version = self.db.execute("PRAGMA user_version").fetchone()[0]
+                if version != SCHEMA:
+                    raise ValueError("Unsupported orchestration schema; preserve database")
+            except BaseException:
+                self.db.close()
+                raise
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(self.path), timeout=15, isolation_level=None)
         self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA foreign_keys=ON")
-        self.db.execute("PRAGMA synchronous=FULL")
-        version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, SCHEMA):
-            self.db.close()
-            raise ValueError("Unsupported orchestration schema; preserve database")
-        self.db.executescript("""
-        CREATE TABLE IF NOT EXISTS runs (
-          id TEXT PRIMARY KEY, task TEXT NOT NULL, kind TEXT NOT NULL,
-          state TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0,
-          spec TEXT NOT NULL, backend_id TEXT, report TEXT,
-          verification TEXT NOT NULL DEFAULT 'PENDING', integration TEXT NOT NULL,
-          output TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS events (
-          seq INTEGER PRIMARY KEY AUTOINCREMENT, run TEXT NOT NULL REFERENCES runs(id),
-          event TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS requests (run TEXT PRIMARY KEY REFERENCES runs(id), payload TEXT NOT NULL);
-        """)
-        self.db.execute("PRAGMA user_version=1")
+        try:
+            self.db.execute("PRAGMA busy_timeout=15000")
+            self.db.execute("PRAGMA foreign_keys=ON")
+            try:
+                self.db.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.OperationalError:
+                pass
+            self.db.execute("PRAGMA synchronous=FULL")
+            self.db.execute("BEGIN IMMEDIATE")
+            version = self.db.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (0, SCHEMA):
+                self.db.execute("ROLLBACK")
+                raise ValueError("Unsupported orchestration schema; preserve database")
+            if version == 0:
+                self.db.execute(
+                    "CREATE TABLE IF NOT EXISTS runs ("
+                    "id TEXT PRIMARY KEY, task TEXT NOT NULL, kind TEXT NOT NULL, "
+                    "state TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0, "
+                    "spec TEXT NOT NULL, backend_id TEXT, report TEXT, "
+                    "verification TEXT NOT NULL DEFAULT 'PENDING', integration TEXT NOT NULL, "
+                    "output TEXT, created TEXT NOT NULL, updated TEXT NOT NULL)"
+                )
+                self.db.execute(
+                    "CREATE TABLE IF NOT EXISTS events ("
+                    "seq INTEGER PRIMARY KEY AUTOINCREMENT, run TEXT NOT NULL REFERENCES runs(id), "
+                    "event TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL)"
+                )
+                self.db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                self.db.execute(
+                    "CREATE TABLE IF NOT EXISTS requests (run TEXT PRIMARY KEY REFERENCES runs(id), payload TEXT NOT NULL)"
+                )
+                self.db.execute("PRAGMA user_version=1")
+            self.db.execute("COMMIT")
+        except BaseException:
+            try:
+                if self.db.in_transaction:
+                    self.db.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            try:
+                self.db.close()
+            except sqlite3.Error:
+                pass
+            raise
 
     def close(self):
         self.db.close()
@@ -140,13 +191,22 @@ class Ledger:
         destination.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(destination), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
-        # SQLite backup includes a consistent snapshot even while another process
-        # owns a transaction; never copy a live database file with shutil.
-        target = sqlite3.connect(str(destination))
+        target = None
         try:
+            target = sqlite3.connect(str(destination))
             self.db.backup(target)
+        except BaseException:
+            if target is not None:
+                target.close()
+                target = None
+            try:
+                destination.unlink()
+            except OSError:
+                pass
+            raise
         finally:
-            target.close()
+            if target is not None:
+                target.close()
         return destination
 
     @contextmanager
@@ -156,34 +216,45 @@ class Ledger:
             yield
             self.db.execute("COMMIT")
         except BaseException:
-            self.db.execute("ROLLBACK")
+            if self.db.in_transaction:
+                self.db.execute("ROLLBACK")
             raise
 
     def event(self, rid, event, data):
-        self.db.execute("INSERT INTO events(run,event,data,created) VALUES(?,?,?,?)",
-                        (rid, event, json.dumps(data, ensure_ascii=False), now()))
+        self.db.execute(
+            "INSERT INTO events(run,event,data,created) VALUES(?,?,?,?)",
+            (rid, event, json.dumps(data, ensure_ascii=False), now()),
+        )
 
-    def get(self, rid):
-        row = self.db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
-        if row is None:
-            raise ValueError("Unknown run")
+    def _hydrate(self, row):
         value = dict(row)
         value["spec"] = json.loads(value["spec"])
         value["report"] = json.loads(value["report"]) if value["report"] else None
         return value
 
+    def get(self, rid):
+        row = self.db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+        if row is None:
+            raise ValueError("Unknown run")
+        return self._hydrate(row)
+
     def all(self):
-        return [self.get(r[0]) for r in self.db.execute("SELECT id FROM runs ORDER BY created,id")]
+        return [self._hydrate(r) for r in self.db.execute("SELECT * FROM runs ORDER BY created,id")]
 
     def select(self, where, params=()):
-        return [self.get(r[0]) for r in self.db.execute("SELECT id FROM runs WHERE " + where + " ORDER BY created,id", params)]
+        return [
+            self._hydrate(r)
+            for r in self.db.execute("SELECT * FROM runs WHERE " + where + " ORDER BY created,id", params)
+        ]
 
     def configure(self, schedule, cap):
         if schedule not in ("serial", "parallel") or type(cap) is not int or not 1 <= cap <= 32:
             raise ValueError("Invalid schedule/capacity")
         with self.transaction():
-            self.db.execute("INSERT OR REPLACE INTO settings VALUES('policy',?)",
-                            (json.dumps({"schedule": schedule, "cap": 1 if schedule == "serial" else cap}),))
+            self.db.execute(
+                "INSERT OR REPLACE INTO settings VALUES('policy',?)",
+                (json.dumps({"schedule": schedule, "cap": 1 if schedule == "serial" else cap}),),
+            )
 
     def origin(self, root):
         with self.transaction():
@@ -206,10 +277,10 @@ class Ledger:
         rid = "run-" + uuid.uuid4().hex
         spec = dict(spec, idempotencyKey="pb-" + rid)
         with self.transaction():
-            held = self.select("state IN ('PREPARED','SUBMITTING','RUNNING','CANCEL_REQUESTED','UNKNOWN') OR "
-                               "(kind='EXECUTE' AND state='SUCCEEDED' AND integration NOT IN ('MERGED','REJECTED'))")
-            # Completed writes reserve their scope until integrated; process capacity
-            # counts only active jobs. UNKNOWN always reserves both.
+            held = self.select(
+                "state IN ('PREPARED','SUBMITTING','RUNNING','CANCEL_REQUESTED','UNKNOWN') OR "
+                "(kind='EXECUTE' AND state='SUCCEEDED' AND integration NOT IN ('MERGED','REJECTED'))"
+            )
             if sum(r["state"] in ACTIVE for r in held) >= self.policy()["cap"]:
                 raise ValueError("CAPACITY: active jobs must drain before dispatch")
             for r in held:
@@ -219,16 +290,24 @@ class Ledger:
                 if set(spec["resources"]) & set(r["spec"]["resources"]):
                     raise ValueError("RESOURCE: already reserved")
             stamp = now()
-            self.db.execute("INSERT INTO runs(id,task,kind,state,spec,integration,created,updated) VALUES(?,?,?,'PREPARED',?,?,?,?)",
-                            (rid, spec["task"], spec["kind"], json.dumps(spec, ensure_ascii=False),
-                             "PENDING" if spec["kind"] == "EXECUTE" else "NOT_APPLICABLE", stamp, stamp))
+            self.db.execute(
+                "INSERT INTO runs(id,task,kind,state,spec,integration,created,updated) VALUES(?,?,?,'PREPARED',?,?,?,?)",
+                (
+                    rid,
+                    spec["task"],
+                    spec["kind"],
+                    json.dumps(spec, ensure_ascii=False),
+                    "PENDING" if spec["kind"] == "EXECUTE" else "NOT_APPLICABLE",
+                    stamp,
+                    stamp,
+                ),
+            )
             self.event(rid, "PREPARED", {})
         return self.get(rid)
 
     def transition(self, rid, state, version, backend_id=None, report=None, observation=None):
-        from runtime_reports import validate
         if report is not None:
-            validate(report)
+            RP.validate(report)
         with self.transaction():
             r = self.get(rid)
             if r["version"] != version:
@@ -243,9 +322,20 @@ class Ledger:
                 raise ValueError("Successful run needs a structured report")
             if backend_id and r["backend_id"] and backend_id != r["backend_id"]:
                 raise ValueError("Backend identity is immutable")
-            self.db.execute("UPDATE runs SET state=?,version=version+1,backend_id=?,report=?,updated=? WHERE id=?",
-                            (state, backend_id or r["backend_id"], json.dumps(report, ensure_ascii=False) if report is not None else
-                             json.dumps(r["report"], ensure_ascii=False) if r["report"] is not None else None, now(), rid))
+            self.db.execute(
+                "UPDATE runs SET state=?,version=version+1,backend_id=?,report=?,updated=? WHERE id=?",
+                (
+                    state,
+                    backend_id or r["backend_id"],
+                    json.dumps(report, ensure_ascii=False)
+                    if report is not None
+                    else json.dumps(r["report"], ensure_ascii=False)
+                    if r["report"] is not None
+                    else None,
+                    now(),
+                    rid,
+                ),
+            )
             self.event(rid, state, dict(observation or {}, previous=r["state"]))
         return self.get(rid)
 
@@ -253,13 +343,18 @@ class Ledger:
         allowed = {"verification", "integration", "output"}
         if not values or set(values) - allowed:
             raise ValueError("Invalid annotation")
-        if ("verification" in values and values["verification"] not in ("PENDING", "PASS", "FAIL", "STALE") or
-                "integration" in values and values["integration"] not in ("NOT_APPLICABLE", "PENDING", "MERGED", "REJECTED")):
+        if (
+            "verification" in values
+            and values["verification"] not in ("PENDING", "PASS", "FAIL", "STALE")
+            or "integration" in values
+            and values["integration"] not in ("NOT_APPLICABLE", "PENDING", "MERGED", "REJECTED")
+        ):
             raise ValueError("Invalid verification/integration state")
         with self.transaction():
             self.get(rid)
-            for key, value in values.items():
-                self.db.execute("UPDATE runs SET " + key + "=?,version=version+1,updated=? WHERE id=?", (value, now(), rid))
+            assignments = ", ".join(k + "=?" for k in values)
+            params = list(values.values()) + [now(), rid]
+            self.db.execute("UPDATE runs SET " + assignments + ", version=version+1, updated=? WHERE id=?", params)
             self.event(rid, event, values)
 
     def events(self, after=0, limit=20):
@@ -272,17 +367,18 @@ def conflict(left, right):
     """Conservative glob-prefix overlap, including not-yet-created files."""
     if not left or not right:
         return True
+
     def prefix(value):
         value = value.replace("\\", "/")
         value = value[2:] if value.startswith("./") else value
         return re.split(r"[*?\[]", value.lower(), maxsplit=1)[0].rstrip("/")
+
     for a in left:
         for b in right:
             x, y = prefix(a), prefix(b)
             if not x or not y or x == y or x.startswith(y + "/") or y.startswith(x + "/"):
                 return True
-            if (any(c in a for c in "*?[") and y.startswith(x) or
-                    any(c in b for c in "*?[") and x.startswith(y)):
+            if (any(c in a for c in "*?[") and y.startswith(x)) or (any(c in b for c in "*?[") and x.startswith(y)):
                 return True
     return False
 
@@ -292,6 +388,7 @@ def ready(tasks, completed, held):
     ids = {t["id"] for t in tasks} | set(completed)
     byid = {t["id"]: t for t in tasks}
     visiting, seen = set(), set()
+
     def visit(tid):
         if tid in visiting:
             raise ValueError("Dependency cycle: " + tid)
@@ -304,7 +401,11 @@ def ready(tasks, completed, held):
             visit(dep)
         visiting.remove(tid)
         seen.add(tid)
+
     for tid in byid:
         visit(tid)
-    return [t["id"] for t in sorted(tasks, key=lambda t: (t.get("priority", "P2"), t["id"]))
-            if t["status"] == "READY" and t["id"] not in held and all(d in completed for d in t.get("deps", []))]
+    return [
+        t["id"]
+        for t in sorted(tasks, key=lambda t: (t.get("priority", "P2"), t["id"]))
+        if t["status"] == "READY" and t["id"] not in held and all(d in completed for d in t.get("deps", []))
+    ]

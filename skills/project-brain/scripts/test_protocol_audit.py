@@ -12,10 +12,11 @@ from unittest.mock import patch
 
 import brain as B
 import runtime_verify as V
+from test_helpers import clean_env, scrub_environ
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="pb-protocol-audit-") as tmp:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-protocol-audit-") as tmp:
         root = Path(tmp)
         with redirect_stdout(StringIO()):
             B.cmd_init(root)
@@ -92,38 +93,27 @@ def main():
         with B.checkout_lock(root, timeout=.1):
             pass
 
-    # Exercise the public CLI parser, approval gate and native handoff end to end.
-    with tempfile.TemporaryDirectory(prefix="pb-pool-cli-") as tmp:
+    # Exercise the public CLI parser, setup confirmation and policy confirmation end to end.
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-policy-cli-") as tmp:
         root = Path(tmp)
         with redirect_stdout(StringIO()):
             B.cmd_init(root)
-        import runtime_agents as A
-        registry = root / "agents.json"
-        A.save({"models": {"host-worker": {"cli": "host", "model_id": "fake-native", "pool": "local",
-                                           "roles": ["worker"], "efforts": ["low"]}},
-                "pools": {"local": {}}, "cli_agents": {}}, registry)
-        env = dict(os.environ, PB_AGENTS_REGISTRY=str(registry))
+        env = clean_env()
         def cli(*args):
-            return subprocess.run([sys.executable, B.__file__, *args], cwd=root, env=env,
+            return subprocess.run([sys.executable, "-B", B.__file__, *args], cwd=root, env=env,
                                   text=True, encoding="utf-8", capture_output=True, timeout=15)
-        proposed = cli("agents", "session", "--new", "--json")
-        assert proposed.returncode == 0, proposed.stderr
-        session = json.loads(proposed.stdout)
-        selection = root / "selection.json"
-        selection.write_text(json.dumps({"models": {"host-worker": {"roles": ["worker"], "efforts": ["low"],
-                                                                    "billing": "local", "max_jobs": 1}}}), encoding="utf-8")
-        args = ("agents", "approve", str(selection), "--session", session["session_id"], "--note", "User selected this test host worker")
-        denied = cli(*args)
-        assert denied.returncode == 2 and "confirmed" in denied.stderr, denied.stdout + denied.stderr
-        approved = cli(*args, "--user-confirmed")
-        assert approved.returncode == 0 and "APPROVED" in approved.stdout, approved.stdout + approved.stderr
+        asked = cli("setup", "ask")
+        assert asked.returncode == 0, asked.stderr
+        confirmed = cli("setup", "confirm", "--note", "User accepted defaults")
+        assert confirmed.returncode == 0 and "CONFIRMED" in confirmed.stdout, confirmed.stdout + confirmed.stderr
         boot = cli("boot")
-        assert "MODEL_POOL: APPROVED" in boot.stdout, boot.stdout + boot.stderr
-        revoked = cli("agents", "revoke")
-        assert revoked.returncode == 0 and "REVOKED" in revoked.stdout
-        # Repeating session display does not silently approve a revoked pool.
-        display = cli("agents", "session", "--json")
-        assert json.loads(display.stdout)["status"] == "REVOKED", display.stdout
+        assert boot.returncode == 0 and "POLICY:" in boot.stdout, boot.stdout + boot.stderr
+        # Inline quick policy flags also work end-to-end.
+        quick = cli("policy", "--source", "mixed", "--schedule", "parallel", "--max-parallel", "2", "--confirm", "--note", "Mixed execution")
+        assert quick.returncode == 0 and "mixed" in quick.stdout, quick.stdout + quick.stderr
+        # Retired direct backend is refused clearly.
+        retired = cli("delegate", "PB-001", "--backend", "direct")
+        assert retired.returncode == 2, retired.stdout + retired.stderr
     print("OK: protocol audit checks passed")
 
 

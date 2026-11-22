@@ -8,25 +8,29 @@ Python 3.8+, standard library only.
 import hashlib
 import json
 import math
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import re
 import time
 import uuid
 
+import runtime_core as Core
 import runtime_security as S
-import runtime_verify as V
 
-MAX_RECORD = 16384
+MAX_RECORD = 65536
 MAX_CHECKPOINT = 1024 * 1024
 HASH = re.compile(r"^[0-9a-f]{64}$")
 NONCE = re.compile(r"^[0-9a-f]{32}$")
+WINDOW_KEY = re.compile(r"^(?:primary|secondary|window_\d+)$")
 STATES = {"PREPARED", "ARMED", "CANCELLED", "RESUMED"}
 
 
 def _number(value):
     try:
-        return (isinstance(value, (int, float)) and not isinstance(value, bool)
-                and math.isfinite(value))
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        )
     except OverflowError:
         return False
 
@@ -52,17 +56,19 @@ def _policy(policy):
     if not _number(threshold) or not 1 <= threshold <= 50:
         raise ValueError("Quota recovery threshold must be finite and between 1 and 50")
     try:
-        raw = json.dumps(policy, sort_keys=True, separators=(",", ":"),
-                         ensure_ascii=False, allow_nan=False).encode("utf-8")
+        raw = json.dumps(
+            policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
     except (TypeError, ValueError):
         raise ValueError("Quota recovery policy must be finite JSON")
     if len(raw) > MAX_RECORD:
-        raise ValueError("Quota recovery policy exceeds 16 KiB")
+        raise ValueError("Quota recovery policy exceeds 64 KiB")
     relay = policy.get("relay")
-    if isinstance(relay, dict) and relay.get("enabled") is True and _number(relay.get("threshold_percent")):
-        # ADR-007: with director transfer on, its threshold is the single trigger;
-        # waiting is the fallback taken at that same point when no successor is ready.
-        threshold = relay["threshold_percent"]
+    if isinstance(relay, dict) and relay.get("enabled") is True:
+        r_thr = relay.get("threshold_percent")
+        if type(r_thr) is not int or not 1 <= r_thr <= 50:
+            raise ValueError("Relay threshold_percent must be an integer 1..50")
+        threshold = r_thr
     return qrp["enabled"], threshold, _hash(raw)
 
 
@@ -73,40 +79,54 @@ def _account(snapshot):
     return _hash(value.encode("utf-8"))
 
 
-def _normalize_cap_snapshot(snapshot, now):
+def _normalize_cap_snapshot(snapshot):
+    """Normalize a CAP quota snapshot without inventing missing identity, quota, or resets."""
     if not isinstance(snapshot, dict) or "rateLimits" in snapshot:
         return snapshot
     windows_list = snapshot.get("windows")
     if not isinstance(windows_list, list) or not windows_list:
         return snapshot
-    accountId = snapshot.get("accountId") or snapshot.get("routeId") or snapshot.get("account") or "cap-route"
-    rate_limits = {"limitId": snapshot.get("routeId", "cap-route")}
-    window_keys = ("primary", "secondary")
-    for i, w in enumerate(windows_list[:2]):
+    # Never fall back to a hardcoded constant: missing identity must fail closed.
+    account_id = snapshot.get("accountId") or snapshot.get("account") or snapshot.get("routeId")
+    limit_id = snapshot.get("limitId") or snapshot.get("routeId")
+    rate_limits = {"limitId": limit_id} if isinstance(limit_id, str) and limit_id.strip() else {}
+    for idx, w in enumerate(windows_list):
         if not isinstance(w, dict):
-            continue
-        rem = w.get("remainingPercent", 100)
-        used = 100 - rem if _number(rem) else 0
-        reset = None
-        if w.get("resetAt"):
-            try:
-                import datetime
-                dt = datetime.datetime.fromisoformat(w["resetAt"].replace("Z", "+00:00"))
-                reset = dt.timestamp()
-            except Exception:
-                pass
-        if not reset or reset <= now:
-            reset = now + 18000
-        rate_limits[window_keys[i]] = {"usedPercent": used, "resetsAt": reset, "windowDurationMins": 300}
-    return {
-        "accountId": accountId,
-        "ordinaryUsageAllowed": snapshot.get("status") not in ("auth_required", "subscription_required", "credits_required"),
-        "rateLimits": rate_limits
-    }
+            raise ValueError("CAP quota window must be an object")
+        key = "primary" if idx == 0 else ("secondary" if idx == 1 else f"window_{idx + 1}")
+        rem = w.get("remainingPercent")
+        if not _number(rem) or not 0 <= rem <= 100:
+            raise ValueError("CAP quota window missing valid remainingPercent")
+        used = 100 - rem
+        raw_reset = w.get("resetAt")
+        if isinstance(raw_reset, str) and raw_reset.strip():
+            reset = Core.parse_iso_utc(raw_reset)
+        elif _number(raw_reset):
+            reset = float(raw_reset)
+        else:
+            raise ValueError("CAP quota window missing valid resetAt")
+        dur = w.get("windowDurationMins")
+        if dur is None and _number(w.get("windowMinutes")):
+            dur = w["windowMinutes"]
+        if dur is None:
+            dur = 300
+        rate_limits[key] = {"usedPercent": used, "resetsAt": reset, "windowDurationMins": dur}
+    status_val = str(snapshot.get("status") or "").strip().lower()
+    if snapshot.get("offline") is True or snapshot.get("networkError") is True:
+        allowed = False
+    elif isinstance(snapshot.get("ordinaryUsageAllowed"), bool):
+        allowed = snapshot["ordinaryUsageAllowed"]
+    else:
+        # Fail closed on unrecognized statuses; allow only explicit healthy/quota-reported states.
+        allowed = status_val in ("", "ok", "healthy", "active", "ready", "available", "limited", "low", "exhausted")
+    out = {"ordinaryUsageAllowed": allowed, "rateLimits": rate_limits}
+    if isinstance(account_id, str) and account_id.strip():
+        out["accountId"] = account_id
+    return out
 
 
 def _observe(snapshot, now):
-    snapshot = _normalize_cap_snapshot(snapshot, now)
+    snapshot = _normalize_cap_snapshot(snapshot)
     account = _account(snapshot)
     if not isinstance(snapshot.get("ordinaryUsageAllowed"), bool):
         raise ValueError("Ordinary usage availability is unknown")
@@ -116,15 +136,23 @@ def _observe(snapshot, now):
     limit_id = limits.get("limitId")
     if not isinstance(limit_id, str) or not limit_id.strip() or len(limit_id) > 256 or any(ord(c) < 32 for c in limit_id):
         raise ValueError("Provider quota identity is unavailable")
+    window_keys = [k for k in limits if k != "limitId" and limits[k] is not None]
+    if "primary" not in limits:
+        raise ValueError("Provider quota primary window is unavailable")
+    if not window_keys:
+        raise ValueError("Provider quota windows are unavailable")
     windows = {}
-    for key in ("primary", "secondary"):
-        window = limits.get(key)
-        if key == "secondary" and window is None:
+    for key in sorted(window_keys):
+        if not WINDOW_KEY.fullmatch(key):
             continue
+        window = limits.get(key)
         if not isinstance(window, dict):
             raise ValueError("Provider quota window is unavailable")
-        used, reset, duration = (window.get("usedPercent"), window.get("resetsAt"),
-                                 window.get("windowDurationMins"))
+        used, reset, duration = (
+            window.get("usedPercent"),
+            window.get("resetsAt"),
+            window.get("windowDurationMins"),
+        )
         if not _number(used) or not 0 <= used <= 100:
             raise ValueError("Provider quota percentage is invalid")
         if not _number(reset) or reset <= now:
@@ -132,14 +160,23 @@ def _observe(snapshot, now):
         if not _number(duration) or duration <= 0:
             raise ValueError("Provider quota window duration is invalid")
         windows[key] = {"remaining_percent": 100 - used, "resets_at": reset}
-    return {"account_hash": account, "limit_hash": _hash(limit_id.encode("utf-8")),
-            "allowed": snapshot["ordinaryUsageAllowed"], "windows": windows}
+    if "primary" not in windows:
+        raise ValueError("Provider quota primary window is unavailable")
+    return {
+        "account_hash": account,
+        "limit_hash": _hash(limit_id.encode("utf-8")),
+        "allowed": snapshot["ordinaryUsageAllowed"],
+        "windows": windows,
+    }
 
 
 def assess(snapshot, policy, now=None):
     """Pure conservative assessment. Unknown observations never imply capacity."""
-    if (isinstance(policy, dict) and isinstance(policy.get("quota_recovery"), dict)
-            and policy["quota_recovery"].get("enabled") is False):
+    if (
+        isinstance(policy, dict)
+        and isinstance(policy.get("quota_recovery"), dict)
+        and policy["quota_recovery"].get("enabled") is False
+    ):
         return {"status": "DISABLED"}
     try:
         enabled, threshold, _ = _policy(policy)
@@ -148,32 +185,42 @@ def assess(snapshot, policy, now=None):
         observation = _observe(snapshot, _now(now))
     except (ValueError, TypeError, OverflowError):
         return {"status": "UNKNOWN", "reason": "policy or provider observation unavailable"}
-    blocking = {key: window["resets_at"] for key, window in observation["windows"].items()
-                if window["remaining_percent"] <= threshold}
-    result = {"status": "CHECKPOINT_REQUIRED" if blocking else "READY",
-              "threshold_percent": threshold,
-              "remaining_percent": min(w["remaining_percent"] for w in observation["windows"].values())}
+    if not observation["allowed"]:
+        return {"status": "UNKNOWN", "reason": "ordinary provider usage is unavailable"}
+    blocking = {
+        key: window["resets_at"]
+        for key, window in observation["windows"].items()
+        if window["remaining_percent"] <= threshold
+    }
+    result = {
+        "status": "CHECKPOINT_REQUIRED" if blocking else "READY",
+        "threshold_percent": threshold,
+        "remaining_percent": min(w["remaining_percent"] for w in observation["windows"].values()),
+    }
     if blocking:
         result.update({"next_reset_at": max(blocking.values()), "limiting_windows": blocking})
-    elif not observation["allowed"]:
-        return {"status": "UNKNOWN", "reason": "ordinary provider usage is unavailable"}
     elif result["remaining_percent"] <= threshold + 5:
-        result["prepare_checkpoint"] = True  # save Resume 5 points before the threshold
+        result["prepare_checkpoint"] = True
     return result
 
 
 def _path(B, root):
-    return V.public_path(root, B.BRAIN_DIR + "/.cache/quota-recovery.json")
+    return Core.public_path(root, B.BRAIN_DIR + "/.cache/quota-recovery.json")
 
 
 def _checkpoint(B, root, name):
     if not isinstance(name, str) or len(name) > 512:
         raise ValueError("Checkpoint must be a bounded project-relative path")
     parts = PurePosixPath(name).parts
-    if (len(parts) != 4 or parts[:2] != (B.BRAIN_DIR, "evidence")
-            or parts[3] != "handoff.json" or not parts[2] or str(PurePosixPath(name)) != name):
+    if (
+        len(parts) != 4
+        or parts[:2] != (B.BRAIN_DIR, "evidence")
+        or parts[3] != "handoff.json"
+        or not parts[2]
+        or str(PurePosixPath(name)) != name
+    ):
         raise ValueError("Checkpoint must be .project-brain/evidence/<task>/handoff.json")
-    path = V.public_path(root, name)
+    path = Core.public_path(root, name)
     if not path.is_file() or path.stat().st_size > MAX_CHECKPOINT:
         raise ValueError("Existing bounded handoff checkpoint required")
     raw = path.read_bytes()
@@ -197,23 +244,31 @@ def _read(B, root):
         raise ValueError("Quota recovery record exceeds its bound")
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
-        valid = (isinstance(state, dict) and state.get("schema") == 1
-                 and NONCE.fullmatch(state.get("nonce", ""))
-                 and state.get("status") in STATES
-                 and all(HASH.fullmatch(state.get(k, "")) for k in ("account_hash", "policy_hash", "limit_hash"))
-                 and _number(state.get("observed_reset_at"))
-                 and state["observed_reset_at"] > 0
-                 and _number(state.get("prepared_at")) and state["prepared_at"] >= 0
-                 and isinstance(state.get("limiting_windows"), dict) and state["limiting_windows"]
-                 and all(k in ("primary", "secondary") and _number(v) and v > 0
-                         for k, v in state["limiting_windows"].items())
-                 and max(state["limiting_windows"].values()) == state["observed_reset_at"]
-                 and isinstance(state.get("checkpoint"), dict)
-                 and HASH.fullmatch(state["checkpoint"].get("sha256", ""))
-                 and isinstance(state["checkpoint"].get("path"), str)
-                 and (state.get("automation_id") is None or _host_id(state["automation_id"]))
-                 and (state["status"] not in ("ARMED", "RESUMED") or _host_id(state["automation_id"]))
-                 and (state["status"] != "PREPARED" or state["automation_id"] is None))
+        valid = (
+            isinstance(state, dict)
+            and state.get("schema") == 1
+            and NONCE.fullmatch(state.get("nonce", ""))
+            and state.get("status") in STATES
+            and all(HASH.fullmatch(state.get(k, "")) for k in ("account_hash", "policy_hash", "limit_hash"))
+            and (state.get("policy_file_hash") is None or HASH.fullmatch(state.get("policy_file_hash", "")))
+            and _number(state.get("observed_reset_at"))
+            and state["observed_reset_at"] > 0
+            and _number(state.get("prepared_at"))
+            and state["prepared_at"] >= 0
+            and isinstance(state.get("limiting_windows"), dict)
+            and state["limiting_windows"]
+            and all(
+                WINDOW_KEY.fullmatch(k) and _number(v) and v > 0
+                for k, v in state["limiting_windows"].items()
+            )
+            and max(state["limiting_windows"].values()) == state["observed_reset_at"]
+            and isinstance(state.get("checkpoint"), dict)
+            and HASH.fullmatch(state["checkpoint"].get("sha256", ""))
+            and isinstance(state["checkpoint"].get("path"), str)
+            and (state.get("automation_id") is None or _host_id(state["automation_id"]))
+            and (state["status"] not in ("ARMED", "RESUMED") or _host_id(state["automation_id"]))
+            and (state["status"] != "PREPARED" or state["automation_id"] is None)
+        )
     except (ValueError, TypeError, AttributeError):
         valid = False
     if not valid:
@@ -222,7 +277,7 @@ def _read(B, root):
 
 
 def _write(B, root, state):
-    B.write_atomic(_path(B, root), json.dumps(state, sort_keys=True, indent=2, allow_nan=False))
+    Core.write_atomic(_path(B, root), json.dumps(state, sort_keys=True, indent=2, allow_nan=False))
 
 
 def _host_id(value):
@@ -232,26 +287,44 @@ def _host_id(value):
 def _view(state):
     if state is None:
         return {"status": "NONE"}
-    return {"status": state["status"], "nonce": state["nonce"],
-            "automation_id": state["automation_id"], "wake_at": state["observed_reset_at"],
-            "checkpoint": state["checkpoint"]["path"]}
+    return {
+        "status": state["status"],
+        "nonce": state["nonce"],
+        "automation_id": state["automation_id"],
+        "wake_at": state["observed_reset_at"],
+        "checkpoint": state["checkpoint"]["path"],
+    }
 
 
 def _request(state, action):
     result = _view(state)
-    result.update({"host_action": action, "name": "pb-quota-" + state["nonce"],
-                   "instructions": "Use this nonce/name for host readback. Never blindly retry uncertain creation. "
-                   "At wake, obtain fresh account/quota readings and call check_resume; code only after RESUMED. "
-                   "Stay quiet while waiting; notify on completion, failure or required user action."})
+    result.update(
+        {
+            "host_action": action,
+            "name": "pb-quota-" + state["nonce"],
+            "instructions": (
+                "Use this nonce/name for host readback. Never blindly retry uncertain creation. "
+                "At wake, obtain fresh account/quota readings and call check_resume; code only after RESUMED. "
+                "Stay quiet while waiting; notify on completion, failure or required user action."
+            ),
+        }
+    )
     return result
 
 
-def prepare(B, root, snapshot, policy, checkpoint, now=None, allow_rearm=False):
-    """Persist a deliberate director recovery request, returning a host action.
+def _policy_file_hash(B, root):
+    """Hash raw executor-policy.json bytes on disk if present (binds unconfirmed mid-relay edits)."""
+    try:
+        path = Core.public_path(root, B.BRAIN_DIR + "/executor-policy.json")
+    except ValueError:
+        return None
+    if not path.is_file():
+        return None
+    return _hash(path.read_bytes())
 
-    A second PREPARED call requests host readback, never another blind create.
-    Replacing CANCELLED requires allow_rearm=True after fresh explicit consent.
-    """
+
+def prepare(B, root, snapshot, policy, checkpoint, now=None, allow_rearm=False):
+    """Persist a deliberate director recovery request, returning a host action."""
     if not isinstance(allow_rearm, bool):
         raise ValueError("Rearm must be an explicit boolean decision")
     now = _now(now)
@@ -265,16 +338,27 @@ def prepare(B, root, snapshot, policy, checkpoint, now=None, allow_rearm=False):
         old = _read(B, root)
         if old and old["status"] == "CANCELLED" and not allow_rearm:
             raise ValueError("Cancelled recovery requires fresh explicit consent and allow_rearm=True")
-        bindings = {"account_hash": observation["account_hash"], "limit_hash": observation["limit_hash"],
-                    "policy_hash": policy_hash, "checkpoint": checkpoint,
-                    "observed_reset_at": assessment["next_reset_at"],
-                    "limiting_windows": assessment["limiting_windows"]}
+        bindings = {
+            "account_hash": observation["account_hash"],
+            "limit_hash": observation["limit_hash"],
+            "policy_hash": policy_hash,
+            "policy_file_hash": _policy_file_hash(B, root),
+            "checkpoint": checkpoint,
+            "observed_reset_at": assessment["next_reset_at"],
+            "limiting_windows": assessment["limiting_windows"],
+        }
         if old and old["status"] in ("PREPARED", "ARMED"):
             if any(old.get(key) != value for key, value in bindings.items()):
                 raise ValueError("Existing recovery requires cancellation/readback before replacement")
             return _request(old, "READBACK_AUTOMATION" if old["status"] == "PREPARED" else "ALREADY_ARMED")
-        state = dict(bindings, schema=1, nonce=uuid.uuid4().hex, status="PREPARED",
-                     automation_id=None, prepared_at=now)
+        state = dict(
+            bindings,
+            schema=1,
+            nonce=uuid.uuid4().hex,
+            status="PREPARED",
+            automation_id=None,
+            prepared_at=now,
+        )
         _write(B, root, state)
         return _request(state, "CREATE_AUTOMATION")
 
@@ -299,13 +383,20 @@ def _revoke(B, root, state, reason):
     state.update(status="CANCELLED", reason=reason)
     _write(B, root, state)
     result = _view(state)
-    result.update(reason=reason, name="pb-quota-" + state["nonce"],
-                  host_action="DELETE_AUTOMATION" if state["automation_id"] else "READBACK_AND_DELETE")
+    result.update(
+        reason=reason,
+        name="pb-quota-" + state["nonce"],
+        host_action="DELETE_AUTOMATION" if state["automation_id"] else "READBACK_AND_DELETE",
+    )
     return result
 
 
-def check_resume(B, root, snapshot, policy, nonce, now=None):
-    """Consume one wake authority only after fresh identity/quota/checkpoint checks."""
+def check_resume(B, root, snapshot, policy, nonce, now=None, on_resumed=None):
+    """Consume one wake authority only after fresh identity/quota/checkpoint checks.
+
+    Optional `on_resumed()` callback executes inside the lock BEFORE committing
+    RESUMED so session confirmation cannot be lost if it fails.
+    """
     now = _now(now)
     with B.checkout_lock(root, name="quota-recovery.lock"):
         state = _read(B, root)
@@ -316,7 +407,8 @@ def check_resume(B, root, snapshot, policy, nonce, now=None):
         if state["status"] == "RESUMED":
             return {"status": "CONSUMED", "reason": "wake authority already consumed"}
         try:
-            account_hash = _account(snapshot)
+            normalized = _normalize_cap_snapshot(snapshot)
+            account_hash = _account(normalized)
         except ValueError:
             return {"status": "BLOCKED", "reason": "stable account identity unavailable"}
         if account_hash != state["account_hash"]:
@@ -327,6 +419,8 @@ def check_resume(B, root, snapshot, policy, nonce, now=None):
             return _revoke(B, root, state, "policy invalid; explicit reconfirmation required")
         if not enabled or policy_hash != state["policy_hash"]:
             return _revoke(B, root, state, "policy changed; explicit reconfirmation required")
+        if "policy_file_hash" in state and _policy_file_hash(B, root) != state["policy_file_hash"]:
+            return _revoke(B, root, state, "policy file bytes changed; explicit reconfirmation required")
         try:
             intact = _checkpoint(B, root, state["checkpoint"]["path"]) == state["checkpoint"]
         except (ValueError, OSError):
@@ -337,15 +431,19 @@ def check_resume(B, root, snapshot, policy, nonce, now=None):
             return {"status": "BLOCKED", "reason": "host creation acknowledgement/readback required"}
         if now < state["observed_reset_at"]:
             return {"status": "WAIT", "reason": "recorded reset time has not arrived"}
-        assessment = assess(snapshot, policy, now)
+        assessment = assess(normalized, policy, now)
         if assessment["status"] != "READY":
             return {"status": "WAIT", "reason": "fresh usable quota has not been demonstrated"}
-        observation = _observe(snapshot, now)
+        observation = _observe(normalized, now)
         if observation["limit_hash"] != state["limit_hash"]:
             return _revoke(B, root, state, "provider quota identity changed")
-        if any(key not in observation["windows"] or observation["windows"][key]["resets_at"] <= reset
-               for key, reset in state["limiting_windows"].items()):
+        if any(
+            key not in observation["windows"] or observation["windows"][key]["resets_at"] <= reset
+            for key, reset in state["limiting_windows"].items()
+        ):
             return {"status": "WAIT", "reason": "limiting quota windows have not demonstrably renewed"}
+        if on_resumed is not None:
+            on_resumed()
         state.update(status="RESUMED", resumed_at=now)
         _write(B, root, state)
         return dict(_view(state), checkpoint_sha256=state["checkpoint"]["sha256"])
@@ -356,7 +454,7 @@ def cancel(B, root, reason="user cancelled"):
     if not isinstance(reason, str) or not reason.strip() or len(reason) > 160:
         raise ValueError("Cancellation reason must be bounded nonempty text")
     S.require_public(reason, "quota recovery cancellation reason")
-    if not _path(B, root).exists():
+    if not (Path(root) / B.BRAIN_DIR).is_dir():
         return {"status": "NONE"}
     with B.checkout_lock(root, name="quota-recovery.lock"):
         state = _read(B, root)

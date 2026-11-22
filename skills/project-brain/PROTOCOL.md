@@ -20,24 +20,16 @@ Confirm Target in the user's words; choose EXEC/REV once. Then record one projec
 secret decision, even when the answer is no secrets:
 
 Before implementation: `PB orient`, then `PB boot --new-session`; read durable
-Executor Selection Policy (ESP), Scheduling Policy (SP) and Quota Recovery Policy (QRP) from
-`.project-brain/executor-policy.json`. On EVERY new implementation session,
-including "continue", show saved choices and confirm all three before new execution;
-current-session explicit answers count. Preserve unfinished work and read back
-old jobs first, never replay them. Offer: Solo, Native, Native Cheapest, Native Pinned, CAP Categories,
-CAP Catalog, or CAP Pinned. Native is the host; CAP is CLI Agent Pool. Resolve
-exact allowed models/categories/effort and separately serial/parallel scheduling.
-Record supplied choices including different review bounds if requested and QRP
-enabled/disabled plus threshold. See [RECOVERY.md](RECOVERY.md) for director-only
-checkpoint, host wake, same-account renewal and cancellation guards.
-ESP/SP changes or a new-session selection dialog show saved settings and ask
-what to keep/change. Same-session questions never reset/reopen them.
-Solo means the main agent performs work using tools without subagents.
-SP names Serial or Parallel with a confirmed maximum; recommend saved parallel
-settings for unfinished work. Changes apply to new dispatches; drain old jobs. Every dispatch must
-stay within source/model/category/effort/scheduling bounds; no silent fallback.
-[WORKFLOW §2](WORKFLOW.md#2-session-and-boot-details) defines the compact record
-and current CLI limits; the CLI validates the record and enforces its dispatch bounds.
+Executor Selection Policy (ESP), Scheduling Policy (SP), and optional QRP/BRP
+from `.project-brain/executor-policy.json`. On every new implementation session
+(including "continue"), run `PB setup ask` to display the single-line policy
+summary (safe core defaults: `native · parallel (auto) · QRP off · BRP off`) and
+confirm via `PB setup confirm` or override inline with `PB policy --source ...
+--confirm`. Preserve unfinished work and read back old jobs first, never replay
+them. Sources: `solo`, `native`, `native-cheap`, `native-pinned`, `mixed`,
+`cap-category`, `cap-catalog`, `cap-pinned`. Same-session questions never reset
+or reopen setup. See [WORKFLOW §2](WORKFLOW.md#2-session-and-boot-details) and
+[RECOVERY.md](RECOVERY.md).
 
 For CAP choices, use its skill for compact current categories/catalog/efforts.
 Do not invent category names or design CAP's API. Explicit solo/native/no-CAP skips
@@ -144,8 +136,8 @@ an explicit error, never silent dropping of unresolved operations.
 Keep implementation/testing with synthetic fixtures secret-free. A task needing
 real credentials declares `Secrets: project-vault`. It can run checks only after
 the approved project policy matches and an external host adapter is available.
-Secret-bearing tasks are never sent to Pool/direct workers; split fixture/code work
-from the credential-dependent integration check.
+Secret-bearing tasks are never sent to CAP or native workers; split fixture/code
+work from the credential-dependent integration check.
 
 `PB_PRIVATE_BINDING` resolves a host-private JSON file outside the repository. Its
 project/reference and approved command/scanner identities are checked. Example
@@ -177,7 +169,7 @@ capability label itself restricts filesystem/network access.
 
 ## Output, review and sharing
 
-Check/direct-worker output is captured in a private temporary stream before a
+`PB check` output is captured in a private temporary stream before a
 sanitized log is written. Known secret patterns/environment values are masked;
 secret-dependent checks additionally require the approved scanner. Output above
 4 MiB is bounded and cannot receive PASS. Unknown formats/images still need the

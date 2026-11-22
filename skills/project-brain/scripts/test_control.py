@@ -9,16 +9,17 @@ import time
 from unittest.mock import patch
 
 import brain as B
+import runtime_actors as AC
 import runtime_agent_pool as P
-import runtime_agents as A
 import runtime_control as C
 import runtime_executor_policy as E
 import runtime_quota_recovery as Q
-from test_routing import _project
+import runtime_scoring as SC
+from test_helpers import make_project as _project, scrub_environ
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="pb-control-") as directory:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-control-") as directory:
         root = Path(directory)
         with contextlib.redirect_stdout(io.StringIO()):
             _project(root)
@@ -48,9 +49,9 @@ def main():
                                   effort="", group="", dry_run=False)
         task = B.find_task(root, "PB-001")
         with patch.object(P, "select_policy", side_effect=AssertionError("dispatch during quota wait")), \
-                patch.object(A, "DEFAULT_REGISTRY", root/"private-registry.json"):
+                patch.object(AC, "DEFAULT_REGISTRY", root/"private-registry.json"):
             try:
-                P.delegate(B, root, task, A.score_task(B, root, task), args)
+                P.delegate(B, root, task, SC.score_task(B, root, task), args)
                 raise AssertionError("response discovery escaped quota wait")
             except ValueError as exc:
                 assert "QRP_WAIT" in str(exc)

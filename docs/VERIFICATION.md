@@ -1,4 +1,17 @@
-# Verification guide — Project Brain 3.12.0
+# Verification guide — Project Brain 4.0.0
+
+4.0.0 separates standalone core Project Brain (`solo`/`native`) from opt-in power features (CAP, durable SQLite `runs`, QRP, BRP), extracts an acyclic 20-module Python 3.8+ runtime with zero circular or lazy internal imports, streamlines setup to a default-safe single-line confirmation, makes `PB qualify` advisory/override metadata, removes legacy `--backend direct`/OmniRoute/unused `speed`, and hardens orchestration, relay, QRP, security and CLI boundaries (ADR-008).
+
+4.0.0 verification:
+- Complete offline `python -B skills/project-brain/scripts/test_brain.py` passes cleanly both under a scrubbed environment and when invoked inside a CAP worker environment (`CLI_AGENT_POOL_WORKER=1`), including 15 QRP checks, 45 Relay/Setup checks, and `test_v4_hardening.py` (acyclicity, zero lazy internal imports, Python 3.8 AST across all runtime/test/tool scripts, reentrant project locks, expanded secret redaction, `mixed` ESP, inline policy threshold/category flags, CAP director policy-confirmation refusal, QRP raw `policy_file_hash` binding, `STOPPING` progress/handoff, worker-committed secrets & deletions, Git mode `120000` & NUL-byte staged scanning, `INVALID_REPORT` recovery, `runs cancel` readback/`--force`, read-only `runs status`/`plan`, `PB-Agent`/`PB-Reviewer` integrate trailers, `watch --heal`, `--` sentinel, `.svg` scanning, `REV=solo` explicit `--self-review`, and `MINOR` owner validation).
+- Real companion CAP daemon checks pass against `cli-agent-pool` (v2.29.2): `test_pool_integration.py` (auto-start, worker execution, fixed effort, no replay, isolated verification/integration, clean `stop --force`) and `tools/test_relay_integration.mjs` (`START`, `HANDOFF`, `FAILOVER`, `TAKEOVER`, `COMPLETE`; final state `succeeded`).
+- External small-project E2E test (`med-tracker` medication reminder Python CLI app in an isolated temporary Git repository) exercised the full lifecycle (`map`, `doctor`, read-only `brief`, `init`, `orient`, `boot --new-session`, `setup ask`/`ask --advanced`/`confirm`, inline `policy`, `security`, `intake`, `new`, `score`, `validate`, `reconcile`, `start`, `check` + `PASS CACHED` reuse, `review` SOLO `--self-review` enforcement, `accept`, `boot` GC, read-only `watch --heal`/`brief`, `progress`/`handoff`, durable `runs` under `ESP=mixed` with isolated worktree worker commits + `verify` + `integrate` `PB-Agent` trailer + `cleanup`, and cold-session `boot --read-only`) with zero protocol violations and zero AI attribution in Git history.
+- Measured input/output footprint (LF-normalized UTF-8 bytes; estimated tokens = `ceil(bytes/4)`, NOT provider billed-token counters):
+  - `SKILL.md`: 6,358 B (3.12.0) → 4,160 B (4.0.0), **-34.6%** (release budget: 4,500 B).
+  - `WORKFLOW.md`: 29,250 B (3.12.0) → 16,064 B (4.0.0), **-45.1%**.
+  - All skill docs & assets: 168,547 B (3.12.0) → 121,484 B (4.0.0), **-27.9%**.
+  - Runtime CLI outputs on `med-tracker`: `watch` 66 B (~17 est. tokens), `map` 232 B (~58), `orient` 475 B (~119), `setup ask` 591 B (~148), `brief` 939 B (~235, LF-only), `boot --new-session` 976 B (~244), cold `boot --read-only` 1,433 B (~359), `runs context` packet 1,829 B (~458).
+- Multiple independent read-only multi-agent re-audit cycles (Architecture/Docs/Hygiene and Adversarial Security/Concurrency/Relay/QRP) were run; all BLOCKER, HIGH, MEDIUM, and LOW findings were fixed and regression-tested.
 
 3.11.0 adds the seven-item Turkish form and durable missing-choice follow-up.
 The complete offline `test_brain.py` entry point passed on Windows Python 3.11.15.
@@ -313,7 +326,7 @@ POSIX execution is not claimed without a separate actual POSIX run.
 - **Pool:** CLI Agent Pool owns catalogs, auth, effort, quota admission, containment
   and recovery; Brain uses a stdlib JSON-stdin client. The dispatch journal is
   outside the repository; a lost acknowledgement replays the same request/key.
-  Nested workers cannot re-delegate. `--backend direct` keeps standalone discovery.
+  Nested workers cannot re-delegate. External CLI agents live exclusively in CLI Agent Pool; standalone Brain uses `solo` or host `native`.
 - **Adoption/cleanup:** foreign plans are previewed as data. Every source needs a
   destination or drop reason; cleanup requires a verified out-of-project archive
   (names, SHA-256, CRC, archive hash journaled) and refuses code, linked, escaping or
@@ -355,8 +368,10 @@ first-pass acceptance and review findings; tune routing/effort from that data.
 
 ## Release procedure
 
-1. Keep the version identical in `SKILL.md`, `SCHEMAS.md`, `brain.py`, both plugin
-   manifests, `README.md`, `docs/PROJECT-OVERVIEW.md` and `CHANGELOG.md`.
+1. Keep the version identical in `runtime_core.py`, `SKILL.md`, `SCHEMAS.md`,
+   `POOL.md`, both plugin manifests (`plugin.json` including `longDescription`,
+   `.claude-plugin/plugin.json`), `README.md`, `site/index.html`,
+   `docs/PROJECT-OVERVIEW.md`, `docs/VERIFICATION.md` and `CHANGELOG.md`.
 2. Run the checks above.
 3. Stage reviewed source, then `python tools/build_release.py`. It builds
    `dist/project-brain-<version>.zip` + `.sha256` from Git-index bytes only and

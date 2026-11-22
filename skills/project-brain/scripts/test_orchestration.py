@@ -15,7 +15,7 @@ import runtime_orchestration as O
 import runtime_reports as Q
 import runtime_runs as L
 import runtime_agent_pool as P
-from test_routing import _project
+from test_helpers import make_project as _project, scrub_environ
 
 
 def denied(call, text=""):
@@ -45,6 +45,11 @@ def receipt(db, rid, value):
 
 
 def main():
+    with scrub_environ():
+        _run_checks()
+
+
+def _run_checks():
     # A confirmed Pool timeout is terminal failure, never an unknown live writer.
     # Unrecognized provider states must still retain conservative ownership.
     for backend_state, expected in (("timed_out", "FAILED"), ("unrecognized", "UNKNOWN")):
@@ -193,7 +198,7 @@ def main():
             assert rc == 0, lines
             original = db.annotate
             def crash_after_merge(rid, event, **values):
-                if event == "INTEGRATED_PENDING_ACCEPTANCE":
+                if event in ("INTEGRATED_PENDING_ACCEPTANCE", "CANDIDATE_INTEGRATED"):
                     raise RuntimeError("Injected crash after Git merge")
                 return original(rid, event, **values)
             with patch.object(db, "annotate", side_effect=crash_after_merge):

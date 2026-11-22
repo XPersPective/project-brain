@@ -12,22 +12,25 @@ from pathlib import Path
 import shutil
 import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import time
 from unittest.mock import patch
 
 import brain as B
-import runtime_agents as A
+import runtime_actors as A
 import runtime_agent_pool as AP
+import runtime_scoring as SC
 import runtime_verify as V
-from test_routing import _project
+from test_helpers import make_project as _project, scrub_environ
 
 
 def main(entry):
     node = shutil.which("node")
     assert node and Path(entry).is_file(), "Node and Pool entry are required"
-    with tempfile.TemporaryDirectory(prefix="pb-pool-integration-") as directory:
+    with scrub_environ():
+        directory = tempfile.mkdtemp(prefix="pb-pool-integration-")
         root = Path(directory)
         project, state = root / "project", root / "pool"
         project.mkdir()
@@ -35,7 +38,7 @@ def main(entry):
         with contextlib.redirect_stdout(io.StringIO()):
             _project(project)
         fake = root / "worker.mjs"
-        nested = "const nested=spawnSync(" + json.dumps(sys.executable) + "," + json.dumps([str(Path(B.__file__).resolve()), "delegate", "PB-001", "--backend", "direct"]) + ",{encoding:'utf8'});if(nested.status!==2||!(nested.stdout+nested.stderr).includes('recursively'))process.exit(10);"
+        nested = "const nested=spawnSync(" + json.dumps(sys.executable) + "," + json.dumps([str(Path(B.__file__).resolve()), "delegate", "PB-001"]) + ",{encoding:'utf8'});if(nested.status!==2||!(nested.stdout+nested.stderr).includes('recursively'))process.exit(10);"
         report = {"status": "completed", "summary": "effort=medium", "files": [
             {"path": "src/a.py", "change": "Updated"}, {"path": "runs.txt", "change": "Created"}],
             "checks": [], "research": [], "blockers": []}
@@ -77,7 +80,7 @@ def main(entry):
                 assert selected["request"]["mode"] == "execute"
                 args = argparse.Namespace(force=False, timeout=15, cli="", model="", effort="", group="", dry_run=False)
                 task = B.find_task(project, "PB-001")
-                score = A.score_task(B, project, task)
+                score = SC.score_task(B, project, task)
                 assert AP.delegate(B, project, task, score, args) == 0, output.getvalue()
                 task = B.find_task(project, "PB-001")
                 assert AP.delegate(B, project, task, score, args) == 0, output.getvalue()
@@ -132,9 +135,22 @@ def main(entry):
                     ledger.close()
         finally:
             pidfile = state / "daemon.pid"
-            if pidfile.is_file():
-                os.kill(int(pidfile.read_text()), signal.SIGTERM)
-                time.sleep(0.5)
+            pid = int(pidfile.read_text().strip()) if pidfile.is_file() else None
+            stop_env = dict(os.environ, CLI_AGENT_POOL_HOME=str(state))
+            try:
+                subprocess.run([node, str(Path(entry).resolve()), "stop", "--force"], env=stop_env, capture_output=True, timeout=15)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            if pid:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+            for _ in range(25):
+                shutil.rmtree(str(root), ignore_errors=True)
+                if not root.exists():
+                    break
+                time.sleep(0.2)
     print("PASS: real daemon auto-start survives RPC exit; Brain -> execute -> MCP -> native worker -> compact report -> evidence; fixed effort and no replay")
 
 

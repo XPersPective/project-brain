@@ -1,4 +1,4 @@
-# CLI Agent Pool integration (Project Brain 3.10.0)
+# CLI Agent Pool integration (Project Brain 4.0.0)
 
 Each CAP account is its own `routeId`; optional director circulation across them
 is the Baton Relay Policy in [RELAY](RELAY.md).
@@ -6,11 +6,12 @@ is the Baton Relay Policy in [RELAY](RELAY.md).
 ## Executor Selection Policy (ESP)
 
 CAP means **CLI Agent Pool**. Resource choices are Solo, Native, Native Cheapest,
-Native Pinned, CAP Categories, CAP Catalog, CAP Pinned. Native means host agents;
-CAP Categories uses actual user-selected CAP categories; CAP Catalog permits
-director model selection; CAP Pinned allows only exact user-selected CAP services.
-Do not label CAP resources as an unspecified catalog. The director remains
-responsible in every mode. Scheduling Policy (SP) separately selects Serial or Parallel with a maximum.
+Native Pinned, Mixed (Host + CAP), CAP Categories, CAP Catalog, and CAP Pinned.
+Native means host agents; Mixed combines host agents with CAP (optional CAP
+`categories`); CAP Categories uses actual user-selected CAP categories; CAP
+Catalog permits director model selection; CAP Pinned allows only exact
+user-selected CAP services. The director remains responsible in every mode.
+Scheduling Policy (SP) separately selects Serial or Parallel with a maximum.
 Solo means the main agent performs work with tools without subagent delegation.
 
 Use CAP's current skill for compact categories, visible active services and
@@ -32,11 +33,14 @@ Hidden/disabled/removed services are excluded. No quality/review/economy excepti
 
 ## Confirmed policy routing
 
-The runtime now enforces saved ESP/SP/QRP. With durable policy it reads only
+The runtime enforces saved ESP/SP/QRP/BRP. With durable policy it reads only
 bounded CAP category/catalog pages, filters exact allowed candidates locally and
-submits the pinned identity. Category labels are never quality scores. Record
-an explicit model-fit basis via `PB qualify`; unknown/insufficient qualification
-blocks the action, not an excuse to downgrade or choose another category.
+submits the pinned identity. Category labels are not benchmark scores; standard
+CAP tier categories (`low`/`medium`/`high`) are inferred as default strength,
+while unqualified opaque models emit a `qualification_warning` instead of
+deadlocking fresh repositories. Record an explicit tier cap or override anytime
+via `PB qualify --route <id> --model <id> --tier L|M|H --note "<basis>"` — once
+recorded, an explicit tier cap strictly blocks higher-tier dispatch.
 Native review and source evidence stay independent requirements.
 
 Without policy, legacy RPC/journal compatibility below remains readable. A first
@@ -97,7 +101,7 @@ git clone https://github.com/XPersPective/cli-agent-pool.git
 cd cli-agent-pool && npm ci --ignore-scripts && npm run setup
 ```
 
-Without CLI Agent Pool, use `SOLO`, `NATIVE` or `--backend direct` with no external dependency.
+Without CLI Agent Pool, use `solo` or `native` (host subagents) with zero external dependencies. Legacy `--backend direct`, OmniRoute adapters and standalone CLI discovery were removed in Project Brain 4.0 so external CLI lifecycle stays exclusively inside CAP.
 
 ## Normal use from any editor or agent
 
@@ -139,8 +143,8 @@ use Pool's **Modelleri tara** or `cli-agent-pool scan-import` for newly installe
 
 - Task tier L/M/H requests low/medium/high. An explicit `--group` can choose a
   stronger pool; a weaker pool cannot satisfy the task quality tier. Risk and task
-  splitting checks still apply. P-ALL authorizes Tier H dispatch; legacy direct
-  operation otherwise requires explicit `--force`, which never widens a mode cap.
+  splitting checks still apply. `P-ALL` authorizes Tier H dispatch; `--force`
+  never widens a session resource cap.
 - Manual mode uses only that owner's pool. An empty/exhausted pool fails visibly;
   there is no outside-group, stronger-account or paid-API escape.
 - Automatic mode first uses the same strength pool. If none is usable, known
@@ -182,14 +186,13 @@ No credential is copied. Windows uses the installed Node entry, not a shell shim
 RPC startup runs outside worker ProcessTree containment so Windows does not kill
 the shared daemon when the discovery client exits. Pool contains its own workers.
 
-## Standalone compatibility
+## Separation of responsibilities
 
-`--backend direct` explicitly retains Brain's former CLI discovery, approved session
-and native-host delegation. An explicit `--registry` also selects that compatibility
-path unless `--backend pool` is given. There is no automatic fallback between the
-two authorities. The `session/approve/revoke/settle/merge` commands manage only the
-standalone backend. See AGENTS_CLI.md for that protocol; do not request a second
-session approval for a Pool configuration the owner already authorized.
+Project Brain 4.0 removed the legacy `--backend direct` backend, standalone CLI
+discovery and OmniRoute adapters. External CLI agents are managed solely by
+CLI Agent Pool; standalone Brain projects run in `solo` or `native` mode with
+zero external dependencies. Do not request a second session approval for a CAP
+configuration the owner already authorized.
 
 ## Pool 1.4 workspace compatibility
 

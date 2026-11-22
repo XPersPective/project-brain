@@ -8,7 +8,7 @@ from unittest.mock import patch
 import brain as B
 import runtime_agent_pool as AP
 import runtime_executor_policy as E
-from test_routing import _project
+from test_helpers import make_project as _project, scrub_environ
 
 
 def save_policy(B, root, source, **extra):
@@ -23,7 +23,7 @@ def save_policy(B, root, source, **extra):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="pb-policy-pool-") as directory:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-policy-pool-") as directory:
         root = Path(directory)
         _project(root, legacy=False)
         save_policy(B, root, "cap-catalog")
@@ -42,10 +42,16 @@ def main():
                 return {"models": rows, "nextOffset": None}
             raise AssertionError(tool)
         with patch.object(AP, "rpc", side_effect=catalog_rpc):
+            # Unqualified opaque model is advisory (warns, does not deadlock fresh repos).
+            advisory = AP.select_policy(B, root, "L", model="model-a", mode="execute")
+            assert advisory["selected"]["id"] == "model-a"
+            assert advisory.get("qualification_warning"), advisory
+            # Explicit PB qualify overrides/caps tier strength and still blocks above its cap.
             for row, tier, note in [(rows[0], "L", "fits low tier"), (rows[1], "H", "fits high tier")]:
                 AP.qualify(B, root, row["routeId"], row["modelId"], tier, note)
             selected = AP.select_policy(B, root, "L", mode="execute")
             assert selected["selected"]["id"] == "model-a"
+            assert not selected.get("qualification_warning")
             assert "group" not in selected["request"]  # Category is not a quality strength.
             assert all(args["kind"] == "write" for tool, args in calls if tool == "pool_catalog")
             try:
@@ -93,7 +99,7 @@ def main():
             selected = AP.select_policy(B, root, "L", mode="execute")
             assert selected["request"]["group"] == "experimental"
 
-        E.load  # malformed registry must fail closed on lookup
+        # Malformed qualification registry must fail closed on lookup.
         path = AP._qualification_path(B, root)
         path.write_text("{bad", encoding="utf-8")
         try:
@@ -101,7 +107,7 @@ def main():
             raise AssertionError("malformed qualification registry accepted")
         except ValueError:
             pass
-    print("PASS: ESP CAP selection, exact pins, effort/category bounds, qualification floors and inactive filtering")
+    print("PASS: ESP CAP selection, advisory/explicit qualification, exact pins, effort/category bounds and inactive filtering")
 
 
 if __name__ == "__main__":

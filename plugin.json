@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "project-brain",
-  "version": "3.12.0",
-  "description": "Git-native project memory, UI/Backend quality enforcement, task complexity scoring, CLI agent discovery, quota management, and sub-agent delegation.",
+  "version": "4.0.0",
+  "description": "Git-native project memory, UI/Backend quality enforcement, task complexity scoring, source-bound verification, and economical orchestration.",
   "author": {
     "name": "XPersPective",
     "url": "https://github.com/XPersPective"
@@ -26,8 +26,8 @@
     "com.openai": {
       "interface": {
         "displayName": "Project Brain",
-        "shortDescription": "Plan, delegate, verify, review, and resume projects with quota-aware CLI workers",
-        "longDescription": "Project Brain 3.11.0 keeps plans, architecture and verification evidence in Git. Its dependency-free Python runtime supports upfront session EXEC/REV mode selection (Pool, Self/Native, Solo) for unattended execution and review, smart takeover/digest deduplication, owner model pools, fixed effort, quota reserves and write recovery. Artifact and test evidence are required before claiming task completion.",
+        "shortDescription": "Plan, verify, review, and resume projects with Git-native memory and optional CLI Agent Pool orchestration",
+        "longDescription": "Project Brain 4.0.0 keeps plans, architecture and verification evidence in Git with an acyclic, dependency-free Python 3.8+ runtime. Core mode runs standalone with safe defaults (solo or host native agents, single-line session confirmation, source-bound proof and independent review); optional power features integrate with the separate CLI Agent Pool (CAP) companion for multi-CLI execution, durable SQLite runs, Quota Recovery (QRP), and Baton Relay (BRP).",
         "developerName": "XPersPective",
         "category": "Productivity",
         "websiteURL": "https://github.com/XPersPective/project-brain",
@@ -36,7 +36,7 @@
         "defaultPrompt": [
           "Set up Project Brain for this repository",
           "Continue where the last session stopped",
-          "Scan CLI agents and delegate ready tasks"
+          "Audit the plan and verify ready tasks"
         ],
         "brandColor": "#111827",
         "composerIcon": "./assets/icon.png",

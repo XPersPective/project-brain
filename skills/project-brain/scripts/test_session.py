@@ -9,10 +9,10 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 import brain as B
-import runtime_agents as A
+import runtime_actors as A
 import runtime_protocol as R
 import runtime_session as RS
-from test_routing import _project
+from test_helpers import make_project as _project, scrub_environ
 
 
 def economy_checks():
@@ -32,7 +32,7 @@ def economy_checks():
     def snapshot(root):
         return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
-    with tempfile.TemporaryDirectory(prefix="pb-brief-") as directory:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-brief-") as directory:
         root = Path(directory) / "project"
         root.mkdir()
         with patch.object(A, "DEFAULT_REGISTRY", Path(directory) / "registry.json"):
@@ -114,12 +114,12 @@ def economy_checks():
                 assert len(json.loads(output.getvalue())["alternatives"]) == 100
                 assert selection.call_args.args[0] == "M"
             args.task, args.full = "PB-001", False
-            with patch.object(AP, "A_score", return_value={"effective_tier": "H"}), \
+            with patch.object(AP.SC, "score_task", return_value={"effective_tier": "H"}), \
                     patch.object(AP, "select", return_value=response) as selection, patch.object(AP, "remember"):
                 capture(AP.agents, B, args)
                 assert selection.call_args.args[0] == "H"
             B.set_session_modes(root, "pool-low", "pool-low", new=True)
-            with patch.object(AP, "A_score", return_value={"effective_tier": "H"}), \
+            with patch.object(AP.SC, "score_task", return_value={"effective_tier": "H"}), \
                     patch.object(AP, "select", side_effect=AssertionError("resource cap bypassed")):
                 try:
                     capture(AP.agents, B, args)
@@ -131,7 +131,7 @@ def economy_checks():
 
 def main():
     economy_checks()
-    with tempfile.TemporaryDirectory(prefix='pb-session-') as directory:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix='pb-session-') as directory:
         root = Path(directory) / 'project'
         root.mkdir()
         with patch.object(A, 'DEFAULT_REGISTRY', Path(directory) / 'registry.json'), contextlib.redirect_stdout(io.StringIO()) as output:

@@ -1,395 +1,299 @@
-"""One batched new-session setup screen with a 5-minute default; stdlib, Python 3.8+.
+"""Streamlined default-safe session setup with sharp Core vs Power separation.
 
-`setup ask` prints the 7-item Turkish setup screen (with ✅/⬜ options vertically under
-each item), writes the pre-filled HTML widget to `.project-brain/.cache/setup-form.html`,
-and records when setup was asked. When a relay director or a quota-recovery wait is
-active in the background, `setup ask` shows that status and 3 Turkish action choices
-instead of re-asking the 7 setup items. Explicit answers are saved with `policy --file
---confirm`. If the user selects "Kullanıcı seçimi" without details, the director asks
-a single follow-up question for the missing route/model/category; without a reply in
-5 minutes, `setup wait` + `setup defaults` saves and confirms the shown defaults.
-A relay successor or worker inherits confirmed settings and is never asked.
+Core product defaults: native host agents, parallel (auto), QRP off, BRP off.
+New sessions present a single-line confirmation summary; power features (CAP,
+QRP, BRP) are strictly opt-in via `--advanced` or `PB policy`.
+Relay successors and workers inherit confirmed settings without prompts.
+Python 3.8+, standard library only.
 """
 import copy
 import json
-import os
 from pathlib import Path
 import time
 
+import runtime_core as Core
 import runtime_executor_policy as E
-import runtime_verify as V
+import runtime_quota_recovery as Q
+import runtime_relay as RL
 
 TIMEOUT = 300
 SLICE = 60
+
+# Safe core defaults: no power features (CAP/QRP/BRP) are silently armed.
 BUILTIN = {
     "schema": 1,
     "execution": {"source": "native"},
     "scheduling": {"mode": "parallel", "max_parallel": 32, "auto": True},
-    "speed": "balanced",
-    "quota_recovery": {"enabled": True, "threshold_percent": 10},
-    "relay": {"enabled": True, "threshold_percent": 10, "director_category": "same"},
+    "quota_recovery": {"enabled": False, "threshold_percent": 10},
+    "relay": {"enabled": False, "threshold_percent": 10, "candidates": []},
 }
 
 
 def _path(B, root):
-    return V.public_path(root, B.BRAIN_DIR + "/.cache/setup.json")
-
-
-def _form_path(B, root):
-    return V.public_path(root, B.BRAIN_DIR + "/.cache/setup-form.html")
+    return Core.public_path(root, B.BRAIN_DIR + "/.cache/setup.json")
 
 
 def defaults(B, root):
-    """Saved confirmed policy when one exists, else the 7-item default choice."""
+    """Saved confirmed policy when one exists, else the safe core default."""
     saved = E.load(B, root)
     value = copy.deepcopy(saved) if saved and E.last_confirmed(B, root) else copy.deepcopy(BUILTIN)
     value.pop("note", None)
     value.pop("origin", None)
-    # Silence in a later session must not erase an explicit CAP-only restriction.
+    value.pop("speed", None)
     if saved and E.last_confirmed(B, root) and saved.get("origin") != "defaults":
-        if any(value.get(role, value["execution"])["source"].startswith("cap-")
-               for role in ("execution", "review")):
+        if any(value.get(role, value["execution"])["source"].startswith("cap-") for role in ("execution", "review")):
             value.setdefault("cap_fallback", "wait")
-    value.setdefault("speed", "balanced")
-    value.setdefault("relay", {"enabled": True, "threshold_percent": 10, "director_category": "same"})
     return value
 
 
 def _detail(selector):
     if selector.get("categories"):
-        return ", ".join(selector["categories"])
+        return " [" + ", ".join(selector["categories"]) + "]"
     if selector.get("models"):
-        return ", ".join(m.get("routeId", m.get("host", "")) + "/" + m.get("modelId", m.get("model", ""))
-                         for m in selector["models"])
+        return " [" + ", ".join(
+            m.get("routeId", m.get("host", "")) + "/" + m.get("modelId", m.get("model", ""))
+            for m in selector["models"][:4]
+        ) + "]"
     return ""
 
 
-def _relay_detail(relay):
-    if relay.get("candidates"):
-        return ", ".join(c["route"] + ("/" + c["model"] if c.get("model") else "") for c in relay["candidates"])
-    cat = relay.get("director_category", "same")
-    return "" if cat == "same" else cat
-
-
-def _form_state(value):
-    s = value["scheduling"]
+def summary_line(value):
+    """Single-line language-neutral session policy summary for low-friction confirmation."""
+    src = value["execution"]["source"] + _detail(value["execution"])
+    rev_src = value.get("review", value["execution"])["source"]
+    sched = value["scheduling"]
+    sched_text = (
+        "parallel (auto)"
+        if sched["mode"] == "parallel" and (sched.get("auto") or sched["max_parallel"] == 32)
+        else ("parallel (max %d)" % sched["max_parallel"] if sched["mode"] == "parallel" else "serial")
+    )
     q = value["quota_recovery"]
-    relay = value.get("relay") or {"enabled": True, "threshold_percent": 10, "director_category": "same"}
-    src = value["execution"]["source"]
-    src_idx = {"native": 0, "native-cheap": 0, "solo": 0, "mixed": 1, "cap-catalog": 2}.get(src, 3)
-    r_detail = _relay_detail(relay)
-    return {
-        "cap_fallback": value.get("cap_fallback", "wait"),
-        1: {"i": 0 if s["mode"] == "parallel" else 1, "note": "", "pct": 10},
-        2: {"i": 1 if src == "solo" else 0, "note": "", "pct": 10},
-        3: {"i": src_idx, "note": _detail(value["execution"]), "pct": 10},
-        4: {"i": 1 if value.get("speed") == "turbo" else 0, "note": "", "pct": 10},
-        5: {"i": 0 if q["enabled"] else 1, "note": "", "pct": q["threshold_percent"]},
-        6: {"i": 0 if relay.get("enabled") else 1, "note": "", "pct": relay.get("threshold_percent", 10)},
-        7: {"i": 1 if r_detail else 0, "note": r_detail, "pct": 10},
-    }
+    qrp_text = ("QRP on @%d%%" % q["threshold_percent"]) if q.get("enabled") else "QRP off"
+    relay = value.get("relay") or {}
+    brp_text = ("BRP on @%d%%" % relay.get("threshold_percent", 10)) if relay.get("enabled") else "BRP off"
+    rev_part = (" · review=" + rev_src) if rev_src != value["execution"]["source"] else ""
+    return f"Session policy: {src}{rev_part} · {sched_text} · {qrp_text} · {brp_text}"
 
 
-def write_form(B, root, value):
-    template_path = Path(__file__).resolve().parents[1] / "assets" / "setup-form.html"
-    if not template_path.is_file():
-        return None
-    html = template_path.read_text(encoding="utf-8")
-    payload = json.dumps(_form_state(value), ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
-    html = html.replace("const INIT = null; // PB_INIT", "const INIT = " + payload + ";")
-    out = _form_path(B, root)
-    B.write_atomic(out, html)
-    return str(out)
-
-
-def questions(value):
-    s, q = value["scheduling"], value["quota_recovery"]
-    relay = value.get("relay") or {"enabled": True, "threshold_percent": 10, "director_category": "same"}
-    src = value["execution"]["source"]
-    parallel_label = ("Paralel" if s["mode"] != "parallel" or s.get("auto") or s["max_parallel"] == 32
-                      else "Paralel (en fazla %d)" % s["max_parallel"])
-    detail = _detail(value["execution"])
-    src_idx = {"native": 0, "native-cheap": 0, "solo": 0, "mixed": 1, "cap-catalog": 2}.get(src, 3)
-    src_opts = [
-        "Yerleşik ajanlar",
-        "Yerleşik ajanlar + CLI Ajan Havuzu" + (": " + detail if src_idx == 1 and detail else ""),
-        "Yalnız CLI Ajan Havuzu",
-        "Kullanıcı seçimi" + (": " + detail if src_idx == 3 and detail else ""),
+def render(value, advanced=False):
+    lines = [
+        summary_line(value),
+        "Reply 'ok' to confirm (`PB setup confirm`), or override via `PB policy --source solo|native|mixed|cap-catalog|cap-category --schedule parallel|serial --confirm`.",
     ]
-    r_detail = _relay_detail(relay)
-    r_idx = 1 if r_detail else 0
-    r_opts = [
-        "Aynı havuzdan eşdeğer aday",
-        "Kullanıcı seçimi" + (": " + r_detail if r_detail else ""),
-    ]
-    return [
-        ("Çalışma düzeni", [parallel_label, "Sıralı"], 0 if s["mode"] == "parallel" else 1),
-        ("Ajan kullanımı", ["Çoklu ajan", "Sadece yönetici"], 1 if src == "solo" else 0),
-        ("Ajan kaynağı", src_opts, src_idx),
-        ("Çalışma hızı", ["Dengeli: yüksek kalite, düşük toplam maliyet",
-                          "Turbo: sınırları zorlar, en hızlı bitirir"],
-         1 if value.get("speed") == "turbo" else 0),
-        ("Kota yenilenmesini bekleme", ["Açık, %%%d" % q["threshold_percent"], "Kapalı"],
-         0 if q["enabled"] else 1),
-        ("Yönetici devri", ["Açık, %%%d" % relay.get("threshold_percent", 10), "Kapalı"],
-         0 if relay.get("enabled") else 1),
-        ("Devralacak yönetici", r_opts, r_idx),
-    ]
-
-
-def render(value):
-    lines = ["✅ varsayılan seçimdir; yalnız değiştirmek istediğiniz maddeleri numarasıyla yazın:"]
-    for number, (title, opts, selected) in enumerate(questions(value), 1):
-        lines.append("%d. %s" % (number, title))
-        for idx, opt in enumerate(opts):
-            mark = "✅" if idx == selected else "⬜"
-            lines.append("   %s %s" % (mark, opt))
-        lines.append("   Varsayılan: " + opts[selected])
-    lines.append('Örnek yanıt: "3: yerleşik + havuz, yalnız medium; 4: turbo" veya "varsayılanlarla devam". '
-                 "5 dakika yanıt gelmezse gösterilen varsayılanlarla devam ederim.")
+    if advanced:
+        lines.extend([
+            "Core sources: solo | native | native-cheap | native-pinned",
+            "Power features (opt-in): mixed | cap-catalog | cap-category | cap-pinned | --qrp on|off [--qrp-threshold N] | --relay on|off [--relay-threshold N]",
+        ])
     return lines
 
 
-def needs_clarification(answer):
-    """True when the user chose 'Kullanıcı seçimi' or a pool option without naming the pool/model."""
-    if not isinstance(answer, str) or not answer.strip():
-        return False
-    low = answer.lower()
-    if "ayrıntı sorulsun" in low:
-        return True
-    for part in low.split(";"):
-        part = part.strip()
-        if (part.startswith("3:") or part.startswith("7:")) and "kullanıcı seçimi" in part:
-            _, _, tail = part.partition("kullanıcı seçimi")
-            if not tail.strip(" ,:-"):
-                return True
-    return False
+def _render_relay_active(state, line):
+    d = state["director"]
+    who = d["route"] + ("/" + d["model"] if d.get("model") else "")
+    return [
+        "Background relay is %s (gen %d, director %s)." % (state["status"], state["generation"], who),
+        line,
+        "Choose: 1. Continue in background [default] | 2. Graceful stop (2 min save) | 3. Stop and take over",
+    ]
 
 
-def pending(B, root):
+def _render_quota_waiting(recovery):
+    return [
+        "Background quota recovery is %s (checkpoint: %s, wake_at: %s)."
+        % (recovery["status"], recovery.get("checkpoint") or "?", recovery.get("wake_at") or "?"),
+        "Choose: 1. Keep waiting [default] | 2. Cancel wait and take over | 3. Stop completely",
+    ]
+
+
+def ask(B, root, now=None, advanced=False):
+    if E.relay_authorized(B, root) or E.relay_stopping_holder(B, root):
+        return {
+            "status": "RELAY_SUCCESSOR",
+            "lines": ["Settings inherited from previous relay director; no setup prompt required."],
+        }
+    now = time.time() if now is None else now
+    with B.checkout_lock(root):
+        session = E._session(B, root) or E.begin_session(B, root)
+        line = RL.boot_line(B, root)
+        try:
+            state = RL.read(B, root)
+        except ValueError:
+            state = None
+        if state and state.get("status") in ("ACTIVE", "HANDOFF_PENDING", "STOPPING", "EXHAUSTED"):
+            rec = {
+                "schema": 1,
+                "nonce": session["nonce"],
+                "asked_at": now,
+                "mode": "relay_active",
+                "defaults": defaults(B, root),
+            }
+            Core.write_atomic(_path(B, root), json.dumps(rec, indent=2))
+            return {"status": "RELAY_ACTIVE", "lines": _render_relay_active(state, line or "")}
+        recovery = Q.status(B, root)
+        if recovery.get("status") in ("PREPARED", "ARMED"):
+            rec = {
+                "schema": 1,
+                "nonce": session["nonce"],
+                "asked_at": now,
+                "mode": "quota_waiting",
+                "defaults": defaults(B, root),
+            }
+            Core.write_atomic(_path(B, root), json.dumps(rec, indent=2))
+            return {"status": "QUOTA_WAITING", "lines": _render_quota_waiting(recovery)}
+        value = defaults(B, root)
+        rec = {
+            "schema": 1,
+            "nonce": session["nonce"],
+            "asked_at": now,
+            "mode": "setup",
+            "defaults": value,
+        }
+        Core.write_atomic(_path(B, root), json.dumps(rec, indent=2))
+    return {"status": "ASKED", "summary": summary_line(value), "defaults": value, "lines": render(value, advanced=advanced)}
+
+
+def _record(B, root):
     path = _path(B, root)
     if not path.is_file():
-        return False
-    try:
-        record = _record(B, root)
-    except ValueError as error:
-        if "SETUP_STALE" in str(error):
-            return False
-        raise
-    return record.get("mode") == "clarification" and record.get("status") != "resolved"
+        raise ValueError("SETUP_NOT_ASKED: run `setup ask` first")
+    value = Core.read_json(path, max_bytes=65536, strict_constants=True)
+    if not isinstance(value, dict) or value.get("schema") != 1 or not isinstance(value.get("asked_at"), (int, float)):
+        raise ValueError("Malformed setup record; run `setup ask` again")
+    session = E._session(B, root)
+    if value.get("nonce") != (session or {}).get("nonce"):
+        raise ValueError("SETUP_STALE: run `setup ask` in the current session")
+    return value
 
 
-def clarify(B, root, answer, value=None, now=None):
-    """Host translates resolved answers into policy; unresolved details stay gated."""
-    if not needs_clarification(answer):
-        raise ValueError("No missing user selection in answer")
-    if value is None and any(part.strip() and not needs_clarification(part)
-                             for part in answer.split(";")):
-        raise ValueError("SETUP_RESOLVED_FILE_REQUIRED: preserve other explicit answers with --file")
+def confirm(B, root, note="User confirmed session policy", now=None):
+    """Immediately confirm the active/default policy without a blocking wait loop."""
+    with B.checkout_lock(root):
+        path = _path(B, root)
+        if path.is_file():
+            try:
+                record = _record(B, root)
+            except ValueError:
+                record = None
+        else:
+            record = None
+        if record and record.get("mode") in ("relay_active", "quota_waiting"):
+            return {
+                "status": "CONTINUE_BACKGROUND",
+                "mode": record["mode"],
+                "note": "Background operation continues untouched",
+            }
+        try:
+            live_relay = RL.read(B, root)
+        except ValueError:
+            live_relay = None
+        if live_relay and live_relay.get("status") in ("ACTIVE", "HANDOFF_PENDING", "STOPPING", "EXHAUSTED"):
+            return {
+                "status": "CONTINUE_BACKGROUND",
+                "mode": "relay_active",
+                "note": "Background relay continues untouched; use `PB relay stop` to stop it",
+            }
+        live_qrp = Q.status(B, root)
+        if live_qrp.get("status") in ("PREPARED", "ARMED"):
+            return {
+                "status": "CONTINUE_BACKGROUND",
+                "mode": "quota_waiting",
+                "note": "Background quota recovery continues untouched; use `PB quota cancel` to cancel it",
+            }
+        chosen = copy.deepcopy(record["defaults"]) if record else defaults(B, root)
+        chosen["origin"] = "user"
+        E.save(B, root, chosen, note)
+        E.confirm(B, root, note)
+        if record is not None:
+            record["status"] = "resolved"
+            Core.write_atomic(path, json.dumps(record, ensure_ascii=False, indent=2))
+        return {"status": "CONFIRMED", "note": note, "summary": summary_line(chosen), "policy": E.summary(B, root)}
+
+
+def wait(B, root, now=None, sleep=time.sleep, timeout=TIMEOUT):
+    """Optional bounded wait slice for unattended headless hosts (never mandatory)."""
+    record = _record(B, root)
+    start_now = time.time() if now is None else now
+    left = max(0.0, timeout - (start_now - record["asked_at"]))
+    if left > 0:
+        nap = min(SLICE, left)
+        sleep(nap)
+        after_now = time.time() if now is None else (start_now + nap)
+        left = max(0.0, timeout - (after_now - record["asked_at"]))
+    done = left <= 0.5
+    return {
+        "status": "TIMEOUT_REACHED" if done else "WAITING",
+        "seconds_left": 0 if done else int(left),
+        "next": "setup defaults" if done else "check for user reply, or confirm directly with `setup confirm`",
+    }
+
+
+def apply_defaults(B, root, accepted=False, now=None, timeout=TIMEOUT):
     with B.checkout_lock(root):
         record = _record(B, root)
-        if record.get("mode") not in ("setup", "clarification"):
-            raise ValueError("Background operation owns setup; resolve it first")
-        if pending(B, root):
-            return {"status": "CLARIFICATION_REQUIRED", "lines": record["lines"],
-                    "timeout_seconds": TIMEOUT, "next": "setup wait"}
-        chosen = E._validate(value if value is not None else record["defaults"])
-        # The host must retain resolved answers. Only unresolved fields use the
-        # previously shown defaults; never invent a category or model identity.
-        parts = answer.lower().split(";")
-        missing = [n for n in (3, 7) if any(p.strip().startswith(str(n) + ":") and
-                   needs_clarification(p) for p in parts)]
-        if not missing:
-            raise ValueError("Specify missing selection as item 3 or 7")
-        for number, key in ((3, "execution"), (7, "relay")):
-            if number in missing:
-                chosen[key] = copy.deepcopy(record["defaults"][key])
-                if number == 3 and "review" not in (value or {}):
-                    chosen["review"] = copy.deepcopy(chosen[key])
-        if any(chosen[role]["source"].startswith("cap-") for role in ("execution", "review")):
-            chosen.setdefault("cap_fallback", "wait")
-        lines = []
-        if 3 in missing:
-            lines.append("3. Hangi ajan kaynağı, havuz/kategori veya tam hesap/model kullanılacak?")
-        if 7 in missing:
-            lines.append("7. Devralacak yönetici için hangi havuz veya tam hesap/model kullanılacak?")
-        lines.append("5 dakika yanıt gelmezse yalnız eksik seçimlerde gösterilen varsayılanlar uygulanır.")
-        record.update(mode="clarification", asked_at=time.time() if now is None else now,
-                      defaults=chosen, lines=lines)
-        B.write_atomic(_path(B, root), json.dumps(record, ensure_ascii=False, indent=2))
-    return {"status": "CLARIFICATION_REQUIRED", "timeout_seconds": TIMEOUT, "lines": lines,
-            "next": "Resolve via policy --file --confirm; otherwise setup wait then setup defaults"}
+        now = time.time() if now is None else now
+        if not accepted and now - record["asked_at"] < timeout:
+            raise ValueError(
+                "SETUP_WAIT: %d seconds remain before unattended defaults apply; use `setup confirm` or `--accepted` when confirmed"
+                % int(timeout - (now - record["asked_at"]))
+            )
+        if record.get("mode") in ("relay_active", "quota_waiting"):
+            return {
+                "status": "CONTINUE_BACKGROUND",
+                "mode": record["mode"],
+                "note": "Background operation continues untouched",
+            }
+        if E.load(B, root) is not None and E.confirmed(B, root):
+            return {"status": "ALREADY_CONFIRMED", "policy": E.summary(B, root)}
+        note = "User accepted shown session policy" if accepted else "Unattended safe core defaults applied"
+        chosen = copy.deepcopy(record["defaults"])
+        chosen["origin"] = "user" if accepted else "defaults"
+        E.save(B, root, chosen, note)
+        E.confirm(B, root, note)
+        record["status"] = "resolved"
+        Core.write_atomic(_path(B, root), json.dumps(record, ensure_ascii=False, indent=2))
+        return {"status": "DEFAULTS_CONFIRMED", "note": note, "summary": summary_line(chosen), "policy": E.summary(B, root)}
 
 
 def recover_cap(B, root, role="exec"):
-    """Authorize a new native job, never resubmit or settle an uncertain CAP job."""
+    """Authorize a new native job when CAP is unavailable; never replay uncertain CAP jobs."""
     with B.checkout_lock(root):
         value = E.require_confirmed(B, root)
         result = E.cap_unavailable(value, role)
         if result["action"] == "CONTINUE_NATIVE" and value[E._role(role)]["source"] != "mixed":
             chosen = copy.deepcopy(value)
             chosen[E._role(role)] = {"source": "native"}
-            E.save(B, root, chosen, "Previously authorized native fallback after CAP unavailability")
-            E.confirm(B, root, "Native fallback; director must relay notification before new dispatch")
-        result["next"] = "Notify user; read back any uncertain CAP job before starting replacement work"
+            E.save(B, root, chosen, "Authorized native fallback after CAP unavailability")
+            E.confirm(B, root, "Native fallback; notify user before new dispatch")
+        result["next"] = "Notify user; read back any uncertain CAP job before replacement work"
         return result
 
 
-def _render_relay_active(state, line):
-    d = state["director"]
-    who = d["route"] + ("/" + d["model"] if d.get("model") else "")
-    badge = ("🟡 Arka planda yönetici devri durduruluyor" if state["status"] == "STOPPING"
-             else "🔴 Arka planda yönetici devri adayları tükendi" if state["status"] == "EXHAUSTED"
-             else "🟢 Arka planda yönetici devri aktif")
-    return [
-        badge,
-        line,
-        "Son devralan: %s (nesil %d)" % (who, state["generation"]),
-        "Ne yapılmasını istersiniz?",
-        "   ✅ 1. Devam etsin (ben izlerim)",
-        "   ⬜ 2. Durdur: işi kaydedip en geç 2 dakika içinde çekilsin",
-        "   ⬜ 3. Durdur ve ben devralayım",
-        "5 dakika yanıt gelmezse 1. seçenek uygulanır ve arka plandaki iş kesilmez.",
-    ]
-
-
-def _render_quota_waiting(recovery):
-    return [
-        "🟡 Arka planda kota yenilenmesini bekleyen yönetici var",
-        "Durum: %s | Kayıt: %s | Yenilenme: %s" % (
-            recovery["status"], recovery.get("checkpoint") or "?", recovery.get("wake_at") or "?"),
-        "Ne yapılmasını istersiniz?",
-        "   ✅ 1. Beklesin, kota yenilenince kendisi devam etsin",
-        "   ⬜ 2. Beklemeyi iptal et, ben devralayım (önce bekleyen zamanlayıcı iptal edilir)",
-        "   ⬜ 3. Tamamen durdur",
-        "5 dakika yanıt gelmezse 1. seçenek uygulanır ve bekleme bozulmaz.",
-    ]
-
-
-def ask(B, root, now=None):
-    import runtime_quota_recovery as Q
-    import runtime_relay as RL
-    if RL.authorized(B, root) or RL.stopping_holder(B, root):
-        return {"status": "RELAY_SUCCESSOR", "lines": ["Çalışma ayarları önceki yöneticiden devralındı; yeniden soru sorulmaz."]}
-    session = E._session(B, root) or E.begin_session(B, root)
-    previous = None
-    if _path(B, root).is_file():
-        try:
-            previous = _record(B, root)
-        except ValueError as error:
-            if "SETUP_STALE" not in str(error):
-                raise
-        else:
-            if previous.get("mode") == "clarification" and previous.get("status") != "resolved":
-                return {"status": "CLARIFICATION_REQUIRED", "lines": previous["lines"], "timeout_seconds": TIMEOUT}
-    now = time.time() if now is None else now
-    line = RL.boot_line(B, root)
-    state = None
-    try:
-        state = RL.read(B, root)
-    except ValueError:
-        state = None
-    if state and state.get("status") in ("ACTIVE", "HANDOFF_PENDING", "STOPPING", "EXHAUSTED"):
-        B.write_atomic(_path(B, root), json.dumps(
-            {"schema": 1, "nonce": session["nonce"], "asked_at": now, "mode": "relay_active", "defaults": defaults(B, root)}, indent=2))
-        return {"status": "RELAY_ACTIVE", "timeout_seconds": TIMEOUT, "lines": _render_relay_active(state, line or "")}
-    recovery = Q.status(B, root)
-    if recovery.get("status") in ("PREPARED", "ARMED"):
-        B.write_atomic(_path(B, root), json.dumps(
-            {"schema": 1, "nonce": session["nonce"], "asked_at": now, "mode": "quota_waiting", "defaults": defaults(B, root)}, indent=2))
-        return {"status": "QUOTA_WAITING", "timeout_seconds": TIMEOUT, "lines": _render_quota_waiting(recovery)}
-    if previous and previous.get("mode") == "setup" and previous.get("status") != "resolved":
-        return {"status": "ASKED", "timeout_seconds": TIMEOUT, "lines": render(previous["defaults"]),
-                "form_path": str(_form_path(B, root))}
-    value = defaults(B, root)
-    form = write_form(B, root, value)
-    B.write_atomic(_path(B, root), json.dumps({"schema": 1, "nonce": session["nonce"], "asked_at": now, "mode": "setup", "defaults": value}, indent=2))
-    result = {"status": "ASKED", "timeout_seconds": TIMEOUT, "lines": render(value)}
-    if form:
-        result["form_path"] = form
-    return result
-
-
-def _record(B, root):
-    path = _path(B, root)
-    if not path.is_file() or path.stat().st_size > 65536:
-        raise ValueError("SETUP_NOT_ASKED: run `setup ask` first")
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("schema") != 1 or not isinstance(value.get("asked_at"), (int, float)):
-        raise ValueError("Malformed setup record; run `setup ask` again")
-    session = E._session(B, root)
-    if value.get("nonce") != (session or {}).get("nonce"):
-        raise ValueError("SETUP_STALE: run setup ask in the current session")
-    return value
-
-
-def wait(B, root, now=None, sleep=time.sleep):
-    """Sleeps at most one slice; returns the seconds left before defaults apply."""
-    record = _record(B, root)
-    now = time.time() if now is None else now
-    left = max(0, TIMEOUT - (now - record["asked_at"]))
-    if left > 0:
-        sleep(min(SLICE, left))
-        left = max(0, left - SLICE)
-    return {"status": "TIMEOUT_REACHED" if left <= 0 else "WAITING", "seconds_left": int(left),
-            "next": "setup defaults" if left <= 0 else "check for a user reply, then setup wait again"}
-
-
-def apply_defaults(B, root, accepted=False, now=None):
-    with B.checkout_lock(root):
-        return _apply_defaults_locked(B, root, accepted, now)
-
-
-def _apply_defaults_locked(B, root, accepted=False, now=None):
-    record = _record(B, root)
-    now = time.time() if now is None else now
-    if not accepted and now - record["asked_at"] < TIMEOUT:
-        raise ValueError("SETUP_WAIT: %d seconds remain before defaults apply; use --accepted only if the user said so"
-                         % int(TIMEOUT - (now - record["asked_at"])))
-    if record.get("mode") in ("relay_active", "quota_waiting"):
-        return {"status": "CONTINUE_BACKGROUND", "mode": record["mode"],
-                "note": "No reply within 5 minutes; background operation continues untouched"}
-    if E.load(B, root) is not None and E.confirmed(B, root) and not pending(B, root):
-        return {"status": "ALREADY_CONFIRMED", "policy": E.summary(B, root)}
-    note = "User accepted the shown defaults" if accepted else "Defaults after 5-minute setup timeout (no reply)"
-    chosen = copy.deepcopy(record["defaults"])
-    chosen["origin"] = "user" if accepted else "defaults"
-    E.save(B, root, chosen, note)
-    E.confirm(B, root, note)
-    record["status"] = "resolved"
-    B.write_atomic(_path(B, root), json.dumps(record, ensure_ascii=False, indent=2))
-    return {"status": "DEFAULTS_CONFIRMED", "note": note, "policy": E.summary(B, root)}
-
-
 def add_parser(sub):
-    p = sub.add_parser("setup", help="One batched new-session setup screen with a 5-minute default")
-    p.add_argument("action", choices=("ask", "wait", "defaults", "clarify", "recover-cap"))
+    p = sub.add_parser("setup", help="Default-safe single-line session setup and CAP fallback")
+    p.add_argument("action", choices=("ask", "confirm", "defaults", "wait", "recover-cap"))
     p.add_argument("root", nargs="?", default=".")
     p.add_argument("--accepted", action="store_true")
-    p.add_argument("--answer", help="Submitted form answer with unresolved user selections")
-    p.add_argument("--file", help="Project-relative policy preserving the resolved answers")
+    p.add_argument("--advanced", action="store_true", help="Show opt-in power features (CAP/QRP/BRP)")
+    p.add_argument("--note", default="")
     p.add_argument("--role", choices=("exec", "rev"), default="exec")
 
 
 def command(B, args):
-    import runtime_relay as RL
     root = Path(args.root).resolve()
-    director_recovery = args.action == "recover-cap" and RL.authorized(B, root)
-    if os.environ.get("CLI_AGENT_POOL_WORKER") and not director_recovery:
+    director_recovery = args.action == "recover-cap" and E.relay_authorized(B, root)
+    if Core.worker_env_active() and not director_recovery:
         if args.action == "ask":
-            return {"status": "INHERITED", "lines": ["Yardımcılar çalışma ayarlarını devralır; yeniden soru sorulmaz."]}
+            return {"status": "INHERITED", "lines": ["Workers inherit session settings; no setup prompt required."]}
         raise ValueError("Workers inherit settings; they never answer setup questions")
     if not B.brain_exists(root):
         raise ValueError("Initialize Brain before session setup")
     if args.action == "ask":
-        return ask(B, root)
+        return ask(B, root, advanced=getattr(args, "advanced", False))
+    if args.action == "confirm":
+        return confirm(B, root, note=args.note or "User confirmed session policy")
     if args.action == "wait":
         return wait(B, root)
-    if args.action == "clarify":
-        value = None
-        if args.file:
-            value, _ = E._read(V.public_path(root, args.file))
-        return clarify(B, root, args.answer, value)
     if args.action == "recover-cap":
         return recover_cap(B, root, args.role)
     return apply_defaults(B, root, accepted=args.accepted)

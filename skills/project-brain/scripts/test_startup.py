@@ -11,7 +11,7 @@ from unittest.mock import patch
 import brain as B
 import migrate as M
 from test_brain import BRAIN, V0_FILE, V3_TASK, git, run, write
-from test_routing import _project
+from test_helpers import clean_env, make_project as _project, scrub_environ
 
 
 def snapshot(root):
@@ -19,6 +19,11 @@ def snapshot(root):
 
 
 def main():
+    with scrub_environ():
+        _run_startup_checks()
+
+
+def _run_startup_checks():
     for command in ('orient', 'boot'):
         for unborn in (False, True):
             with tempfile.TemporaryDirectory(prefix='pb-startup-') as directory:
@@ -67,7 +72,7 @@ def main():
         root = Path(directory)
         write(root, 'PROJECT_BRAIN.md', V0_FILE)
         workers = [subprocess.Popen([sys.executable, '-B', str(BRAIN), 'orient', str(root)],
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(2)]
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=clean_env()) for _ in range(2)]
         for worker in workers:
             output, error = worker.communicate(timeout=45)
             assert worker.returncode == 0, (output, error)

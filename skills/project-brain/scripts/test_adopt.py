@@ -119,7 +119,6 @@ def main():
         raises(lambda: A.verify(Brain, root, "reviewed"), "recognized tracking pointer")
         trace["instruction_removals"] = [{"path": "AGENTS.md", "text": pointer, "reason": "old pointer"}]
         A._save(Brain, root, trace)
-        A._save(Brain, root, trace)
         A.verify(Brain, root, "reviewed exact pointer")
         assert A.cleanup(Brain, root)["state"] == "CLEANED"
         assert source.read_text(encoding="utf-8") == security

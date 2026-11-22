@@ -252,7 +252,7 @@ Dalgalar görünümdür, ikinci görev tahtası değildir. Bağımlılık gereke
 entegrasyon noktasına ulaşınca yeni iş başlayabilir; ilişkisiz yavaş işi beklemez.
 İlk sürümde kod bağımlılığı hedef dala entegre olmadan bağımlı iş başlatılmaz.
 Paylaşılan test ortamları için lease/rezervasyon vardır. Android gerektiğinde bu
-makinede yalnız `Medium_Phone_API_36.0` kullanılır; başka AVD oluşturulmaz.
+makinede yalnızca mevcut onaylı test AVD'si kullanılır; başka AVD oluşturulmaz.
 
 ### D8 — Kanıtı işçi iddiasından ve merge sonucundan ayır
 

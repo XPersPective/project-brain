@@ -10,21 +10,20 @@ file to change a format, interpret a trailer, or understand a migration.
 # config.yaml
 
 Executor policy remains schema 1 in `executor-policy.json`, separate from config.
-Optional `speed: balanced|turbo`, `origin: user|defaults`, `cap_fallback: native|wait`
-and `scheduling.auto: true|false` are validated without changing older policy bytes.
-`mixed` permits native and CAP, optionally bounding CAP `categories` only.
-`cap_fallback: wait` preserves explicit CAP-only bounds through setup timeouts.
-Session-local `.cache/setup.json` binds the session nonce, shown defaults,
-`asked_at`, mode (`setup|clarification|relay_active|quota_waiting`) and resolved
-status. Clarification gates dispatch until confirmation or 300-second defaults.
-The host translates copied form answers into existing policy JSON; the HTML has
-no direct submission transport or autonomous timer. See WORKFLOW §2.1–2.2.
+Optional `origin: user|defaults`, `cap_fallback: native|wait` and
+`scheduling.auto: true|false` are validated without changing older policy bytes.
+Legacy `"speed"` keys from v3.11/v3.12 policy files are tolerated on load and
+omitted on save. `mixed` permits native and CAP, optionally bounding CAP
+`categories` only. `cap_fallback: wait` preserves explicit CAP-only bounds
+through setup timeouts. Session-local `.cache/setup.json` binds the session
+nonce, shown defaults, `asked_at`, mode (`setup|relay_active|quota_waiting`)
+and resolved status. See WORKFLOW §2.1–2.3.
 
 Stable policy only — never HEAD, active task, timestamps, model, or test results.
 
 ```yaml
 schema_version: 4
-skill_version: "3.12.0"
+skill_version: "4.0.0"
 protocol_version: "1"
 architecture:
   mode: single          # domains: current/<d>.md, optional target/<d>.md; target.md always holds Goal/Status
@@ -113,8 +112,8 @@ Status: CONFIRMED
 ```
 
 - `Status: DRAFT` until the user confirms the Goal; while DRAFT only goal-independent work is planned.
-- **Goal** is the user's, verbatim; agents never edit it (SKILL.md §5). Target State may be revised only
-  through the evidence gate (§8b) with an ADR.
+- **Goal** is the user's, verbatim; agents never edit it (SKILL.md §1). Target State may be revised only
+  through the evidence gate (WORKFLOW.md §5) with an ADR.
 - Open Decision status: OPEN | RESOLVED | DEFERRED. Success Conditions must be observable.
 
 # constraints.md
@@ -204,7 +203,7 @@ Never hand-write these sections; `brain.py` writes and verifies them against `ar
 # ADR — decisions/ADR-NNN.md
 
 Sections: Status (Proposed | Accepted | Superseded | Rejected), Context, Decision, Rationale (explicit),
-Alternatives (serious ones only), Consequences, Related (tasks, domains, constraints). For a replan (§8b):
+Alternatives (serious ones only), Consequences, Related (tasks, domains, constraints). For a replan (WORKFLOW.md §5):
 problem, evidence, options, choice, impact on tasks. Write one only when a future agent would otherwise
 re-open or misread the decision (always write an ADR for the UI Design System & Token Foundation).
 
@@ -244,15 +243,8 @@ evidence, title/file ID mismatch, missing ADR, tracked `.cache/` files, size bud
 # Cache & Agent Registry
 
 - `.project-brain/.cache/` is gitignored and disposable (`runs/*.log` check/delegation logs, `writer.lock`). Deleting it must never lose intent, target, constraints, tasks, or rationale.
-- `~/.project-brain/agents.json` stores machine-local CLI agent paths, benchmark scores, and live subscription quota pools (`PB agents scan|quota|list|select|merge`).
-- The wire format remains schema 4 in v3.0.0; the earlier design's proposed schema 5 was not implemented. `WAITING_USER` is BLOCKED with a reason; `READBACK_FIRST` is a boot result, and failed reviews are handled through REVIEW/start, not extra persisted task statuses.
-- v3.1 also retains project schema 4. Machine-local `sessions/<project-hash>.json`
-  beside the registry uses its own schema 1: PROPOSED/APPROVED/REVOKED, project/session
-  ID, sanitized inventory, configuration digest, explicit selection/approval note and
-  reserved/running/response_unknown/completed/failed jobs. It never lives in config.yaml.
-  Known quota snapshots expire after 5 minutes; an approved max_jobs cap is required for
-  unknown/stale quota. Attempts remain counted after completion or readback settlement.
-  New proposals cannot discard unsettled jobs. `default` effort means no effort selector.
+- `~/.project-brain/agents.json` stores machine-local registered actor aliases and identities (used for independent review checks and CAP/native actor mapping). External CLI discovery, catalogs and quotas are managed exclusively by CLI Agent Pool.
+- Project schema remains 4 in v4.0.0. `WAITING_USER` is BLOCKED with a reason; `READBACK_FIRST` is a boot result, and failed reviews are handled through REVIEW/start, not extra persisted task statuses.
 - IDs and hashes provide freshness/integrity checks, not signatures or authenticated identities. A trusted agent must observe evidence, and actual user approval is needed for a user-owned waiver.
 
 # Migration (`brain.py migrate`)
@@ -293,7 +285,7 @@ content stays in the backup for review; a converted field that cannot fit a head
 | §6 DECISION LOG, §7 HANDOFF | `decisions/ADR-000.md`; handoff → Resume of the IN_PROGRESS task |
 | custom §0 / extra sections | constraints.md "(review)" sections |
 
-After `--apply`: follow the printed TODO lines, then SKILL.md §7.
+After `--apply`: follow the printed TODO lines, then WORKFLOW.md §7.
 
 Protocol 1 adds intent/progress/handoff/review-provenance records under each task evidence directory.
 See [PROTOCOL.md](PROTOCOL.md) for executable formats, explicit budgets and the external host binding.

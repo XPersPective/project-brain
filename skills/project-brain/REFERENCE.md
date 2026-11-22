@@ -123,7 +123,7 @@ before task cleanup. A recorded result still needs the normal takeover verificat
 Malformed config, duplicate/cyclic/dangling task IDs, several IN_PROGRESS, Current contradicting code
 across many domains:
 1. `brain.py validate` for the structural list. Old format (schema ≤3, `PROJECT_BRAIN.md`) is not corrupt:
-   use `brain.py migrate` instead (SKILL.md §7).
+   use `brain.py migrate` instead (WORKFLOW.md §7).
 2. `git log --oneline -10 -- .project-brain` — find the last good version of broken files.
 3. Keep every piece of user intent that still parses; rebuild only demonstrably invalid generated state
    (status, deps, markers) from code and Git.
@@ -144,10 +144,9 @@ Session died (crash, timeout, context exhaustion). Possible leftovers:
 | `.git/index.lock` | no git process running (check) → delete the lock |
 | merge/rebase markers | see Conflicts |
 
-For model jobs, `agents session` shows persisted reservations. Never create a new
-session to erase `reserved`/`response_unknown`: read the CLI/native-host result and
-`agents settle` with the actual readback. The pool must still match project/session
-and execution configuration before another job is reserved.
+For CAP jobs, `PB runs status` / `PB delegate <id> --readback` inspects persisted
+jobs without replaying them. Read back uncertain results before starting
+replacement work.
 
 For foreign-plan cleanup, `.project-brain/adoption.json` records PREPARED → VERIFIED →
 ARCHIVED → CLEANING → CLEANED. Before VERIFIED the host reconciles each source into
@@ -209,26 +208,25 @@ symbolic references so the project remains reproducible.
   and arrange revocation/rotation through the authorized process. Deleting today's
   file does not remove earlier commits/logs. Never silently rewrite history.
 
-Runtime limits: filename/environment-name filters are partial defenses; check/direct-worker output is sanitized for known patterns before its final log;
+Runtime limits: filename/environment-name filters are partial defenses; `PB check` output is sanitized for known patterns before its final log;
 unknown formats still require the approved scanner/private-data inspection. ProcessTree limits process lifetime, not
 filesystem/network access. These instructions do not create a vault, secret scanner,
 ACL or sandbox. Verify host capabilities before making security claims.
 
 ## ProcessTree containment
 
-`PB check` and `PB delegate` run child processes inside an OS-contained `ProcessTree` (Windows JobObject with
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` / POSIX session + process group `killpg`). If `PB doctor` reports
+`PB check` runs child verification commands inside an OS-contained `ProcessTree` (Windows JobObject with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` / POSIX session + process group `killpg`). CLI Agent Pool contains its own workers separately. If `PB doctor` reports
 `CONTAINMENT: FAIL` or a check raises `ContainmentError`, do not trust partial check outputs: inspect running
 processes, kill any orphaned test servers, and rerun `PB check`.
 
 ## Quota exhaustion & CLI worker failover
 
-Respect the selected backend and approved owner/model pool. Known quota keeps the
-worker/director reserve; never invent a remaining percentage from installation or
-login. Pool applies its bounded unknown-quota policy; the direct backend requires
-an explicit approved per-session job allowance. Refresh supported readings before
-new dispatch. No automatic fallback may exceed the chosen EXEC/REV resource or
-billing boundary. Read back/settle uncertain jobs before another reservation.
+Respect the saved ESP/SP/QRP/BRP policy and CAP owner pools. Known quota keeps
+the worker/director reserve; never invent a remaining percentage from installation
+or login. CAP owns external CLI catalogs, quota admission and unknown-quota
+policy. No automatic fallback may exceed the chosen execution/review resource or
+billing boundary. Read back/settle uncertain jobs before another dispatch.
 
 ## External readback (`READBACK_FIRST`)
 

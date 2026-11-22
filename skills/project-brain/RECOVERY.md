@@ -1,10 +1,13 @@
 # Quota Recovery Policy (QRP)
 
-Ask once in every new implementation session together with ESP/SP: enabled or
-disabled, and threshold if enabled (suggest 10%; user may select 5% or 2%). Keep
-current-session answers; normal questions do not reopen choices. Only the main
-director's provider quota is relevant. Context size/reasoning-token capacity is
-different and must not be estimated from subscription percentages.
+QRP is an opt-in director power feature (disabled in the safe core defaults).
+Enable it via `PB policy --qrp on [--qrp-threshold 10] --confirm` (or a policy JSON
+file). When both QRP and BRP are enabled, QRP adopts BRP's threshold so handoff
+is attempted before waiting; checkpoint preparation begins at `threshold + 5%`
+(`prepare_checkpoint: true`). Keep current-session answers; normal questions do
+not reopen choices. Only the main director's provider quota is relevant. Context
+size/reasoning-token capacity is different and must not be estimated from
+subscription percentages.
 
 ## Host contract
 
@@ -18,10 +21,14 @@ these capabilities, save progress and report automatic recovery unavailable.
 
 At meaningful task/checkpoint boundaries read current quota (not every thought,
 poll or small question). Save only needed metadata in ignored
-`.project-brain/.cache/director-usage.json`, not credentials/transcripts. The input
-shape has accountId, ordinaryUsageAllowed and rateLimits with an opaque limitId,
-primary and optional secondary {usedPercent,resetsAt,windowDurationMins}. Times are
-UTC Unix seconds. Unknown/stale observations never authorize automatic work.
+`.project-brain/.cache/director-usage.json`, not credentials/transcripts. Both
+native rate-limit snapshots (`accountId`, `ordinaryUsageAllowed`, `rateLimits`
+with `limitId`, `primary` and optional `secondary`) and CAP `windows` snapshots
+(requiring explicit `accountId`, `remainingPercent`, and valid ISO/epoch
+`resetAt` on every window) are supported and normalized identically on `assess`,
+`prepare`, and `resume`. Missing account identity, missing reset timestamps,
+missing remaining percentages, or `ordinaryUsageAllowed: false` fail closed as
+`UNKNOWN` — never inventing defaults or authorizing automatic work.
 
 ```text
 PB quota assess --snapshot .project-brain/.cache/director-usage.json

@@ -14,14 +14,14 @@ import runtime_orchestration as O
 import runtime_runs as L
 import runtime_verify as V
 import runtime_protocol as R
-import runtime_agents as A
-from test_routing import _project
+import runtime_actors as A
+from test_helpers import make_project as _project, scrub_environ
 from test_orchestration import denied, report
 
 
 @contextmanager
 def fixture():
-    with tempfile.TemporaryDirectory(prefix="pb-production-") as tmp:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-production-") as tmp:
         root = Path(tmp) / "project"
         root.mkdir()
         with redirect_stdout(io.StringIO()):

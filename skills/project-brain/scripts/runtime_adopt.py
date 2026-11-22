@@ -1,4 +1,4 @@
-"""Verified, recoverable cleanup for foreign planning state. Stdlib only."""
+"""Foreign tracker detection, import, and verified recoverable cleanup. Stdlib only."""
 
 import hashlib
 import json
@@ -8,22 +8,176 @@ import re
 import uuid
 import zipfile
 
-import runtime_verify as V
+import runtime_core as Core
+import runtime_security as S
 
 TRACE_SCHEMA = 1
 STATES = ("PREPARED", "VERIFIED", "ARCHIVED", "CLEANING", "CLEANED")
-SKIP_DIRS = {".git", ".hg", ".svn", ".project-brain", "node_modules", ".venv", "venv",
-             "__pycache__", "dist", "build", "target", "bin", "obj"}
+SKIP_DIRS = {
+    ".git", ".hg", ".svn", ".project-brain", "node_modules", ".venv", "venv",
+    "__pycache__", "dist", "build", "target", "bin", "obj",
+}
 TRACKING_EXTENSIONS = {".md", ".json", ".yaml", ".yml", ".txt", ".toml"}
 INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}
-UNRESOLVED = re.compile(r"^\s*-\s*(?:(?P<op>[A-Za-z0-9_.:/-]+)\s*(?:\||:)\s*)?(?P<state>sent|response_unknown)\b", re.I | re.M)
+UNRESOLVED = re.compile(
+    r"^\s*-\s*(?:(?P<op>[A-Za-z0-9_.:/-]+)\s*(?:\||:)\s*)?(?P<state>sent|response_unknown)\b",
+    re.I | re.M,
+)
 POINTER_CUE = re.compile(r"\b(load|read|use|follow|see|check|start with|continue in)\b", re.I)
-POINTER_RISK = re.compile(r"\b(security|credential|secret|token|permission|authorization|password|private key|must not|never|do not|don't)\b", re.I)
+POINTER_RISK = re.compile(
+    r"\b(security|credential|secret|token|permission|authorization|password|private key|must not|never|do not|don't)\b",
+    re.I,
+)
 TRACKER_NAMES = (".taskmaster", "memory-bank", ".kiro", ".factory", "_bmad", "openspec", ".planning")
+
+FOREIGN_SYSTEMS = (
+    ("project-brain-v0", ("PROJECT_BRAIN.md",)),
+    ("taskmaster", (".taskmaster/tasks/tasks.json", ".taskmaster")),
+    ("Spec Kit", (".specify", "specs")),
+    ("BMAD", ("_bmad", "_bmad-output", ".bmad-core")),
+    ("OpenSpec", ("openspec",)),
+    ("GSD", (".planning",)),
+    ("Kiro", (".kiro/specs", ".kiro/steering")),
+    ("Memory Bank", ("memory-bank", ".cursor/memory-bank")),
+    ("Factory", (".factory", "missions")),
+    ("Flat file", ("TODO.md", "TASKS.md", "PLAN.md", "ROADMAP.md")),
+)
+
+STORE_RELEASE_SKIP_RE = re.compile(
+    r"\b(play[- ]store|google[- ]play|app[- ]store|appstore|fastlane|store[- ]listing|testflight|"
+    r"publish(?:ing|ed)?|publication|distribution|deploy(?:ment|ing)?|release|yayın\w*|yayımla\w*|dağıtım\w*)\b",
+    re.I,
+)
+
+
+def _read_safe(path):
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def detect_foreign(root):
+    root = Path(root)
+    hits = []
+    for name, markers in FOREIGN_SYSTEMS:
+        found = [m for m in markers if (root / m).exists()]
+        if found:
+            hits.append((name, found))
+    return hits
+
+
+def _extract_foreign_tasks(root):
+    """Extract candidate tasks from .planning/tasks, .taskmaster, or markdown checklists."""
+    root = Path(root)
+    extracted = []
+    plan_tasks = root / ".planning" / "tasks"
+    if plan_tasks.is_dir() and not Core.is_link(plan_tasks):
+        for f in sorted(plan_tasks.glob("*.md")):
+            text = _read_safe(Core.public_path(root, f.relative_to(root).as_posix())) or ""
+            title_m = re.search(r"^#\s+(?:[A-Z]+-\d+\s*[—–-]\s*)?(.+)$", text, re.M)
+            title = title_m.group(1).strip() if title_m else f.stem
+            if STORE_RELEASE_SKIP_RE.search(title) or STORE_RELEASE_SKIP_RE.search(text):
+                continue
+            if re.search(r"^Status:\s*(DONE|COMPLETE(?:D)?|CANCELLED|CANCELED)\b", text, re.I | re.M):
+                continue
+            extracted.append({"source": f.relative_to(root).as_posix(), "title": title, "text": text})
+    tm_json = root / ".taskmaster" / "tasks" / "tasks.json"
+    if tm_json.exists():
+        try:
+            tdata = json.loads(_read_safe(Core.public_path(root, tm_json.relative_to(root).as_posix())) or "{}")
+            items = tdata.get("tasks", []) if isinstance(tdata, dict) else []
+            if isinstance(tdata, dict) and not items:
+                items = [item for tag in tdata.values() if isinstance(tag, dict) for item in tag.get("tasks", [])]
+            for item in items or []:
+                if (
+                    isinstance(item, dict)
+                    and item.get("title")
+                    and item.get("status", "").lower() not in ("done", "completed", "cancelled", "canceled")
+                ):
+                    text = json.dumps(item, ensure_ascii=False, indent=2)
+                    if STORE_RELEASE_SKIP_RE.search(text):
+                        continue
+                    extracted.append({
+                        "source": ".taskmaster/tasks/tasks.json",
+                        "title": item["title"],
+                        "objective": item.get("description") or item["title"],
+                        "text": text,
+                    })
+        except ValueError:
+            pass
+    for flat in ("TODO.md", "TASKS.md", "PLAN.md", "ROADMAP.md"):
+        fp = root / flat
+        if fp.exists():
+            for line in (_read_safe(Core.public_path(root, flat)) or "").splitlines():
+                m = re.match(r"^\s*-\s*\[\s*\]\s+(.+)$", line)
+                if m and not STORE_RELEASE_SKIP_RE.search(m.group(1)):
+                    extracted.append({"source": flat, "title": m.group(1).strip(), "text": line})
+    return extracted
+
+
+def cmd_legacy(B, root, apply=False, migrate_fn=None):
+    root = Path(root)
+    hits = detect_foreign(root)
+    if not hits:
+        print("NONE: no foreign planning systems detected")
+        return 0
+    for name, paths in hits:
+        print(f"FOREIGN {name}: {', '.join(paths)}")
+    candidates_list = _extract_foreign_tasks(root)
+    print(f"CANDIDATES: {len(candidates_list)} open tasks (store publishing/distribution tasks filtered out)")
+    for c in candidates_list[:15]:
+        print(f"  - [{c['source']}] {c['title'][:70]}")
+    if not apply:
+        print("NEXT: Run `legacy --apply` to initialize `.project-brain/` and import non-publishing tasks as PLANNED.")
+        return 0
+    if any(name == "project-brain-v0" for name, _ in hits):
+        if migrate_fn is not None:
+            return migrate_fn(root, apply=True)
+        raise ValueError("Run `migrate --apply` to convert PROJECT_BRAIN.md")
+    if not B.brain_exists(root):
+        B.cmd_init(root)
+    created = 0
+    for c in candidates_list:
+        title = " ".join(str(c["title"]).split())
+        raw = c.get("text") or c.get("objective") or title
+        source_id = hashlib.sha256((c["source"] + "\0" + raw).encode("utf-8")).hexdigest()[:16]
+        source_rel = f".project-brain/migration-backup/imported/{source_id}-source.md"
+        source = Core.public_path(root, source_rel)
+        source.parent.mkdir(parents=True, exist_ok=True)
+        if not source.exists():
+            Core.write_atomic(source, raw)
+        tasks = B.list_tasks(root)
+        if any(source_rel in t["objective"] for t in tasks):
+            continue
+        partial = [
+            t
+            for t in tasks
+            if t["title"] == title
+            and t["status"] == "PLANNED"
+            and t["text"].strip()
+            == B.TASK_TMPL.format(
+                id=t["id"], title=title, status="PLANNED", risk="MEDIUM", priority="P2", tier="M", deps="-"
+            ).strip()
+        ]
+        if partial:
+            task = partial[0]
+        else:
+            before = {t["id"] for t in tasks}
+            rc = B.cmd_new(root, title, depends="", risk="MEDIUM", priority="P2", tier="M")
+            if rc:
+                return rc
+            task = next(t for t in B.list_tasks(root) if t["id"] not in before)
+            created += 1
+        body = B.read(task["file"])
+        objective = f"Imported from `{c['source']}`. Read the preserved original at `{source_rel}` before refining this task."
+        Core.write_atomic(task["file"], body.replace("<what and why, in the user's words>", objective, 1))
+    print(f"ADOPTED: created {created} PLANNED tasks in .project-brain/tasks/")
+    return 0
 
 
 def trace_file(B, root):
-    return V.public_path(root, ".project-brain/adoption.json")
+    return Core.public_path(root, ".project-brain/adoption.json")
 
 
 def status(B, root):
@@ -31,7 +185,7 @@ def status(B, root):
     if not p.exists():
         return {}
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = Core.read_json(p, max_bytes=4 * 1024 * 1024, strict_constants=True)
     except (OSError, ValueError) as exc:
         raise ValueError("adoption trace is unreadable or malformed") from exc
     if not isinstance(data, dict) or data.get("schema") != TRACE_SCHEMA:
@@ -42,11 +196,11 @@ def status(B, root):
 
 
 def _save(B, root, data):
-    B.write_atomic(trace_file(B, root), json.dumps(data, ensure_ascii=False, indent=2))
+    Core.write_atomic(trace_file(B, root), json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def _hash_bytes(data):
-    return hashlib.sha256(data).hexdigest()
+    return Core.sha256_bytes(data)
 
 
 def _atomic_hash(text):
@@ -72,7 +226,7 @@ def _safe(root, rel):
         raise ValueError("private or escaping adoption path refused: " + rel)
     if any(part.lower() in SKIP_DIRS for part in pp.parts):
         raise ValueError("infrastructure path refused: " + rel)
-    path = V.public_path(root, rel)
+    path = Core.public_path(root, rel)
     if path.exists() and not (path.is_file() or path.is_dir()):
         raise ValueError("unsupported filesystem object: " + rel)
     return path
@@ -83,7 +237,7 @@ def _target_safe(root, rel):
         parts = PureWindowsPath(rel).parts
         if len(parts) < 2 or any(part.lower() in {".cache", "migration-backup", "adoption.json"} for part in parts):
             raise ValueError("private Project Brain destination refused: " + rel)
-        path = V.public_path(root, rel)
+        path = Core.public_path(root, rel)
         if path.exists() and not path.is_file():
             raise ValueError("adoption destination must be a file: " + rel)
         return path
@@ -111,7 +265,7 @@ def _enumerate(root, rel):
                 child = basep / name
                 child_rel = _rel(root, child)
                 _safe(root, child_rel)
-                if V.is_link(child):
+                if Core.is_link(child):
                     raise ValueError("linked source refused: " + child_rel)
                 _tracking_file(child_rel)
                 files.append(child)
@@ -139,14 +293,14 @@ def _roots(paths):
 
 
 def _default_paths(root):
-    import runtime_agents as A
     found = []
-    for _name, paths in A.detect_foreign(root):
+    for _name, paths in detect_foreign(root):
         for path in paths:
             if path == "PROJECT_BRAIN.md":
                 continue
             if path in ("TODO.md", "TASKS.md"):
-                text = (Path(root) / path).read_text(encoding="utf-8", errors="replace")
+                safe_p = Core.public_path(root, path)
+                text = safe_p.read_text(encoding="utf-8", errors="replace")
                 if re.search(r"^\s*-\s*\[[ xX]\]\s+", text, re.M):
                     found.append(path)
                 continue
@@ -164,99 +318,101 @@ def _project_exists(B, root):
 def prepare(B, root, paths=()):
     root = Path(root).resolve()
     _project_exists(B, root)
-    prior = status(B, root)
-    if prior and prior.get("state") not in ("CLEANED",):
-        raise ValueError("adoption already has pending work; resume its exact trace")
-    selected = _roots(list(paths) if paths else _default_paths(root))
-    if not selected:
-        raise ValueError("no foreign planning sources selected")
-    files = {}
-    for rel in selected:
-        _safe(root, rel)
-        for item in _enumerate(root, rel):
-            files[item["path"]] = item
-    files = [files[key] for key in sorted(files)]
-    data = {"schema": TRACE_SCHEMA, "id": str(uuid.uuid4()), "state": "PREPARED",
-            "roots": selected, "sources": files, "reviewed_note": "",
-            "instruction_removals": [], "source_snapshot": {}, "target_snapshot": {},
-            "instruction_snapshot": {}, "instruction_after_snapshot": {},
-            "ignore_snapshot": {}, "ignore_after_snapshot": {}, "archive": {}}
+    existing = status(B, root)
+    if existing and existing.get("state") in ("PREPARED", "VERIFIED", "ARCHIVED", "CLEANING"):
+        raise ValueError("adoption trace already has pending work; finish or verify it instead of re-preparing")
+    chosen = _roots(list(paths) if paths else _default_paths(root))
+    if not chosen:
+        raise ValueError("no foreign tracking sources selected")
+    sources = []
+    for rel in chosen:
+        sources.extend(_enumerate(root, rel))
+    if not sources:
+        raise ValueError("selected foreign sources contain no tracking files")
+    data = {
+        "schema": TRACE_SCHEMA,
+        "id": uuid.uuid4().hex[:12],
+        "state": "PREPARED",
+        "roots": chosen,
+        "sources": sources,
+        "instruction_removals": [],
+        "source_snapshot": {},
+        "target_snapshot": {},
+        "instruction_snapshot": {},
+        "instruction_after_snapshot": {},
+        "ignore_snapshot": {},
+        "ignore_after_snapshot": {},
+        "reviewed_note": "",
+        "archive": {},
+    }
     _save(B, root, data)
     return data
 
 
 def _source_snapshot(root, roots):
-    found = {}
+    snapshot = {}
     for rel in roots:
         for item in _enumerate(root, rel):
-            found[item["path"]] = item["sha256"]
-    return found
-
-
-def _validate_targets(B, root, data):
-    removed = set(data["source_snapshot"] or {s["path"]: s["sha256"] for s in data["sources"]})
-    targets = {}
-    for source in data["sources"]:
-        mapped = source.get("targets")
-        dropped = str(source.get("drop_reason", "")).strip()
-        if bool(mapped) == bool(dropped):
-            raise ValueError("every source needs targets or a drop reason, exclusively: " + source["path"])
-        if mapped:
-            if not isinstance(mapped, list):
-                raise ValueError("targets must be a list: " + source["path"])
-            for item in mapped:
-                rel = item.get("path") if isinstance(item, dict) else item
-                path = _target_safe(root, rel)
-                if not path.is_file():
-                    raise ValueError("adoption target must be an existing file: " + str(rel))
-                target_abs = path.resolve()
-                for source_rel in removed:
-                    source_abs = _safe(root, source_rel).resolve()
-                    if target_abs == source_abs or source_abs in target_abs.parents:
-                        raise ValueError("adoption target is inside a removed source: " + rel)
-                targets[rel] = _hash_file(path)
-        elif _has_unresolved(root, source["path"]):
-            raise ValueError("unresolved external operation cannot be dropped: " + source["path"])
-    # Each unresolved operation must survive in at least one mapped target.
-    for source in data["sources"]:
-        unresolved = _unresolved_lines(root, source["path"])
-        if unresolved:
-            target_paths = [t.get("path") if isinstance(t, dict) else t for t in (source.get("targets") or [])]
-            target_text = "\n".join(_read_text(_target_safe(root, p)) for p in target_paths)
-            for op, state in unresolved:
-                if state.lower() not in target_text.lower() or (op and op.lower() not in target_text.lower()):
-                    raise ValueError("mapped target does not preserve unresolved operation from " + source["path"])
-    return targets
+            snapshot[item["path"]] = item["sha256"]
+    return snapshot
 
 
 def _read_text(path):
-    try:
-        return path.read_text(encoding="utf-8")
-    except (UnicodeError, OSError):
-        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _unresolved_lines(root, rel):
-    text = _read_text(_safe(root, rel))
-    return [(m.group("op") or "", m.group("state")) for m in UNRESOLVED.finditer(text)]
-
-
-def _has_unresolved(root, rel):
-    return bool(_unresolved_lines(root, rel))
+def _validate_targets(B, root, data):
+    targets = {}
+    for item in data["sources"]:
+        raw_tlist = item.get("targets", [])
+        drop = str(item.get("drop_reason", "")).strip()
+        if not isinstance(raw_tlist, list):
+            raise ValueError("invalid adoption targets for " + item["path"])
+        tlist = []
+        for entry in raw_tlist:
+            if isinstance(entry, str) and entry.strip():
+                tlist.append(entry.strip())
+            elif isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"].strip():
+                tlist.append(entry["path"].strip())
+            else:
+                raise ValueError("invalid adoption targets for " + item["path"])
+        if not tlist and not drop:
+            raise ValueError("every source needs targets or drop_reason: " + item["path"])
+        if drop and tlist:
+            raise ValueError("source cannot have both targets and drop_reason: " + item["path"])
+        if drop:
+            src_path = _safe(root, item["path"])
+            if src_path.is_file() and UNRESOLVED.search(_read_text(src_path)):
+                raise ValueError("source with unresolved external operation cannot be dropped: " + item["path"])
+        for rel in tlist:
+            p = _target_safe(root, rel)
+            if not p.is_file() or not p.stat().st_size:
+                raise ValueError("adoption destination missing or empty: " + rel)
+            text = _read_text(p)
+            if UNRESOLVED.search(text):
+                raise ValueError("unresolved external operation in destination: " + rel)
+            targets[rel] = _hash_file(p)
+    return targets
 
 
 def _instruction_data(B, root, data):
+    removals = data.get("instruction_removals", [])
+    if not isinstance(removals, list):
+        raise ValueError("invalid instruction_removals")
     snapshots, results = {}, []
-    for entry in data.get("instruction_removals", []):
-        rel, text = entry.get("path"), entry.get("text")
-        if rel not in INSTRUCTION_FILES or not isinstance(text, str) or not text:
-            raise ValueError("instruction removal must name an approved instruction file and exact text")
-        path = _target_safe(root, rel)
+    for entry in removals:
+        if not isinstance(entry, dict):
+            raise ValueError("invalid instruction removal entry")
+        rel = entry.get("path", "")
+        text = entry.get("text", "")
+        if rel not in INSTRUCTION_FILES or not isinstance(text, str) or not text.strip():
+            raise ValueError("invalid instruction removal target or text")
+        path = _safe(root, rel)
         if not path.is_file():
             raise ValueError("instruction file missing: " + rel)
-        content = _read_text(path)
-        if text not in content:
-            raise ValueError("reviewed instruction block not found exactly in " + rel)
+        body = _read_text(path)
+        if body.count(text) != 1:
+            raise ValueError("instruction removal text must match uniquely in " + rel)
         if not _is_old_pointer(text, data["sources"]):
             raise ValueError("instruction removal is not a recognized tracking pointer")
         snapshots[rel] = _hash_file(path)
@@ -302,13 +458,14 @@ def verify(B, root, note):
         raise ValueError("adoption trace is not prepared")
     if not isinstance(note, str) or not note.strip():
         raise ValueError("reviewed note is required")
+    S.require_public(note, "adoption review note")
     actual = _source_snapshot(root, data["roots"])
     expected = {item["path"]: item["sha256"] for item in data["sources"]}
     if actual != expected:
         raise ValueError("foreign sources changed since preparation")
     targets = _validate_targets(B, root, data)
     instruction_snapshot, reviewed = _instruction_data(B, root, data)
-    ignore_snapshot, _ = _ignore_plan(root, data)
+    ignore_snapshot, remove = _ignore_plan(root, data)
     instruction_after = {}
     for rel in instruction_snapshot:
         text = _read_text(_safe(root, rel))
@@ -320,7 +477,6 @@ def verify(B, root, note):
     if ignore_snapshot:
         rel = ".gitignore"
         lines = _read_text(_safe(root, rel)).splitlines(keepends=True)
-        _, remove = _ignore_plan(root, data)
         for line in remove:
             try:
                 lines.remove(line)
@@ -342,15 +498,12 @@ def verify(B, root, note):
 
 def _archive_path(root, data, archive_dir):
     base = Path(archive_dir) if archive_dir else Path(root).parent / ".project-brain-archives"
-    base = base.absolute()
-    for p in (base, *base.parents):
-        if V.is_link(p):
-            raise ValueError("linked archive path refused")
-    base = base.resolve()
-    if base == Path(root) or Path(root) in base.parents:
+    base = Core.safe_private_path(base)
+    resolved = base.resolve()
+    if resolved == Path(root) or Path(root) in resolved.parents:
         raise ValueError("archive must be outside project root")
-    base.mkdir(parents=True, exist_ok=True)
-    return base / (Path(root).name + "-" + data["id"] + ".zip")
+    resolved.mkdir(parents=True, exist_ok=True)
+    return resolved / (Path(root).name + "-" + data["id"] + ".zip")
 
 
 def _zip_entry_hashes(path):
@@ -362,29 +515,30 @@ def _zip_entry_hashes(path):
 
 
 def _archive(B, root, data, archive_dir):
-    # Recovery after archive creation but before journal persistence may reuse only an exact match.
-    candidate = _archive_path(root, data, archive_dir)
+    target = _archive_path(root, data, archive_dir)
     expected = dict(data["source_snapshot"])
     backups = set(data.get("instruction_snapshot", {})) | set(data.get("ignore_snapshot", {}))
     expected_entries = {"sources/" + p: h for p, h in expected.items()}
     expected_entries.update({"backups/" + p: _hash_file(_safe(root, p)) for p in backups})
-    if candidate.exists():
-        if _zip_entry_hashes(candidate) != expected_entries:
+    if target.exists():
+        if _zip_entry_hashes(target) != expected_entries:
             raise ValueError("existing adoption archive does not match verified sources")
-        return {"path": str(candidate), "sha256": _hash_file(candidate), "entries": expected_entries}
-    target = _archive_path(root, data, archive_dir)
+        return {"path": str(target), "sha256": _hash_file(target), "entries": expected_entries}
+    tmp = target.with_suffix(".zip.tmp")
     try:
-        with zipfile.ZipFile(target, "x", compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for rel in sorted(expected):
-                p = _safe(root, rel)
-                zf.write(p, "sources/" + rel)
+                zf.write(_safe(root, rel), "sources/" + rel)
             for rel in sorted(backups):
                 zf.write(_safe(root, rel), "backups/" + rel)
-        if _zip_entry_hashes(target) != expected_entries:
+        with tmp.open("r+b") as fh:
+            os.fsync(fh.fileno())
+        if _zip_entry_hashes(tmp) != expected_entries:
             raise ValueError("archive contents do not match verified source snapshot")
-    except Exception:
+        Core._replace_with_retry(str(tmp), str(target))
+    except BaseException:
         try:
-            target.unlink()
+            tmp.unlink()
         except OSError:
             pass
         raise
@@ -413,7 +567,7 @@ def _archive_valid(root, data):
     if not path.is_absolute() or root == path.resolve() or root in path.resolve().parents:
         return False
     for item in (path, *path.parents):
-        if V.is_link(item):
+        if Core.is_link(item):
             return False
     if not path.is_file() or _hash_file(path) != archive.get("sha256"):
         return False
@@ -434,7 +588,7 @@ def _remove_instruction_blocks(B, root, data):
             if entry["path"] == rel:
                 after = after.replace(entry["text"], "", 1)
         if after != before:
-            B.write_atomic(path, after)
+            Core.write_atomic(path, after)
 
 
 def _remove_ignore_lines(B, root, data):
@@ -449,12 +603,14 @@ def _remove_ignore_lines(B, root, data):
         raise ValueError("ignore file changed during cleanup")
     lines = _read_text(path).splitlines(keepends=True)
     _, removal = _ignore_plan(root, data)
+    if not removal:
+        return
     for line in removal:
         try:
             lines.remove(line)
         except ValueError:
             pass
-    B.write_atomic(path, "".join(lines))
+    Core.write_atomic(path, "".join(lines))
 
 
 def cleanup(B, root, archive_dir=None):
@@ -466,7 +622,6 @@ def cleanup(B, root, archive_dir=None):
         return data
     if data.get("state") not in ("VERIFIED", "ARCHIVED", "CLEANING"):
         raise ValueError("adoption must be verified before cleanup")
-    # A cleanup retry may encounter already removed files; only trust a valid archive and CLEANING journal.
     if data["state"] in ("ARCHIVED", "CLEANING"):
         if not _archive_valid(root, data):
             raise ValueError("verified recovery archive is missing or corrupt")
@@ -492,9 +647,11 @@ def cleanup(B, root, archive_dir=None):
             if path.is_file() and rel not in allowed:
                 raise ValueError("new foreign file appeared during cleanup: " + rel)
             if path.is_dir():
-                for base, dirs, names in os.walk(str(path), followlinks=False):
+                for base, _dirs, names in os.walk(str(path), topdown=True, followlinks=False):
+                    base_p = Path(base)
+                    _dirs[:] = [d for d in _dirs if not Core.is_link(base_p / d)]
                     for name in names:
-                        candidate = Path(base) / name
+                        candidate = base_p / name
                         relname = _rel(root, candidate)
                         _safe(root, relname)
                         if relname not in allowed:
@@ -518,7 +675,6 @@ def cleanup(B, root, archive_dir=None):
         path.unlink()
     _remove_instruction_blocks(B, root, data)
     _remove_ignore_lines(B, root, data)
-    # Explicit bottom-up rmdir only; never recursively remove a computed directory tree.
     dirs = set()
     for rel in data["roots"]:
         p = _safe(root, rel)
@@ -541,4 +697,3 @@ def cleanup(B, root, archive_dir=None):
     data["state"] = "CLEANED"
     _save(B, root, data)
     return data
-

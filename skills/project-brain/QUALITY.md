@@ -1,4 +1,4 @@
-# Project Brain 3.0 — Frontend, Backend & State Machine Quality Rubric
+# Project Brain 4.0 — Frontend, Backend & State Machine Quality Rubric
 
 Load this file during Genesis/planning of UI or backend domains, before writing task specs that touch UI or backend areas, and during `PB review`.
 

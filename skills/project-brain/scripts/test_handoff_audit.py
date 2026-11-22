@@ -9,11 +9,11 @@ from unittest.mock import patch
 
 import brain as B
 import migrate as M
-import runtime_agents as A
 import runtime_agent_pool as AP
+import runtime_scoring as SC
 import runtime_verify as V
 from test_brain import commit, git, write
-from test_routing import _project
+from test_helpers import make_project as _project, scrub_environ
 
 
 def denied(call, *args, **kwargs):
@@ -25,7 +25,7 @@ def denied(call, *args, **kwargs):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="pb-handoff-") as tmp:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-handoff-") as tmp:
         root = Path(tmp)
         _project(root)
         # No-Git orphan evidence and backups are not disposable.
@@ -77,7 +77,7 @@ def main():
         # --force cannot escape P-L, while P-ALL admits a high-tier dry run.
         task = B.find_task(root, "PB-001")
         args = SimpleNamespace(force=True, timeout=5, cli="", model="", effort="", group="", dry_run=True)
-        high = dict(A.score_task(B, root, task), effective_tier="H", must_split=False)
+        high = dict(SC.score_task(B, root, task), effective_tier="H", must_split=False)
         B.set_session_modes(root, "P-L", "P-L")
         with patch.object(AP, "rpc", side_effect=AssertionError("cap checked before RPC")):
             denied(AP.delegate, B, root, task, high, args)

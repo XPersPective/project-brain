@@ -8,8 +8,9 @@ authorities; capability declarations are not filesystem/network sandboxes.
 ## Session and task contract
 
 Select EXEC/REV and serial/parallel as described in SKILL.md. `solo` means no
-workers. `native` means host subagents; `pool-*` means CLI Agent Pool. Do not mix
-worker backend and selected resource. `--tiers MH` narrows worker model selection to
+workers. `native` means host subagents; `mixed` permits both host subagents and
+CLI Agent Pool; `cap-*` / `pool-*` means CLI Agent Pool. Do not mix an unauthorized
+worker backend with the selected policy. `--tiers MH` narrows worker model selection to
 those strength tiers within the selected resource cap; it never widens the cap.
 A LOW task may use MEDIUM when LOW is excluded; a HIGH task cannot use MEDIUM.
 Review strength/independence floors are still enforced by existing review gates.
@@ -37,7 +38,7 @@ PB runs status <root> --after <cursor>
 PB runs report <root> --run run-<id>
 PB runs verify <root> --run run-<id> --actor <actual-implementer>
 PB runs integrate <root> --run run-<id>
-PB runs cancel <root> --run run-<id>
+PB runs cancel <root> --run run-<id> [--force]
 PB runs cleanup <root> --run run-<id>
 PB runs rebuild <root> --run run-<id>
 PB runs reject <root> --run run-<id> --note "Actual inspection reason"
@@ -60,9 +61,8 @@ jobs recheck current intent, tier and executing-job capacity before first launch
 
 Run admission includes active jobs, UNKNOWN jobs, completed unintegrated writer
 ownership, conservative glob overlap, and explicit shared resources within the project ledger. Machine-wide resources still require the
-host to honor their shared ownership rules across projects. Use
-`--resource android-emulator` for exclusive device access; only the existing
-`Medium_Phone_API_36.0` AVD may be used on the development machine. Disjoint paths
+host to honor their shared ownership rules across projects (for example, use
+`--resource android-emulator` for exclusive device/emulator access). Disjoint paths
 alone do not prove semantic independence: record shared contract dependencies.
 
 ## Pool contract and recovery
@@ -117,11 +117,12 @@ When attach is unavailable, preserve uncertainty; do not relaunch automatically.
 
 ## Validation and single-writer integration
 
-`verify` snapshots a completed worker's assigned code using a separate Git index;
-out-of-Areas changes and secret patterns block it. It prepares a detached candidate
-against the current target, copies director-owned Brain context and runs existing
-machine checks. Its result includes the candidate path. This does not create a
-review PASS or accept unobserved UI/interaction evidence.
+`verify` snapshots a completed worker's assigned code (including both uncommitted
+worktree edits and commits made inside the isolated worker worktree) using a
+separate Git index; out-of-Areas changes and secret patterns block it. It prepares
+a detached candidate against the current target, copies director-owned Brain
+context and runs existing machine checks. Its result includes the candidate path.
+This does not create a review PASS or accept unobserved UI/interaction evidence.
 
 A REVIEW run can inspect an existing dirty candidate, bound to its exact content
 digest and base commit; it creates no new branch/worktree. Changed content makes

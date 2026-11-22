@@ -25,7 +25,7 @@ environment without a task lease or worker marker.
 
 ```json
 {"contracts": ["pb-director/1"],
- "features": ["preflight", "onExit", "ack", "idle", "secretEnv", "resolve", "releaseLockOnFailure", "directorProfile"]}
+ "features": ["preflight", "onExit", "ack", "idle", "secretEnv", "resolve", "releaseLockOnFailure", "directorProfile", "quotaBarrier", "wakeAt", "supersede"]}
 ```
 
 An unknown-tool error means no features.
@@ -89,6 +89,10 @@ Sent only for relay director tasks (`kind:"write", mode:"execute"`):
 | `startDeadlineSeconds` (60..86400) | `ack` | Still queued this long after submission → cancel, error `START_TIMEOUT`. |
 | `idleTimeoutSeconds` (300..86400) | `idle` | No native output line and no running linked worker for this long → cancel, error `IDLE_TIMEOUT` (hang detection). |
 | `secretEnv: {"PB_RELAY_TOKEN": "<32 hex>"}` | `secretEnv` | Injected into the native process environment (inherited by every shell it starts). Stripped before storage, events and the idempotency fingerprint; memory-only. If the service restarts before the task runs, the task fails with `SECRET_LOST`. Keys must match `^PB_[A-Z_]{1,32}$`. |
+| `stopOnQuotaBarrierPercent` (1..50) | `quotaBarrier` | CAP proactively stops the director task with `QUOTA_BARRIER` if the route's remaining quota hits this percent, letting `onExit` trigger zero-penalty failover/recovery. |
+| `supersedesTaskId` | `supersede` | Links a replacement/successor director task to the predecessor task ID so CAP avoids workspace-lock deadlocks and treats the predecessor exit as zero-penalty handoff. |
+
+Additionally, when `wakeAt` is advertised in `features`, an `onExit` hook (`relay recover --from-hook`) may emit `CAP_WAKE_AT <iso-utc>` and `CAP_RETRY_AFTER <seconds>` with exit code `75` when all healthy candidates are quota-limited, asking CAP to re-run recovery once quota resets.
 
 CAP injects `CLI_AGENT_POOL_TASK_ID` so takeover can acknowledge its task even
 before the submit response reaches its predecessor.
@@ -140,6 +144,10 @@ response: an idempotent replay returns the same task. `pool_get_task` exposes
 | `idle` | A hung director is ended only by its 12 h task timeout. |
 | `secretEnv` | The baton token is in the successor prompt (`--relay-token`). |
 | `releaseLockOnFailure`, `resolve` | Recover prints the exact `cli-agent-pool resolve` command. |
+| `directorProfile` | CAP uses its default task profile without explicit `director` profile hints. |
+| `quotaBarrier` | CAP does not proactively interrupt a director at the quota barrier; director self-checks via `relay assess`. |
+| `wakeAt` | Exhausted quota waits cannot schedule a future CAP wake; relay marks `EXHAUSTED` and notifies once. |
+| `supersede` | Handoff cancels the predecessor task explicitly on takeover rather than tagging `supersedesTaskId`. |
 
 ## Versioning
 

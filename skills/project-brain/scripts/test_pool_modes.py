@@ -11,17 +11,18 @@ from unittest.mock import patch
 
 import brain as B
 import migrate as M
-import runtime_agents as A
+import runtime_actors as A
 import runtime_agent_pool as AP
+import runtime_scoring as SC
 import runtime_verify as V
-from test_routing import _project
+from test_helpers import make_project as _project, scrub_environ
 
 
 def main():
     model = {"id": "worker", "routeId": "local", "enabled": True, "group": "low", "fixedEffort": "high", "efforts": ["high"], "billing": "subscription", "kinds": ["read", "write"]}
     completed = {"id": "job", "state": "succeeded", "report": {"status": "completed", "summary": "done", "files": [], "checks": [], "research": [], "blockers": []}}
     for case in ("response", "queue", "blocker", "missing-report", "legacy", "migration"):
-        with tempfile.TemporaryDirectory(prefix="pb-pool-mode-") as directory:
+        with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-pool-mode-") as directory:
             root = Path(directory) / "project"
             root.mkdir()
             registry = Path(directory) / "private" / "agents.json"
@@ -52,7 +53,7 @@ def main():
                 B.set_session_modes(root, "P-ALL", "P-ALL", new=True)
                 args = argparse.Namespace(force=False, timeout=5, wait=30, mode="response" if case == "response" else None, cli="", model="", effort="", group="", dry_run=False)
                 task = B.find_task(root, "PB-001")
-                score = A.score_task(B, root, task)
+                score = SC.score_task(B, root, task)
                 if case in ("legacy", "migration"):
                     actor = AP.remember(model)
                     B.cmd_start(root, task["id"], agent=actor)

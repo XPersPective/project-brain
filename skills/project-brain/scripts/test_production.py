@@ -11,12 +11,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import brain as B
-import runtime_agents as A
+import runtime_actors as A
 import runtime_agent_pool as AP
 import runtime_protocol as R
+import runtime_scoring as SC
 import runtime_security as S
 import runtime_verify as V
-from test_routing import _project
+from test_helpers import make_project as _project, scrub_environ
 from test_brain import git
 
 
@@ -29,7 +30,7 @@ def denied(fn, *args, **kwargs):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="pb-production-") as directory:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-production-") as directory:
         root = Path(directory) / "project"
         root.mkdir()
         _project(root, legacy=False)
@@ -117,13 +118,13 @@ def main():
             args = SimpleNamespace(force=False, timeout=5, cli="", model="", effort="", group="", dry_run=False, readback=False)
             B.set_session_modes(root, "P-ALL", "P-ALL", new=True)
             with patch.object(AP, "journal_path", return_value=journal), patch.object(AP, "rpc", return_value={"id": "synthetic-complete", "state": "succeeded", "result": "ok"}) as rpc:
-                assert AP.delegate(B, root, task, A.score_task(B, root, task), args) == 0
-                assert AP.delegate(B, root, task, A.score_task(B, root, task), args) == 0
+                assert AP.delegate(B, root, task, SC.score_task(B, root, task), args) == 0
+                assert AP.delegate(B, root, task, SC.score_task(B, root, task), args) == 0
                 assert rpc.call_count == 1  # second readback transfers neither result nor commands
                 original_target = target.read_text(encoding="utf-8")
                 target.write_text(original_target + "\n## Target State\nRevised outcome\n", encoding="utf-8")
                 args.readback = True
-                assert AP.delegate(B, root, task, A.score_task(B, root, task), args) == 0
+                assert AP.delegate(B, root, task, SC.score_task(B, root, task), args) == 0
                 assert all(call.args[0] == "pool_get_task" for call in rpc.call_args_list)
                 target.write_text(original_target, encoding="utf-8")
             # Explicit budget can stop new check work without blocking cached proof.
@@ -221,7 +222,7 @@ def main():
             current_task = B.find_task(root, task["id"])
             bloated = B.parse_task(file, B.read(file) + "\n## Review\n" + "historical observation\n" * 100)
             assert bloated["lines"] > 80 and bloated["spec_lines"] < 80
-            assert A.score_task(B, root, bloated)["must_split"] == A.score_task(B, root, current_task)["must_split"]
+            assert SC.score_task(B, root, bloated)["must_split"] == SC.score_task(B, root, current_task)["must_split"]
             current_value = V.task_digest(B, root, current_task)[0]
             current_contract = B.contract(current_task)
             B.append_section(file, "Evidence", "- [visual] superseded fixture | criterion=deadbeef | by=lead | digest=" + "0" * 16 + " | contract=" + current_contract)
@@ -240,7 +241,7 @@ def main():
             denied(V.check, B, root, task["id"])
             S.configure(B, root, "vault-alias", "User approved an external project-specific store")
             denied(V.check, B, root, task["id"])
-            score = A.score_task(B, root, task)
+            score = SC.score_task(B, root, task)
             with patch.object(AP, "rpc", side_effect=AssertionError("secret task never sent")):
                 denied(AP.delegate, B, root, task, score, object())
 

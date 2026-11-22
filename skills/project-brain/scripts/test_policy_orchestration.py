@@ -11,37 +11,9 @@ import runtime_context as C
 import runtime_executor_policy as E
 import runtime_orchestration as O
 from test_executor_policy import policy
+from test_helpers import scrub_environ
 from test_orchestration import denied, report
 from test_orchestration_production import fixture
-
-
-@contextmanager
-def integrated_session():
-    """Exercise the parent's settings/confirmation overlay before it is integrated."""
-    original_get, original_require, original_packet = B.get_session_modes, B.require_session, C.packet
-
-    def get(root):
-        value = original_get(root)
-        value.update(E.settings(B, root))
-        # Mirror the parent's price/quality correction while the isolated policy
-        # module retains the first delivered revision.
-        for role, key in (("exec", "exec"), ("review", "rev")):
-            selected = E.selector(B, root, role)
-            if selected and selected["source"] == "native-cheap":
-                value[key] = "self_mixed"
-        return value
-
-    def require(root, implementation=False):
-        E.require_confirmed(B, root)
-        return original_require(root, implementation=implementation)
-
-    def packet(brain, root, value, kind="EXECUTE"):
-        E.require_confirmed(brain, root)
-        return original_packet(brain, root, value, kind)
-
-    with patch.object(B, "get_session_modes", get), patch.object(B, "require_session", require), \
-            patch.object(C, "packet", packet):
-        yield
 
 
 def choices(root, source="native-pinned", scheduling=None, **bounds):
@@ -62,7 +34,7 @@ def native_receipt(db, row, **extra):
 
 
 def main():
-    with integrated_session(), fixture() as (root, directory, db):
+    with scrub_environ(), fixture() as (root, directory, db):
         choices(root)
         candidate = {"host": "fixture-host", "model": "pinned-model"}
         denied(lambda: O.prepare(B, root, db, directory, "PB-001", "REVIEW", "native"), "candidate required")
@@ -94,7 +66,7 @@ def main():
         denied(lambda: O.submit(B, root, db, directory, second["id"]), "exact pins")
         assert db.get(second["id"])["state"] == "PREPARED"
 
-    with integrated_session(), fixture() as (root, directory, db):
+    with scrub_environ(), fixture() as (root, directory, db):
         candidate = {"host": "fixture-host", "model": "pinned-model", "effort": "high", "cheaper": True}
         choices(root, "native-cheap", effort={"selector": "user", "value": "high"})
         denied(lambda: O.prepare(B, root, db, directory, "PB-001", "REVIEW", "native",
@@ -110,7 +82,7 @@ def main():
         denied(lambda: native_receipt(db, high, effort="high", cheaper=1), "immutable native candidate")
         native_receipt(db, high, effort="high", cheaper=True)
 
-    with integrated_session(), fixture() as (root, directory, db):
+    with scrub_environ(), fixture() as (root, directory, db):
         choices(root)
         candidate = {"host": "fixture-host", "model": "pinned-model"}
         run = O.prepare(B, root, db, directory, "PB-001", "EXECUTE", "native", candidate=candidate)
@@ -137,7 +109,7 @@ def main():
         O.git(foreign, "init")
         denied(lambda: O.inherit_session(B, root, foreign, db, B.get_session_modes(root)), "same-repository origin")
 
-    with integrated_session(), fixture() as (root, directory, db):
+    with scrub_environ(), fixture() as (root, directory, db):
         choices(root, "cap-catalog")
         row = O.prepare(B, root, db, directory, "PB-001", "REVIEW", "pool")
         selected = {"selected": {"routeId": "r", "modelId": "m"},

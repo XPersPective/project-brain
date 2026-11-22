@@ -14,8 +14,8 @@ import time
 
 import brain as B
 import runtime_verify as V
-import runtime_pool as P
 import runtime_adopt as A
+from test_helpers import scrub_environ
 
 
 def command(*args):
@@ -25,7 +25,7 @@ def command(*args):
 def main():
     args = [r"C:\Program Files\Python\python.exe", "-c", 'print("quoted")', r"src\check.py"]
     assert V.command_argv(command(*args)) == args
-    with tempfile.TemporaryDirectory(prefix="pb-verify-audit-") as folder:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-verify-audit-") as folder:
         root = Path(folder)
         source = root / "src" / "sample.py"
         source.parent.mkdir()
@@ -115,7 +115,6 @@ Verify source and independent review.
         try:
             for operation in (
                 lambda: V.prune_runs(B, root),
-                lambda: P.session_file(root, runs / "agents.json"),
                 lambda: A._archive_path(root / "project", {"id": "test"}, runs),
             ):
                 try:

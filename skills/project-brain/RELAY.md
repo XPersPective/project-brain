@@ -7,21 +7,13 @@ as director and stops. BRP never logs in, logs out or edits credentials. QRP
 (same-account wait) is separate. Design: ADR-006; CAP contract:
 [references/director-contract.md](references/director-contract.md).
 
-## Setup (once, with ESP/SP/QRP)
+## Setup (opt-in power feature)
 
-User-facing setup is Turkish: **Çalışan seçimi** (ESP), **Çalışma düzeni** (SP),
-**Kota yenilenmesini bekleme** (QRP), **Yönetici devri** (BRP), and **Yeni
-yöneticinin seviyesi**. Use these names in the chat; internal English keys and
-exact Pool identifiers remain unchanged. The opening states the tool-first
-economy rule without promising measured minimum token usage. Show the batch once
-per new session, reuse answers during that session, and let successors inherit.
-
-`PB setup ask` prints one numbered batch with defaults (worker source and tier,
-serial/parallel + max workers, QRP, BRP + threshold, director tier). Relay the
-lines to the user unchanged. Save explicit answers with `PB policy --file …
---confirm`. Without a reply, call `PB setup wait` (≤60 s per call; check for a
-reply between calls) until it returns `TIMEOUT_REACHED`, then `PB setup defaults`.
-If the user says "use defaults", `PB setup defaults --accepted`.
+BRP is disabled by default in the safe core profile. Enable it explicitly via
+`PB policy --source mixed --relay on --relay-threshold 10 --confirm` (or a
+project-relative policy JSON file with `--file`). New sessions show a single
+confirmation line (`PB setup ask` → `PB setup confirm`); relay successors and
+workers inherit confirmed settings without prompts.
 
 ```json
 "relay": {"enabled": true, "threshold_percent": 10, "director_category": "same"}
@@ -30,9 +22,19 @@ If the user says "use defaults", `PB setup defaults --accepted`.
 `director_category` is a CAP category id (e.g. `high`) or `same` (default: the
 categories that contain the launcher's route/model). Or list exact routes instead:
 `"candidates": [{"route": "codex-acc2"}, {"route": "agy-local", "model": "gemini-4-argon"}]`.
-Optional `max_handoffs` (planned handoffs, default 50) and `takeover_minutes`
-(default 15). Worker tier is the ESP (`cap-category` categories, pins or native).
-While enabled, CAP workers also need quota above the threshold.
+Optional `max_handoffs` (planned handoffs, default 50; `0` = unlimited) and
+`takeover_minutes` (default 15). Worker tier is the ESP (`cap-category`, `mixed`,
+pins or native). While enabled, CAP workers also need quota above the threshold.
+If BRP is on, checkpoint preparation begins at `threshold + 5%` (`prepare_checkpoint`)
+and handoff triggers at `threshold`.
+
+When all candidates are quota-limited and CAP supports `wakeAt`, `relay recover
+--from-hook` emits `CAP_WAKE_AT` / `CAP_RETRY_AFTER` (exit 75) to schedule
+autonomous resume upon quota renewal. When CAP supports `quotaBarrier` and
+`supersede`, director submissions pass `stopOnQuotaBarrierPercent` and
+`supersedesTaskId`. `PB relay stop --note "<reason>"` requests a 2-minute
+graceful save-and-withdraw (`STOPPING`); the holder saves Resume and runs
+`relay complete`, or `relay stop` forces termination after 120 s.
 
 ## Start (launcher, execute session)
 

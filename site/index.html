@@ -32,7 +32,7 @@
   <main id="main">
     <section class="hero wrap">
       <div>
-        <p class="eyebrow">Open-source agent skill · MIT · <span data-version>v3.11.0</span></p>
+        <p class="eyebrow">Open-source agent skill · MIT · <span data-version>v4.0.0</span></p>
         <h1>One plan, many agents, <span class="accent">verified handoffs.</span></h1>
         <p class="lead">Long projects outlive sessions: tokens run out, sessions crash, you switch models or vendors.
           Project Brain keeps the goal, architecture, task plan and evidence <strong>in the repository</strong>,
@@ -110,11 +110,12 @@ NEXT: 'continue' starts the queue.</code></pre>
 
     <section id="install" class="wrap section">
       <h2>Install</h2>
-      <p>Version 3.11 adds a seven-item Turkish setup form, five-minute defaults,
-      explicit CLI pool fallback choices and graceful director transfer.
-      Same-session questions reuse context. Older project state upgrades on
-      normal session startup with backups; host wake/account support is required
-      for automatic quota recovery.</p>
+      <p>Version 4.0 separates the standalone core product from opt-in power features,
+      introduces an acyclic crash-safe Python 3.8+ runtime, streamlines new-session
+      setup to a default-safe single-line confirmation, makes model qualification
+      non-blocking advisory metadata, and cleanly delegates external CLI lifecycle
+      to the companion CLI Agent Pool. Older project state upgrades automatically
+      on normal startup with raw backups.</p>
       <p>Requirements: Git and Python 3.8+. Pick your agent:</p>
       <div class="installs">
         <div class="install">
@@ -144,11 +145,10 @@ NEXT: 'continue' starts the queue.</code></pre>
 
     <section id="pool" class="wrap section">
       <h2>CLI Agent Pool <span class="accent">(optional multi-CLI companion)</span></h2>
-      <p>Project Brain works standalone in <code>SOLO</code>, <code>NATIVE</code> (host subagents), or
-        <code>--backend direct</code> mode with zero extra tools. When you want to pool multiple installed AI CLIs
-        (Codex, Claude Code, OpenCode, ZCode, Qwen, MiniMax, Kimi, Local LLMs) with shared High / Medium / Low model
-        groups, fixed effort, native quota floors (10% worker / 25% lead reserve) and automatic daemon startup, install
-         the companion open-source <strong>CLI Agent Pool</strong>:</p>
+      <p>Project Brain works standalone in <code>solo</code> or <code>native</code> (host subagents) mode with zero extra tools.
+        External CLI agents are managed exclusively by the companion open-source <strong>CLI Agent Pool</strong>
+        (Codex, Claude Code, OpenCode, ZCode, Qwen, MiniMax, Kimi, Local LLMs) with shared model categories,
+        effort controls, native quota floors, durable runs, and optional Baton Relay director circulation:</p>
       <div class="installs">
         <div class="install">
           <h3>Install CLI Agent Pool (Node.js 24.7+ &amp; Python 3.11+)</h3>
@@ -157,9 +157,9 @@ NEXT: 'continue' starts the queue.</code></pre>
         </div>
         <div class="install">
           <h3>Repository &amp; Releases</h3>
-          <p>Configure your High / Medium / Low model pools once in the local CLI Agent Pool web dashboard; Project Brain
-            automatically wakes the local daemon on <code>127.0.0.1:43127</code> when you select <code>P-ALL</code>,
-            <code>P-ML</code>, or <code>P-L</code>.</p>
+          <p>Configure your model pools once in the local CLI Agent Pool web dashboard; Project Brain
+            automatically connects when you select <code>mixed</code>, <code>cap-category</code>,
+            <code>cap-catalog</code>, or <code>cap-pinned</code>.</p>
           <div class="cta">
             <a class="btn primary" href="https://github.com/XPersPective/cli-agent-pool">CLI Agent Pool on GitHub</a>
             <a class="btn" href="https://github.com/XPersPective/cli-agent-pool/releases/latest">Download Pool release</a>

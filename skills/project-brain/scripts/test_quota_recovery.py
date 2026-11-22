@@ -137,15 +137,67 @@ class RecoveryTests(unittest.TestCase):
             self.prepare()
 
     def test_linked_checkpoint_refused(self):
-        target = self.root / "actual.json"
-        target.write_text('{"handoff":"continue"}', encoding="utf-8")
-        self.file.unlink()
-        try:
+        import os, subprocess
+        if os.name == "nt":
+            outside = self.root / "outside_dir"
+            outside.mkdir()
+            (outside / "handoff.json").write_text('{"handoff":"continue"}', encoding="utf-8")
+            linked = self.root / ".project-brain/evidence/PB-002"
+            res = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(linked), str(outside)], capture_output=True)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            try:
+                with self.assertRaises(ValueError):
+                    Q.prepare(FakeBrain, self.root, snapshot(), self.policy,
+                              ".project-brain/evidence/PB-002/handoff.json", now=1000)
+            finally:
+                linked.rmdir()
+        else:
+            target = self.root / "actual.json"
+            target.write_text('{"handoff":"continue"}', encoding="utf-8")
+            self.file.unlink()
             self.file.symlink_to(target)
-        except OSError:
-            self.skipTest("symlink creation unavailable on this host")
-        with self.assertRaises(ValueError):
-            self.prepare()
+            with self.assertRaises(ValueError):
+                self.prepare()
+
+    def test_cap_snapshot_strict_normalization_and_resume(self):
+        cap_low = {
+            "accountId": "cap-acc-1",
+            "limitId": "cap-lim-1",
+            "ordinaryUsageAllowed": True,
+            "windows": [
+                {"name": "5h", "remainingPercent": 15, "resetAt": "2030-01-01T05:00:00.123Z", "windowDurationMins": 300},
+                {"name": "7d", "remainingPercent": 60, "resetAt": "2030-01-07T00:00:00Z", "windowDurationMins": 10080},
+                {"name": "extra", "remainingPercent": 80, "resetAt": "2030-01-10T00:00:00Z", "windowDurationMins": 20160},
+            ],
+        }
+        assessed = Q.assess(cap_low, self.policy, now=1893456000)
+        self.assertEqual(assessed["status"], "CHECKPOINT_REQUIRED")
+        prepared = Q.prepare(FakeBrain, self.root, cap_low, self.policy, self.checkpoint, now=1893456000)
+        Q.arm(FakeBrain, self.root, prepared["nonce"], "cap-auto-1")
+        cap_renewed = {
+            "accountId": "cap-acc-1",
+            "limitId": "cap-lim-1",
+            "ordinaryUsageAllowed": True,
+            "windows": [
+                {"name": "5h", "remainingPercent": 95, "resetAt": "2030-01-01T10:00:00Z", "windowDurationMins": 300},
+                {"name": "7d", "remainingPercent": 90, "resetAt": "2030-01-07T00:00:00Z", "windowDurationMins": 10080},
+                {"name": "extra", "remainingPercent": 90, "resetAt": "2030-01-10T00:00:00Z", "windowDurationMins": 20160},
+            ],
+        }
+        # check_resume must normalize CAP windows just like assess/prepare.
+        resumed = Q.check_resume(FakeBrain, self.root, cap_renewed, self.policy, prepared["nonce"], now=1893474001)
+        self.assertEqual(resumed["status"], "RESUMED")
+        # Missing accountId, resetAt, or remainingPercent must fail closed as UNKNOWN (never fabricate defaults).
+        for bad in (
+            {"windows": [{"name": "5h", "remainingPercent": 50, "resetAt": "2030-01-01T05:00:00Z"}]},
+            {"accountId": "cap-acc-1", "windows": [{"name": "5h", "remainingPercent": 50}]},
+            {"accountId": "cap-acc-1", "windows": [{"name": "5h", "resetAt": "2030-01-01T05:00:00Z"}]},
+        ):
+            self.assertEqual(Q.assess(bad, self.policy, now=1893456000)["status"], "UNKNOWN", bad)
+        # ordinaryUsageAllowed=False must return UNKNOWN even when remainingPercent is low.
+        disallowed = snapshot(used=95)
+        disallowed["ordinaryUsageAllowed"] = False
+        self.assertEqual(Q.assess(disallowed, self.policy, now=1000)["status"], "UNKNOWN")
 
     def test_checkpoint_change_or_loss_revokes(self):
         nonce = self.armed()

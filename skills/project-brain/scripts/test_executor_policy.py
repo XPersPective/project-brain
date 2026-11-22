@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import brain as B
 import runtime_executor_policy as E
+from test_helpers import scrub_environ
 
 
 def policy(source="native", **bounds):
@@ -216,7 +217,7 @@ def linked_paths(root):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="pb-executor-policy-") as directory:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-executor-policy-") as directory:
         root = Path(directory)
         project = root / "project"
         project.mkdir()

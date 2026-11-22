@@ -11,10 +11,11 @@ import tempfile
 from unittest.mock import patch
 
 import brain as B
-import runtime_agents as A
+import runtime_actors as A
 import runtime_agent_pool as AP
+import runtime_scoring as SC
 import runtime_verify as V
-from test_routing import _project
+from test_helpers import make_project as _project, scrub_environ
 
 
 def main():
@@ -37,7 +38,7 @@ def main():
             return {"id": "task-123", "state": "succeeded", "result": "checked", "report": {"status": "completed", "summary": "Checked", "files": [], "checks": [], "research": [], "blockers": []}, "effort": "high"}
         raise AssertionError(tool)
 
-    with tempfile.TemporaryDirectory(prefix="pb-agent-pool-") as directory:
+    with scrub_environ(), tempfile.TemporaryDirectory(prefix="pb-agent-pool-") as directory:
         root = Path(directory)
         registry = root / "external" / "agents.json"
         with patch.object(A, "DEFAULT_REGISTRY", registry), patch.object(AP, "rpc", side_effect=rpc), contextlib.redirect_stdout(io.StringIO()):
@@ -90,7 +91,7 @@ def main():
             B.set_session_modes(root, "P-ALL", "P-ALL", new=True)
             task = B.find_task(root, "PB-001")
             args = argparse.Namespace(force=False, timeout=5, cli="", model="", effort="", group="", dry_run=True)
-            score = A.score_task(B, root, task)
+            score = SC.score_task(B, root, task)
             assert AP.delegate(B, root, task, score, args) == 0
             assert not AP.journal_path(root, task["id"]).exists()
             args.dry_run = False

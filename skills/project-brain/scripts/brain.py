@@ -1,32 +1,39 @@
 #!/usr/bin/env python3
-"""project-brain 3.0 helper. Stdlib only, Python 3.8+.
+"""project-brain 4.0 helper. Stdlib only, Python 3.8+.
 
-  boot     [root]   State, target, plan, focus, recent work, files to load, next action. Run first.
+  orient   [root]   Bounded metadata orientation + automatic safe state upgrade.
+  boot     [root]   State, target, plan, focus, policy gate, files to load, next action.
+  brief    [root]   Read-only <=4 KiB continuity summary for intervening questions.
+  watch    [root]   Token-thrifty 1-line status for timers/observers.
+  setup    <ask|confirm|defaults|wait|recover-cap> [root]
+                    Default-safe single-line session policy setup and CAP fallback.
+  policy   [root]   View, quick-set, save, or confirm ESP, SP, QRP, and BRP.
+  qualify  [root]   Optional advisory model task-fit override (non-blocking).
+  quota    <status|assess|prepare|arm|resume|cancel> [root]
+                    Opt-in director quota checkpoint and host wake guards (QRP).
+  relay    <status|start|assess|next|handoff|takeover|complete|stop|recover> [root]
+                    Opt-in Baton Relay Policy (BRP) director circulation via CAP.
+  runs     <status|plan|prepare|submit|observe|wait|receipt|report|verify|integrate|cancel|...> [root]
+                    Opt-in durable worker orchestration with isolated Git worktrees.
   map      [root]   Compact repository overview (genesis; replaces manual exploration).
   init     [root]   Create .project-brain/ skeleton. Never overwrites.
   new      <root> "title" [--priority P1|P2|P3] [--tier L|M|H] [--risk LOW|MEDIUM|HIGH] [--depends PB-001]
-                    Create the next task file. IDs are never reused (Git history checked).
+  intake   [root]   Record durable multi-item user directives or questions.
+  reconcile/progress/handoff <task> [root]   Protocol 1 intent reconciliation and checkpoints.
   start    <task> [root] [--agent <alias>] [--takeover "<reason>"]
-                    Start or resume a task, recording Owner, Risk, and source/contract digests.
-  check    <task> [root] [--timeout <sec>] [--as <alias>]
-                    Run task Verify commands inside ProcessTree and record digest-bound machine evidence.
-  evidence <task> [root] --kind <kind> --note "<text>" [--criterion <id>] [--file <relpath>] [--as <alias>]
-                    Record digest-bound non-machine evidence (visual, interaction, accessibility, etc.).
+  check    <task> [root] [--timeout <sec>] [--as <alias>] [--rerun]
+  evidence <task> [root] --kind <kind> --note "<text>" [--criterion <id>] [--file <relpath>]
   review   <task> [root] --reviewer <alias> --verdict PASS|BLOCKED [--finding "SEVERITY: text"]
-                    Record independent review bound to current source and contract digests.
   accept   <task> [root] [--as <alias>]
-                    Verify all acceptance criteria, machine checks, evidence, and review; mark DONE.
   score    [task] [root] [--write] [--json]
-                    Measure task complexity (0-100), computed Tier (L/M/H), effort, risk floor & delegation eligibility.
-  agents   <scan|list|quota|select|merge> ...
-                    Discover installed CLI coding agents, read live subscription quotas, and select optimal models.
-  delegate <task> [root] [--cli <cli>] [--model <alias>] [--effort <effort>] [--dry-run] [--force]
-                    Dispatch a READY/IN_PROGRESS Tier L/M task to a CLI worker agent in ProcessTree + auto-check.
+  agents   <scan|list|quota|select|mode> ...   CLI Agent Pool (CAP) discovery & session modes.
+  delegate <task> [root] [--readback] ...      Legacy CAP readback/compatibility path.
+  protocol/security [root]   Protocol 1 toggle and secret-reference / staged-byte scanning.
   changed  [root]   Domains changed since their Current checkpoints.
-  validate [root]   Structural checks, executable-spec checks, UI/Backend quality checks, size budgets.
-  migrate  [root] [--apply]   Convert a legacy Brain (schema <=3 or PROJECT_BRAIN.md); preview by default.
-  legacy   [root] [--apply]   Detect and adopt foreign planning systems (.taskmaster, .planning, etc.).
-  doctor   [root]   Verify Python runtime, ProcessTree containment, Git, and CLI agent readiness.
+  validate [root]   Structural, executable-spec, UI/Backend quality, and size-budget checks.
+  migrate  [root] [--apply]   Convert legacy Brain (schema <=3 or PROJECT_BRAIN.md).
+  legacy   [root] [--apply|--prepare|--verify|--cleanup]   Foreign tracker adoption.
+  doctor   [root]   Verify Python runtime, ProcessTree containment, Git, and CAP readiness.
 
 Exit: 0 ok, 1 warnings / pending review or user feedback, 2 errors / blocked, 3 no Project Brain.
 """
@@ -41,22 +48,40 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
-import subprocess
 import sys
-import tempfile
-import time
 
-VERSION = "3.12.0"
-SCHEMA = 4
-BRAIN_DIR = ".project-brain"
-LEGACY_FILE = "PROJECT_BRAIN.md"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import migrate as M
+import runtime_actors as A
+import runtime_adopt as D
+import runtime_agent_pool as AP
+import runtime_control as CT
+import runtime_core as Core
+import runtime_executor_policy as E
+import runtime_orchestration as O
+import runtime_protocol as R
+import runtime_quota_recovery as Q
+import runtime_relay as RL
+import runtime_scoring as SC
+import runtime_security as S
+import runtime_session as RS
+import runtime_setup as SU
+import runtime_verify as V
+
+M.bind(sys.modules[__name__])
+
+VERSION = Core.VERSION
+SCHEMA = Core.SCHEMA
+BRAIN_DIR = Core.BRAIN_DIR
+LEGACY_FILE = Core.LEGACY_FILE
 STATUS_VALUES = ("IN_PROGRESS", "REVIEW", "READY", "PLANNED", "BLOCKED")
 RISK_VALUES = ("LOW", "MEDIUM", "HIGH")
 PRIORITY_VALUES = ("P1", "P2", "P3")
 TIER_VALUES = ("L", "M", "H")
-EXEC_MODES = ("pool_mixed", "pool_med_low", "pool_low", "self_mixed", "self_and_lower", "solo")
+EXEC_MODES = ("mixed", "pool_mixed", "pool_med_low", "pool_low", "self_mixed", "self_and_lower", "solo")
 REV_MODES = EXEC_MODES
 MODE_ALIASES = {
+    "mixed": "mixed",
     "pool": "pool_mixed", "pool-all": "pool_mixed", "pool-medium": "pool_med_low",
     "native": "self_mixed", "native-low": "self_and_lower",
     "p-all": "pool_mixed", "pool_all": "pool_mixed", "pool-mixed": "pool_mixed", "pool_mixed": "pool_mixed",
@@ -93,7 +118,6 @@ VAGUE_RE = re.compile(
     re.I,
 )
 TASK_FILE_RE = re.compile(r"^PB-(\d+)\.md$")
-ADR_FILE_RE = re.compile(r"^ADR-(\d+)\.md$")
 HEADER_RE = re.compile(
     r"^\**(status|priority|tier|risk|owner|depends|dependencies|areas|affected areas|domains|blocked|inputs|purpose|secrets)\**:\s*(.*)$",
     re.I,
@@ -229,20 +253,8 @@ Before any work, load the `project-brain` skill and run its boot step; follow it
 # ── small helpers & atomic I/O ────────────────────────────────────────────
 
 def git(root, *args, timeout=60):
-    """Run git; return stdout (right-stripped) or None on failure."""
-    try:
-        r = subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            stdin=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return r.stdout.rstrip() if r.returncode == 0 else None
+    """Run git with secret-scrubbed env; return stdout (right-stripped) or None on failure."""
+    return Core.run_git(root, *args, timeout=timeout)
 
 
 def git_paths(root, *args):
@@ -260,77 +272,36 @@ def read(path):
 
 def write_atomic(path, content):
     """Crash-safe LF-normalized atomic file replacement."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = content.replace("\r\n", "\n").replace("\r", "\n")
-    if not text.endswith("\n"):
-        text += "\n"
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    Core.write_atomic(path, content)
 
 
 @contextmanager
 def checkout_lock(root, timeout=15.0, name="writer.lock"):
-    """OS-released lock: a slow/live writer never becomes stale merely with age."""
-    import runtime_verify as V
-
-    b = bp(root)
-    if not b.is_dir():
+    """OS-released lock; serializes operations even before .project-brain/ exists."""
+    with Core.project_lock(root, timeout=timeout, name=name):
         yield
-        return
-    cache = V.public_path(root, BRAIN_DIR + "/.cache")
-    cache.mkdir(parents=True, exist_ok=True)
-    lock_file = V.public_path(root, BRAIN_DIR + "/.cache/" + name)
-    deadline = time.monotonic() + timeout
-    with lock_file.open("a+b") as stream:
-        while True:
-            try:
-                if os.name == "nt":
-                    import msvcrt
-                    stream.seek(0)
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    raise ValueError(f"Timed out waiting for {lock_file}; another Project Brain command may be running")
-                time.sleep(0.05)
-        try:
-            yield
-        finally:
-            if os.name == "nt":
-                stream.seek(0)
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-        # Keep the inode: unlinking permits two processes to lock different files.
 
 
 @contextmanager
 def startup_lock(root):
-    """Validate before mutation; serialize even the first single-file upgrade."""
-    import migrate as M
-    import runtime_verify as V
-
+    """Lock BEFORE validating or creating .project-brain/ during startup upgrades."""
     M.require_supported(root)
-    if not merge_op(root):
+    if merge_op(root):
+        yield
+        return
+    kind = legacy_kind(root)
+    needs_upgrade = bool(kind)
+    if not needs_upgrade and brain_exists(root):
+        cfg = parse_config(root)
+        needs_upgrade = cfg.get("skill_version", "") != VERSION or M.has_pending_upgrade(root, force_all=False)
+    if not needs_upgrade:
+        yield
+        return
+    with checkout_lock(root):
+        M.require_supported(root)
         M.require_known_legacy(root)
         if legacy_kind(root) == "v0":
-            V.public_path(root, BRAIN_DIR).mkdir(parents=True, exist_ok=True)
-    with checkout_lock(root):
+            Core.public_path(root, BRAIN_DIR).mkdir(parents=True, exist_ok=True)
         yield
 
 
@@ -452,8 +423,7 @@ def normalize_mode(val, role="exec"):
 
 
 def session_modes_file(root):
-    import runtime_verify as V
-    return V.public_path(root, BRAIN_DIR + "/.cache/session_modes.json")
+    return Core.public_path(root, BRAIN_DIR + "/.cache/session_modes.json")
 
 
 def get_session_modes(root):
@@ -466,7 +436,7 @@ def get_session_modes(root):
         try:
             p = session_modes_file(root)
             if p.is_file():
-                data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+                data = Core.read_json(p, max_bytes=65536, strict_constants=True)
                 if isinstance(data, dict) and (not os.environ.get("PB_SESSION_ID") or data.get("session_id") == os.environ["PB_SESSION_ID"]):
                     if not out["exec"] and data.get("exec"):
                         out["exec"] = normalize_mode(str(data["exec"]), "exec")
@@ -481,7 +451,6 @@ def get_session_modes(root):
                         out["task_mode"] = data["task_mode"]
         except (ValueError, OSError):
             pass
-    import runtime_executor_policy as E
     out.update(E.settings(sys.modules[__name__], root))
     return out
 
@@ -521,17 +490,15 @@ def set_session_modes(root, exec_mode="", rev_mode="", note="", new=False, sched
     return cur
 
 
-def require_session(root, implementation=False):
-    import runtime_executor_policy as E
+def require_session(root, implementation=False, allow_stopping=False):
     E.require_confirmed(sys.modules[__name__], root)
-    import runtime_quota_recovery as Q
     if Q.status(sys.modules[__name__], root)["status"] in ("PREPARED", "ARMED"):
         raise ValueError("QRP_WAIT: read back/resume or cancel director recovery before new work")
-    import runtime_relay as RL
-    RL.require_free_or_director(sys.modules[__name__], root)
+    RL.require_free_or_director(sys.modules[__name__], root, allow_stopping=allow_stopping)
     modes = get_session_modes(root)
     if not modes["exec"] or not modes["rev"]:
-        raise ValueError("SESSION_CHOICE_REQUIRED: choose EXEC, REV, serial/parallel and response/execute before implementation; use `agents mode`")
+        hint = "`setup confirm` / `policy --confirm`" if E.load(sys.modules[__name__], root) else "`setup confirm` or `agents mode`"
+        raise ValueError(f"SESSION_CHOICE_REQUIRED: confirm session policy before implementation; use {hint}")
     if implementation and modes["task_mode"] == "response":
         raise ValueError("RESPONSE_ONLY: session permits analysis; switch task-mode to execute before implementation")
     return modes
@@ -539,8 +506,6 @@ def require_session(root, implementation=False):
 
 def takeover_status(root, active, has_git, dirty_other):
     """Determine whether the takeover test suite must run or can be skipped to save tokens."""
-    import runtime_verify as V
-
     if not has_git:
         return "REQUIRED (no git baseline)"
     outside = [p for p in dirty_other if not active or not any(matches(p, a) for a in active.get("areas", []))]
@@ -565,8 +530,6 @@ def takeover_status(root, active, has_git, dirty_other):
 
 def proven_criteria_ids(root, task):
     """Return set of criterion IDs already proven on current source digest and contract."""
-    import runtime_verify as V
-
     if not task or not task.get("areas"):
         return set()
     try:
@@ -821,8 +784,6 @@ def start_records(task):
 
 
 def task_errors(task):
-    import runtime_agents as A
-
     errs = []
     if task.get("purpose", "implementation") not in ("implementation", "discovery"):
         errs.append("Purpose must be implementation or discovery")
@@ -842,7 +803,7 @@ def task_errors(task):
         errs.append(f"unknown Acceptance kind tag(s): {', '.join(task['bad_items'])} (allowed: {', '.join(KINDS)})")
     if any(p in task.get("text", "") for p in PLACEHOLDERS):
         errs.append("unfilled template placeholders")
-    if A.task_surface(task)["ui"]:
+    if SC.task_surface(task)["ui"]:
         kinds = {item["kind"] for item in task.get("items", [])}
         missing = [k for k in ("visual", "interaction", "accessibility") if k not in kinds]
         if missing:
@@ -852,18 +813,23 @@ def task_errors(task):
 
 def list_tasks(root):
     d = bp(root) / "tasks"
-    if not d.is_dir():
+    if not d.is_dir() or Core.is_link(d):
         return []
-    tasks = [parse_task(f) for f in d.iterdir() if TASK_FILE_RE.match(f.name)]
-    return sorted((t for t in tasks if t), key=lambda t: int(t["id"][3:]))
+    tasks = []
+    for f in d.iterdir():
+        if TASK_FILE_RE.match(f.name) and not Core.is_link(f):
+            parsed = parse_task(f)
+            if parsed:
+                tasks.append(parsed)
+    return sorted(tasks, key=lambda t: int(t["id"][3:]))
 
 
 def load_task(root, task_id):
     try:
         tid = norm_id("PB", task_id)
+        p = Core.public_path(root, BRAIN_DIR + "/tasks/" + tid + ".md")
     except ValueError:
         return None
-    p = bp(root) / "tasks" / f"{tid}.md"
     return parse_task(p) if p.is_file() else None
 
 
@@ -1105,10 +1071,11 @@ def repo_files(root, has_git):
         if files is not None:
             return [f for f in files if not f.startswith(BRAIN_DIR + "/")]
     files = []
-    for dp, dns, fns in os.walk(root):
-        dns[:] = [d for d in dns if d not in SKIP_DIRS]
+    for dp, dns, fns in os.walk(root, followlinks=False):
+        base = Path(dp)
+        dns[:] = [d for d in dns if d not in SKIP_DIRS and not Core.is_link(base / d)]
         rel = os.path.relpath(dp, root).replace(os.sep, "/")
-        files += [fn if rel == "." else f"{rel}/{fn}" for fn in fns]
+        files += [fn if rel == "." else f"{rel}/{fn}" for fn in fns if not Core.is_link(base / fn)]
     return files
 
 
@@ -1159,10 +1126,9 @@ def detect_commands(root):
 
 def committed_exact(root, path):
     """Current file and index both match a recoverable HEAD blob (including filters)."""
-    import runtime_verify as V
     try:
         rel = Path(path).relative_to(root).as_posix()
-        file = V.public_path(root, rel)
+        file = Core.public_path(root, rel)
         if not file.is_file():
             return False
         head = git(root, "rev-parse", "--verify", "HEAD:" + rel)
@@ -1174,70 +1140,65 @@ def committed_exact(root, path):
 
 
 def watch_status(root, heal=False):
-    """Produces an ultra-compact, token-thrifty 1-line status for observers/watchdogs and timers."""
-    import datetime
-    import runtime_relay as RL
+    """Token-thrifty, lightweight 1-line status for observers/watchdogs (zero full-file hashing)."""
     root = Path(root).resolve()
-    now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if heal:
-        try:
-            lock_file = root / BRAIN_DIR / "checkout.lock"
-            if lock_file.exists() and time.time() - lock_file.stat().st_mtime > 120:
-                lock_file.unlink()
-        except Exception:
-            pass
+    now_iso = Core.now_iso()
     tasks = list_tasks(root)
     total_tasks = len(tasks)
-    active = next((t for t in tasks if t["status"] in ("IN_PROGRESS", "REVIEW")), None)
+    # Match boot & brief: IN_PROGRESS takes precedence over REVIEW.
+    active = next((t for st in ("IN_PROGRESS", "REVIEW") for t in tasks if t["status"] == st), None)
     done_count = sum(1 for t in tasks if t["status"] == "DONE")
     left_count = total_tasks - done_count
     rem_pct = int(round((left_count / total_tasks * 100))) if total_tasks > 0 else 0
     cur_str = "none"
     if active:
         tid = active["id"]
-        stage_pct = 50 if active["status"] == "REVIEW" else 25
-        try:
-            proven = proven_criteria_ids(root, active)
-            crit_count = len(active.get("criteria", []))
-            if crit_count > 0:
-                stage_pct = int(round((len(proven) / crit_count) * 100))
-        except Exception:
-            pass
+        items = active.get("items", [])
+        if items:
+            done_items = sum(1 for it in items if it.get("done"))
+            stage_pct = int(round((done_items / len(items)) * 100))
+        else:
+            stage_pct = 50 if active["status"] == "REVIEW" else 25
         cur_str = "%s(%s,%d%%)" % (tid, active["status"], stage_pct)
     modes = get_session_modes(root)
-    mode_str = modes.get("exec") or "solo"
+    mode_str = modes.get("exec") or "unset"
     route_str = "host"
     quota_str = "?"
-    pool_str = "native"
+    if mode_str == "mixed" or mode_str.startswith("pool_"):
+        pool_str = "pool"
+    elif mode_str in ("solo", "unset"):
+        pool_str = mode_str
+    else:
+        pool_str = "native"
     relay_st = None
     try:
         relay_st = RL.read(sys.modules[__name__], root)
     except Exception:
         pass
-    if relay_st and relay_st.get("director"):
+    if relay_st and relay_st.get("status") in RL.BLOCKING and relay_st.get("director"):
         d = relay_st["director"]
         route_str = d.get("route", "route")
         if d.get("model"):
             route_str += "/" + d["model"].split("/")[-1]
-        pool_str = "pool"
-    try:
-        q_cache = root / BRAIN_DIR / ".cache" / "quotas.json"
-        if q_cache.exists():
-            q_data = json.loads(q_cache.read_text(encoding="utf-8"))
-            rem = RL.remaining(q_data)
-            if rem is not None:
-                quota_str = "%d%%" % rem
-    except Exception:
-        pass
-    return "%s | %s/%s/%s/%s | cur:%s | rem:%d%%(%d/%d)" % (
-        now_iso, mode_str, route_str, quota_str, pool_str, cur_str, rem_pct, left_count, total_tasks)
+        pool_str = "relay:" + relay_st["status"].lower()
+    heal_note = ""
+    if heal:
+        # Never unlink OS lock inodes; only report active runs needing readback.
+        try:
+            pending_runs = O.L.peek(sys.modules[__name__], root)
+            if pending_runs:
+                heal_note = " | runs:%d" % len(pending_runs)
+        except Exception:
+            pass
+    return "%s | %s/%s/%s/%s | cur:%s | rem:%d%%(%d/%d)%s" % (
+        now_iso, mode_str, route_str, quota_str, pool_str, cur_str, rem_pct, left_count, total_tasks, heal_note
+    )
 
 
 def gc_brain(root, has_git=None, completed=None):
     """Collect only recoverable closed work; preserve unknown/active recovery inputs."""
-    import runtime_verify as V
     root = Path(root)
-    b = V.public_path(root, BRAIN_DIR)
+    b = Core.public_path(root, BRAIN_DIR)
     if not b.is_dir():
         return []
     if has_git is None:
@@ -1248,16 +1209,13 @@ def gc_brain(root, has_git=None, completed=None):
         _, completed = history_task_ids(root)
     removed = []
     for task in list_tasks(root):
-        if (task["status"] == "DONE" and task["has_evidence"]
-                and task["id"] in completed and committed_exact(root, task["file"])):
+        if task["status"] == "DONE" and task["has_evidence"] and task["id"] in completed and committed_exact(root, task["file"]):
             task["file"].unlink()
             removed.append(f"tasks/{task['id']}.md")
-    # A remaining task, including dirty DONE, still owns all its evidence and logs.
     retained = {t["id"] for t in list_tasks(root)}
     closed = completed - retained
     active_checkpoints = set()
     try:
-        import runtime_relay as RL
         st = RL.read(sys.modules[__name__], root)
         if st:
             for cp in ((st.get("pending") or {}).get("checkpoint"), st.get("last_checkpoint")):
@@ -1267,7 +1225,8 @@ def gc_brain(root, has_git=None, completed=None):
                         active_checkpoints.add(parts[2])
     except Exception:
         pass
-    ev_root = V.public_path(root, BRAIN_DIR + "/evidence")
+    root_abs = Path(root).resolve()
+    ev_root = Core.public_path(root_abs, BRAIN_DIR + "/evidence")
     if ev_root.is_dir():
         for directory in sorted(ev_root.iterdir()):
             if not re.fullmatch(r"PB-\d{3,}", directory.name) or directory.name not in closed or directory.name in active_checkpoints:
@@ -1275,39 +1234,35 @@ def gc_brain(root, has_git=None, completed=None):
             if (directory / "handoff.json").exists():
                 continue
             try:
-                V.public_path(root, directory.relative_to(root).as_posix())
+                Core.public_path(root_abs, directory.relative_to(root_abs).as_posix())
                 if not directory.is_dir():
                     continue
-                files = list(directory.rglob("*"))
-                if any(V.is_link(f) for f in files):
+                files = Core.iter_files(directory)
+                has_link = False
+                for dp, dns, fns in os.walk(str(directory), topdown=True, followlinks=False):
+                    base_d = Path(dp)
+                    if any(Core.is_link(base_d / entry) for entry in dns + fns):
+                        has_link = True
+                        break
+                if has_link:
                     continue
-                if all(committed_exact(root, f) for f in files if f.is_file()):
-                    # Every resolved target above stays inside the evidence directory.
+                if all(committed_exact(root, f) for f in files):
                     shutil.rmtree(directory)
                     removed.append(f"evidence/{directory.name}/")
             except (ValueError, OSError):
                 continue
-    runs = V.public_path(root, BRAIN_DIR + "/.cache/runs")
+    runs = Core.public_path(root, BRAIN_DIR + "/.cache/runs")
     if runs.is_dir():
         for file in sorted(runs.iterdir()):
             match = re.match(r"^(PB-\d{3,})-", file.name)
-            if match and match.group(1) in closed and file.is_file() and not V.is_link(file):
+            if match and match.group(1) in closed and file.is_file() and not Core.is_link(file):
                 file.unlink()
                 removed.append(".cache/runs/" + file.name)
-    # Existing bounded pruning preserves every cited log, unlike a per-task cap.
     V.prune_runs(sys.modules[__name__], root)
-    # Backups, legacy originals and atomic-write temp files need reconciliation or
-    # writer ownership; a checkpoint/age alone does not authorize their deletion.
     return removed
 
 
-# ── commands ──────────────────────────────────────────────────────────────
-
 def cmd_boot(root, maintain=True, new_session=False):
-    import runtime_agents as A
-    import runtime_verify as V
-    import migrate as M
-
     has_git = git(root, "rev-parse", "--is-inside-work-tree") == "true"
     maintain = maintain and not merge_op(root)
     auto_mig_notes = M.startup(root, maintain=maintain)
@@ -1318,32 +1273,24 @@ def cmd_boot(root, maintain=True, new_session=False):
         print("NEXT: Upgrade deferred by read-only startup or Git operation. Normal orient/boot upgrades recognized legacy state automatically when that condition clears.")
         return 0
     if not brain_exists(root):
-        foreign = A.detect_foreign(root)
+        foreign = D.detect_foreign(root)
         print("STATE: NO_BRAIN")
-        import runtime_pool as P
-        for line in (
-            P.summary(sys.modules[__name__], root)
-            if os.environ.get("PB_AGENTS_REGISTRY")
-            else ["MODEL_POOL: ASK_USER_EVERY_SESSION | EXEC: pool_mixed|pool_med_low|pool_low|self_mixed|self_and_lower|solo | REV: pool_mixed|pool_med_low|pool_low|self_mixed|self_and_lower|solo"]
-        ):
-            print(line)
         for fname, fpaths in foreign:
             print(f"  ! foreign planning state detected: {fname} ({', '.join(fpaths)}) -> run `legacy` to preview adoption")
-        print("NEXT: Substantial work -> SKILL.md Genesis (`map`, then `init`). Small request -> just do it.")
+        print("NEXT: Substantial work -> WORKFLOW.md §7 Genesis (`map`, then `init`). Small request -> just do it.")
         return 0
-    import runtime_relay as RL
     if new_session and maintain and RL.authorized(sys.modules[__name__], root):
-        # A relay successor inherits the launcher's confirmed settings and session modes.
         print("RELAY_SUCCESSOR: settings inherited; ask no setup questions and do not repeat recorded discovery/verification.")
     elif new_session and maintain:
         set_session_modes(root, new=True)
-        import runtime_executor_policy as E
         E.begin_session(sys.modules[__name__], root)
     cfg = parse_config(root)
     every_ids, completed_ids = history_task_ids(root) if has_git else (set(), set())
     gc_removed = gc_brain(root, has_git=has_git, completed=completed_ids) if maintain and not legacy else []
     if gc_removed:
-        auto_mig_notes.append(f"GC_CLEANUP: removed {', '.join(gc_removed)}")
+        sample = ", ".join(gc_removed[:10])
+        suffix = f" (+{len(gc_removed) - 10} more)" if len(gc_removed) > 10 else ""
+        auto_mig_notes.append(f"GC_CLEANUP: removed {sample}{suffix}")
     all_tasks = list_tasks(root)
     tasks = [t for t in all_tasks if t["status"] != "DONE" or not t["has_evidence"]]
     open_ids = {t["id"] for t in tasks}
@@ -1379,7 +1326,9 @@ def cmd_boot(root, maintain=True, new_session=False):
         if e["state"] in ("sent", "response_unknown")
     ]
     if unresolved_ext:
-        notes.append("READBACK_FIRST unresolved external operations: " + ", ".join(f"{tid}:{op}" for tid, op in unresolved_ext))
+        ext_sample = ", ".join(f"{tid}:{op}" for tid, op in unresolved_ext[:8])
+        ext_more = f" (+{len(unresolved_ext) - 8} more)" if len(unresolved_ext) > 8 else ""
+        notes.append("READBACK_FIRST unresolved external operations: " + ext_sample + ext_more)
 
     active = ip[0] if ip else (rev_tasks[0] if rev_tasks else None)
 
@@ -1436,33 +1385,23 @@ def cmd_boot(root, maintain=True, new_session=False):
         state = "READBACK_FIRST"
     print(f"STATE: {state}")
     print(gitline)
-    import runtime_pool as P
     s_modes = get_session_modes(root)
-    import runtime_executor_policy as E
     try:
         E.require_confirmed(sys.modules[__name__], root)
         policy_ready = True
     except ValueError:
         policy_ready = False
-    print("SESSION_GATE: " + ("READY" if s_modes["exec"] and s_modes["rev"] and policy_ready else "CONFIRM_ESP_SP_QRP"))
+    gate_ready = bool(s_modes["exec"] and s_modes["rev"] and policy_ready)
+    print("SESSION_GATE: " + ("READY" if gate_ready else "CONFIRM_SESSION_POLICY"))
     print(f"WORK: {s_modes['task_mode']} | {s_modes['schedule']} | max_parallel={s_modes['max_parallel']}")
-    import runtime_relay as RL
+    if not gate_ready:
+        print("SETUP_HINT: " + SU.summary_line(SU.defaults(sys.modules[__name__], root)) + " (run `setup ask` or `setup confirm`)")
     relay_line = RL.boot_line(sys.modules[__name__], root)
     if relay_line:
         print(relay_line)
-    if os.environ.get("PB_AGENTS_REGISTRY"):
-        for line in P.summary(sys.modules[__name__], root):
-            print(line)
-    elif s_modes["exec"] or s_modes["rev"]:
-        print(f"MODEL_POOL: RECORDED (confirm once for a new top-level session) exec={s_modes['exec'] or s_modes['rev']} rev={s_modes['rev'] or s_modes['exec']}")
-    else:
-        print("MODEL_POOL: ASK_USER_AT_SESSION_START | Ask user once at session start for EXEC and REV (P-ALL|P-ML|P-L|S-ALL|S-ML|SOLO), then execute and review autonomously without stopping")
-    import runtime_protocol as R
-    import runtime_security as S
     print("PROTOCOL: " + ("1 (intent/input guards active)" if R.enabled(sys.modules[__name__], root) else "0 (legacy compatibility; run `protocol --enable` before new implementation)"))
     print("SECRETS: " + (S.policy(sys.modules[__name__], root).get("reference") or "ASK_ONCE: choose an external symbolic reference or none"))
     print(f"TAKEOVER_CHECK: {takeover_status(root, active, has_git, other)}")
-    import runtime_session as RS
     RS.boot_summary(sys.modules[__name__], root)
     for n in notes:
         print(f"  ! {n}")
@@ -1507,8 +1446,8 @@ def cmd_boot(root, maintain=True, new_session=False):
             if focus["checkboxes"]
             else "acceptance has no checkboxes"
         )
-        sinfo = A.score_task(sys.modules[__name__], root, focus)
-        del_hint = "delegatable->`delegate`" if sinfo["delegatable"] else f"role={sinfo['recommended_role']}"
+        sinfo = SC.score_task(sys.modules[__name__], root, focus)
+        del_hint = "delegatable->`runs`" if sinfo["delegatable"] else f"role={sinfo['recommended_role']}"
         print(
             f"FOCUS {focus['id']} ({focus['status']}, {focus['priority']}, tier {focus['tier'] or '?'}->{sinfo['effective_tier']}, "
             f"risk {focus['risk'] or '?'}->{sinfo['effective_risk']}, score {sinfo['score']}/100, effort {sinfo['recommended_effort']}, {del_hint}): {progress}"
@@ -1526,7 +1465,7 @@ def cmd_boot(root, maintain=True, new_session=False):
             print(f"  proven on current digest (DO NOT repeat): {', '.join(sorted(proven_ids))}")
         open_objs = [it for it in focus["items"] if not it["done"] and it["id"] not in proven_ids]
         for it in open_objs[:5]:
-            print(f"  - [ ] [{it['kind']}] {it['text']} (criterion {it['id']})")
+            print(f"  - [ ] [{it['kind']}] {it['text'][:120]} (criterion {it['id']})")
     if focus:
         missing = [
             n for n, ok in (
@@ -1537,16 +1476,19 @@ def cmd_boot(root, maintain=True, new_session=False):
             if not ok
         ]
         if missing:
-            print(f"  ! {focus['id']} is not an executable spec (missing {', '.join(missing)}): write them first (SKILL.md section 5)")
+            print(f"  ! {focus['id']} is not an executable spec (missing {', '.join(missing)}): write them first (WORKFLOW.md §3)")
     if promote:
         print(f"  hint: deps done, write full specs and set READY: {', '.join(promote)}")
     if since_audit >= 5:
-        print(f"  hint: {since_audit} tasks closed since the last plan audit -> run Plan audit (SKILL.md section 6)")
+        print(f"  hint: {since_audit} tasks closed since the last plan audit -> run Plan audit (WORKFLOW.md §6)")
     if recent:
         print("RECENT: " + "; ".join(f"{ids} by {agent} ({sha})" for ids, agent, sha in recent))
     if stale or unmapped:
-        for d, files in stale.items():
+        stale_items = list(stale.items())
+        for d, files in stale_items[:8]:
             print(f"STALE {d}: {', '.join(files[:5])}{' ...' if len(files) > 5 else ''}")
+        if len(stale_items) > 8:
+            print(f"STALE: ... {len(stale_items) - 8} more domains")
         if unmapped:
             print(f"UNMAPPED: {', '.join(unmapped[:8])}{' ...' if len(unmapped) > 8 else ''}")
 
@@ -1559,13 +1501,9 @@ def cmd_boot(root, maintain=True, new_session=False):
             if fixed is None or not focus["domains"] or fixed in focus["domains"]
         ]
         for n in sorted(set(re.findall(r"ADR-(\d+)", focus["text"]))):
-            adr = (
-                next((f for f in (bp(root) / "decisions").glob(f"ADR-{int(n):03d}*.md")), None)
-                if (bp(root) / "decisions").is_dir()
-                else None
-            )
-            if adr:
-                load.append(adr)
+            matched = R.resolve_adr_files(sys.modules[__name__], root, n)
+            if matched:
+                load.append(matched[0])
     else:
         load += [f for f, _ in current_files(root)]
     load += [f for f in (bp(root) / "target.md",) if f.exists()]
@@ -1578,7 +1516,10 @@ def cmd_boot(root, maintain=True, new_session=False):
         name = Path(os.path.relpath(f, root)).as_posix()
         return f"{name} (lines {rng})" if rng else name
 
-    print("LOAD: " + " ".join(show(x) for x in load))
+    load_shown = [show(x) for x in load[:12]]
+    if len(load) > 12:
+        load_shown.append(f"(+{len(load) - 12} more)")
+    print("LOAD: " + " ".join(load_shown))
     cmds = {k: v for k, v in cfg.get("commands", {}).items() if v}
     if cmds:
         print("CMDS: " + " | ".join(f"{k}={v}" for k, v in cmds.items()))
@@ -1599,8 +1540,8 @@ def cmd_boot(root, maintain=True, new_session=False):
             nxt = f"REVIEW {focus['id']}: an independent reviewer agent that did not implement {focus['id']} runs `review {focus['id']} --reviewer <alias> --verdict PASS|BLOCKED`, then `accept {focus['id']}`."
         elif focus:
             nxt = (
-                f"Route the user's request before tests or writes (SKILL.md sections 2-3). If authorized, run the takeover check. 'continue': start "
-                f"{focus['id']} (`start {focus['id']}` or `delegate {focus['id']}`) and keep working the queue."
+                f"Confirm session policy if pending (`setup confirm`). For authorized work, start "
+                f"{focus['id']} (`start {focus['id']}` or `runs prepare --task {focus['id']}`) and keep working the queue."
             )
         elif promote:
             nxt = f"Route the user's request first; within its authorized scope, refine {promote[0]} to READY and start it."
@@ -1609,7 +1550,7 @@ def cmd_boot(root, maintain=True, new_session=False):
         elif tasks:
             nxt = "No startable task: fix statuses (`validate`) or refine a PLANNED task to READY."
         else:
-            nxt = "Queue empty: handle the user's message, or run the Final audit (SKILL.md section 6)."
+            nxt = "Queue empty: handle the user's message, or run the Final audit (WORKFLOW.md §6)."
     print(f"NEXT: {nxt}")
     return 0
 
@@ -1654,28 +1595,26 @@ def cmd_map(root):
 
 def write_new(path, content, created):
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("x", encoding="utf-8", newline="\n") as f:
-            f.write(content)
+        Core.write_atomic(path, content)
         created.append(path)
 
 
 def ensure_pointers(root, write):
-    """Agent-neutral activation: AGENTS.md always; CLAUDE.md/GEMINI.md only if the project already has them."""
+    """Agent-neutral activation: AGENTS.md always; CLAUDE.md/GEMINI.md only if present."""
     done = []
     for name in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
-        path, text = Path(root) / name, read(Path(root) / name)
+        path = Core.public_path(root, name)
+        text = read(path)
         if text is None and name != "AGENTS.md":
             continue
         if text is None:
             if write:
-                with path.open("x", encoding="utf-8", newline="\n") as f:
-                    f.write(POINTER)
+                Core.write_atomic(path, POINTER)
             done.append((name, "created"))
         elif POINTER_MARK not in text:
             if write:
-                with open(path, "a", encoding="utf-8", newline="\n") as f:
-                    f.write(("\n" if text.endswith("\n") else "\n\n") + POINTER)
+                sep = "\n" if text.endswith("\n") else "\n\n"
+                Core.write_atomic(path, text + sep + POINTER)
             done.append((name, "appended"))
     return done
 
@@ -1712,19 +1651,22 @@ def config_text(root, old=None):
 
 
 def cmd_init(root):
-    b, created = bp(root), []
-    write_new(b / "config.yaml", config_text(root), created)
-    write_new(b / "current.md", CURRENT_TMPL, created)
-    write_new(b / "target.md", TARGET_TMPL, created)
-    write_new(b / "constraints.md", CONSTRAINTS_TMPL, created)
-    write_new(b / ".gitignore", ".cache/\n", created)
-    (b / "tasks").mkdir(exist_ok=True)
-    (b / "decisions").mkdir(exist_ok=True)
+    with checkout_lock(root):
+        b = Core.public_path(root, BRAIN_DIR)
+        created = []
+        write_new(Core.public_path(root, BRAIN_DIR + "/config.yaml"), config_text(root), created)
+        write_new(Core.public_path(root, BRAIN_DIR + "/current.md"), CURRENT_TMPL, created)
+        write_new(Core.public_path(root, BRAIN_DIR + "/target.md"), TARGET_TMPL, created)
+        write_new(Core.public_path(root, BRAIN_DIR + "/constraints.md"), CONSTRAINTS_TMPL, created)
+        write_new(Core.public_path(root, BRAIN_DIR + "/.gitignore"), ".cache/\n", created)
+        Core.public_path(root, BRAIN_DIR + "/tasks").mkdir(parents=True, exist_ok=True)
+        Core.public_path(root, BRAIN_DIR + "/decisions").mkdir(parents=True, exist_ok=True)
+        pointers = ensure_pointers(root, write=True)
     for p in created:
         print(f"CREATED {Path(os.path.relpath(p, root)).as_posix()}")
     if not created:
         print("EXISTS: nothing overwritten")
-    for name, action in ensure_pointers(root, write=True):
+    for name, action in pointers:
         print(f"POINTER {name} ({action})")
     print(
         "NEXT: Fill current.md (Runtime, Map, Domains+Sources from code), target.md (user intent; unknown -> "
@@ -1738,8 +1680,9 @@ def cmd_new(root, title, depends, risk, priority=None, tier=None):
         print("NO_BRAIN: run `init` first")
         return 3
     with checkout_lock(root):
-        tdir = bp(root) / "tasks"
-        tdir.mkdir(exist_ok=True)
+        RL.require_free_or_director(sys.modules[__name__], root)
+        tdir = Core.public_path(root, BRAIN_DIR + "/tasks")
+        tdir.mkdir(parents=True, exist_ok=True)
         nums = [int(TASK_FILE_RE.match(f.name).group(1)) for f in tdir.iterdir() if TASK_FILE_RE.match(f.name)]
         legacy = read(bp(root) / "migration-backup" / LEGACY_FILE) or ""
         nums += [int(n) for n in re.findall(r"^- \[[ xX~!\-]\]\s+T(\d+)", legacy, re.M)]
@@ -1749,46 +1692,41 @@ def cmd_new(root, title, depends, risk, priority=None, tier=None):
         deps = [norm_id("PB", n) for n in re.findall(r"PB-(\d+)", depends or "")]
         status = "PLANNED"
         risk = risk or "MEDIUM"
-        path = tdir / f"{tid}.md"
-        with path.open("x", encoding="utf-8", newline="\n") as f:
-            f.write(
-                TASK_TMPL.format(
-                    id=tid,
-                    title=title,
-                    status=status,
-                    risk=risk,
-                    priority=priority or "P2",
-                    tier=tier or "M",
-                    deps=", ".join(deps) or "-",
-                )
-            )
+        path = Core.public_path(root, BRAIN_DIR + "/tasks/" + f"{tid}.md")
+        Core.write_atomic(
+            path,
+            TASK_TMPL.format(
+                id=tid,
+                title=title,
+                status=status,
+                risk=risk,
+                priority=priority or "P2",
+                tier=tier or "M",
+                deps=", ".join(deps) or "-",
+            ),
+        )
     print(f"CREATED {Path(os.path.relpath(path, root)).as_posix()} ({status})")
     print(
-        "NEXT: Write it for a weaker model (SKILL.md section 3): Objective in the user's words, Areas, Domains, numbered "
-        "Steps with exact paths, Acceptance checkboxes, Verify commands. Incomplete -> Status: PLANNED."
+        "NEXT: Write Objective in the user's words, Areas, Domains, numbered Steps with exact paths, "
+        "Acceptance checkboxes, Verify commands (WORKFLOW.md §3). Incomplete -> Status: PLANNED."
     )
     return 0
 
 
 def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
-    import runtime_agents as A
-    import runtime_verify as V
-
     if not brain_exists(root):
         print("NO_BRAIN")
         return 3
     with checkout_lock(root):
         task = find_task(root, task_id)
         actor = agent_id(agent, "--agent")
-        import runtime_protocol as R
         R.guard(sys.modules[__name__], root, task)
         if R.enabled(sys.modules[__name__], root):
             require_session(root, implementation=task.get("purpose") != "discovery")
         R.attempt_guard(sys.modules[__name__], root, task)
         policy = A.gate(sys.modules[__name__], task, actor, "start", agents_path, root=root) or {}
         all_tasks = list_tasks(root)
-        pending = [t["id"] for t in all_tasks for e in t.get("external", [])
-                   if e["state"] in ("sent", "response_unknown")]
+        pending = [t["id"] for t in all_tasks for e in t.get("external", []) if e["state"] in ("sent", "response_unknown")]
         if pending:
             print("FAIL READBACK_FIRST unresolved external operations: " + ", ".join(sorted(set(pending))))
             return 2
@@ -1817,9 +1755,11 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
             print(f'FAIL {task["id"]} is owned by {cur_owner}; pass --takeover "<reason>" to take over')
             return 2
         dig, count = V.task_digest(sys.modules[__name__], root, task)
-        risk = max(V.effective_risk(sys.modules[__name__], task),
-                   A.score_task(sys.modules[__name__], root, task)["effective_risk"],
-                   key=RISK_VALUES.index)
+        risk = max(
+            V.effective_risk(sys.modules[__name__], task),
+            SC.score_task(sys.modules[__name__], root, task)["effective_risk"],
+            key=RISK_VALUES.index,
+        )
         task["risk"] = risk
         con = contract(task)
         set_headers(task["file"], {"Status": "IN_PROGRESS", "Owner": actor, "Risk": risk})
@@ -1830,6 +1770,8 @@ def cmd_start(root, task_id, agent="lead", takeover="", agents_path=None):
         )
         append_section(task["file"], "Evidence", line)
         print(f"STARTED {task['id']} owner={actor} risk={risk} files={count} digest={dig} contract={con}")
+        if policy.get("qualification_warning"):
+            print("WARN " + policy["qualification_warning"])
         return 0
 
 
@@ -1860,8 +1802,6 @@ def cmd_changed(root):
 
 
 def cmd_validate(root):
-    import runtime_agents as A
-
     if not brain_exists(root):
         print("NO_BRAIN")
         return 3
@@ -1917,9 +1857,9 @@ def cmd_validate(root):
     adrs = set()
     if (b / "decisions").is_dir():
         adrs = {
-            int(ADR_FILE_RE.match(f.name).group(1))
+            int(re.match(r"^ADR-(\d+)", f.name).group(1))
             for f in (b / "decisions").iterdir()
-            if ADR_FILE_RE.match(f.name)
+            if re.match(r"^ADR-(\d+)(?:-.*)?\.md$", f.name)
         }
     for t in tasks:
         tid = t["id"]
@@ -1952,7 +1892,7 @@ def cmd_validate(root):
                 warns.append(f"{tid}: {t['status']} but not an executable spec: missing {', '.join(missing)}")
             if t["vague"]:
                 warns.append(f"{tid}: vague words in Steps/Acceptance: {', '.join(t['vague'])}")
-            sinfo = A.score_task(sys.modules[__name__], root, t)
+            sinfo = SC.score_task(sys.modules[__name__], root, t)
             if sinfo["missing_ui_triad"]:
                 warns.append(
                     f"{tid}: UI task with typed Acceptance is missing Triad tag(s): "
@@ -2008,12 +1948,9 @@ def cmd_validate(root):
 
 
 def cmd_doctor(root):
-    import runtime_agents as A
-    import runtime_verify as V
-
     print(f"PROJECT_BRAIN {VERSION} (schema {SCHEMA}) | python {sys.version.split()[0]} on {sys.platform}")
     try:
-        with V.ProcessTree():
+        with Core.ProcessTree():
             containment = "Windows JobObject" if os.name == "nt" else "POSIX process group"
         print(f"CONTAINMENT: OK ({containment})")
     except Exception as exc:
@@ -2021,33 +1958,40 @@ def cmd_doctor(root):
         return 2
     has_git = git(root, "rev-parse", "--is-inside-work-tree") == "true"
     print(f"GIT: {'OK' if has_git else 'NONE'}")
+    try:
+        cap_cmd = AP.command()
+        print(f"CLI_AGENT_POOL: OK ({' '.join(cap_cmd)})")
+    except ValueError as exc:
+        print(f"CLI_AGENT_POOL: NOT_FOUND ({exc}; native/solo modes work without CAP)")
     reg = A.load()
-    agents = reg.get("cli_agents") or {}
-    print(f"CLI_AGENTS: {len(agents)} registered in {A.registry_path()} (run `agents scan` to refresh)")
-    for cid, info in sorted(agents.items()):
-        print(f"  - {cid}: {info.get('version', '?')} ({info.get('binary', '?')})")
+    print(f"ACTOR_REGISTRY: {len(reg.get('models', {}))} observed actor(s) in {A.registry_path()}")
     return 0
 
 
 BOOLEAN_FLAGS = {
     "--confirm", "--rearm", "--full", "--cheaper", "--new-session",
-    "--apply", "--write", "--json", "--dry-run", "--force", "--no-quota", "--new", "--refresh", "--user-confirmed", "--prepare", "--verify", "--cleanup", "--self-review", "--read-only", "--enable", "--goal-independent", "--keep-evidence", "--rerun", "--scan", "--readback", "-h", "--help", "--version"
+    "--apply", "--write", "--json", "--dry-run", "--force", "--new", "--prepare",
+    "--verify", "--cleanup", "--self-review", "--read-only", "--enable",
+    "--goal-independent", "--keep-evidence", "--rerun", "--scan", "--readback",
+    "--heal", "--sync-skills", "--unverified", "--from-hook", "--accepted", "--advanced",
+    "-h", "--help", "--version",
 }
+TWO_LEVEL_COMMANDS = {"agents", "runs", "relay", "setup", "quota"}
 
 
 def _reorder_argv(argv):
     """Allow positional arguments (like <root> or <PB-NNN>) to appear either before or after --flags."""
     if not argv or argv[0].startswith("-"):
         return argv
-    head_len = 2 if (argv[0] == "agents" and len(argv) > 1 and not argv[1].startswith("-")) else 1
+    head_len = 2 if (argv[0] in TWO_LEVEL_COMMANDS and len(argv) > 1 and not argv[1].startswith("-")) else 1
     head = list(argv[:head_len])
     rest = list(argv[head_len:])
-    pos, opts = [], []
+    pos, opts, after_dd = [], [], []
     i = 0
     while i < len(rest):
         tok = rest[i]
         if tok == "--":
-            pos.extend(rest[i + 1:])
+            after_dd = ["--"] + rest[i + 1:]
             break
         if tok.startswith("-"):
             opts.append(tok)
@@ -2058,7 +2002,7 @@ def _reorder_argv(argv):
         else:
             pos.append(tok)
         i += 1
-    return head + pos + opts
+    return head + pos + opts + after_dd
 
 
 def _resolve_root_and_task(pos1, pos2, default_root="."):
@@ -2079,40 +2023,55 @@ def _relay_token_argv(argv):
     out, i = [], 0
     while i < len(argv):
         item = argv[i]
+        if item == "--":
+            out.extend(argv[i:])
+            break
         if item == "--relay-token" and i + 1 < len(argv):
             os.environ["PB_RELAY_TOKEN"] = argv[i + 1]
             i += 2
             continue
         if item.startswith("--relay-token="):
             os.environ["PB_RELAY_TOKEN"] = item.split("=", 1)[1]
-        else:
-            out.append(item)
+            i += 1
+            continue
+        out.append(item)
+        if item.startswith("-") and "=" not in item and item not in BOOLEAN_FLAGS and i + 1 < len(argv):
+            out.append(argv[i + 1])
+            i += 2
+            continue
         i += 1
     return out
 
 
+def _require_not_worker(B_mod, root, action_label, allow_stopping=False):
+    if Core.worker_env_active():
+        if RL.authorized(B_mod, root):
+            return
+        if allow_stopping and RL.stopping_holder(B_mod, root):
+            return
+        raise ValueError(f"Pool workers cannot run {action_label}")
+
+
+_HOOK_ACTIVE = False
+
+
 def main():
+    global _HOOK_ACTIVE
+    _HOOK_ACTIVE = False
     if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import runtime_agents as A
-    import runtime_verify as V
+        sys.stdout.reconfigure(encoding="utf-8", newline="\n")
 
     ap = argparse.ArgumentParser(description="Project Brain planning and verification helper", epilog="See SKILL.md.")
     ap.add_argument("--version", action="version", version=f"project-brain {VERSION} (schema {SCHEMA})")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    import runtime_orchestration as O
     O.add_parser(sub)
-    import runtime_control as CT
     CT.add_parser(sub)
-    import runtime_relay as RL
     RL.add_parser(sub)
-    import runtime_setup as SU
     SU.add_parser(sub)
 
-    p_watch = sub.add_parser("watch", help="Token-thrifty 1-line project & quota monitor for observers and timers")
+    p_watch = sub.add_parser("watch", help="Token-thrifty 1-line project monitor for observers and timers")
     p_watch.add_argument("root", nargs="?", default=".")
-    p_watch.add_argument("--heal", action="store_true", help="Non-blocking check and recovery of stale locks or dead runs")
+    p_watch.add_argument("--heal", action="store_true", help="Report active runs needing readback (never unlinks OS locks)")
 
     for name in ("boot", "brief", "map", "init", "changed", "validate", "doctor"):
         parser = sub.add_parser(name)
@@ -2228,8 +2187,8 @@ def main():
     p.add_argument("--mode", choices=("response", "execute"), default=None)
     p.add_argument("--wait", type=int, default=3600)
     p.add_argument("--readback", action="store_true")
-    p.add_argument("--backend", choices=("pool", "direct"), default=None)
-    p.add_argument("--group", choices=("high", "medium", "low"), default="")
+    p.add_argument("--backend", choices=("pool", "direct"), default="pool")
+    p.add_argument("--group", default="")
     p.add_argument("pos1")
     p.add_argument("pos2", nargs="?", default=".")
     p.add_argument("--cli", default="")
@@ -2238,53 +2197,26 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force", action="store_true")
     p.add_argument("--timeout", type=int, default=900)
-    p.add_argument("--registry", default=None)
 
     p_ag = sub.add_parser("agents")
     ag_sub = p_ag.add_subparsers(dest="agents_cmd", required=True)
-    for pool_cmd in ("session", "approve", "revoke", "settle"):
-        sp = ag_sub.add_parser(pool_cmd)
-        if pool_cmd == "approve":
-            sp.add_argument("file")
-            sp.add_argument("--session", dest="session_id", required=True)
-            sp.add_argument("--user-confirmed", action="store_true")
-            sp.add_argument("--note", required=True)
-        if pool_cmd == "settle":
-            sp.add_argument("job_id")
-            sp.add_argument("--state", choices=("completed", "failed"), required=True)
-            sp.add_argument("--note", required=True)
-        if pool_cmd == "session":
-            sp.add_argument("--new", action="store_true")
-            sp.add_argument("--refresh", action="store_true")
-        sp.add_argument("root", nargs="?", default=".")
-        sp.add_argument("--json", action="store_true")
-        sp.add_argument("--registry", default=None)
     for ag_name in ("scan", "list", "quota"):
         sp = ag_sub.add_parser(ag_name)
-        sp.add_argument("--backend", choices=("pool", "direct"), default=None)
+        sp.add_argument("--backend", choices=("pool", "direct"), default="pool")
         sp.add_argument("root", nargs="?", default=".")
         sp.add_argument("--json", action="store_true")
         sp.add_argument("--full", action="store_true")
-        sp.add_argument("--registry", default=None)
-        if ag_name == "scan":
-            sp.add_argument("--no-quota", action="store_true")
     sp_sel = ag_sub.add_parser("select")
     sp_sel.add_argument("--mode", choices=("response", "execute"), default=None)
-    sp_sel.add_argument("--backend", choices=("pool", "direct"), default=None)
+    sp_sel.add_argument("--backend", choices=("pool", "direct"), default="pool")
     sp_sel.add_argument("root", nargs="?", default=".")
     sp_sel.add_argument("--role", choices=A.ROLES, default="worker")
     sp_sel.add_argument("--tier", default="")
-    sp_sel.add_argument("--risk", default="")
     sp_sel.add_argument("--task", default="")
     sp_sel.add_argument("--cli", default="")
-    sp_sel.add_argument("--exclude", default="")
+    sp_sel.add_argument("--group", default="")
     sp_sel.add_argument("--json", action="store_true")
     sp_sel.add_argument("--full", action="store_true")
-    sp_sel.add_argument("--registry", default=None)
-    sp_mrg = ag_sub.add_parser("merge")
-    sp_mrg.add_argument("file")
-    sp_mrg.add_argument("root", nargs="?", default=".")
-    sp_mrg.add_argument("--registry", default=None)
     sp_mode = ag_sub.add_parser("mode")
     sp_mode.add_argument("root", nargs="?", default=".")
     sp_mode.add_argument("--new", action="store_true")
@@ -2299,15 +2231,20 @@ def main():
     argv = _relay_token_argv(sys.argv[1:])
     a = ap.parse_args(_reorder_argv(argv))
     B_mod = sys.modules[__name__]
+    _HOOK_ACTIVE = bool(
+        a.cmd == "relay"
+        and getattr(a, "action", None) == "recover"
+        and getattr(a, "from_hook", False)
+        and not Core.worker_env_active()
+    )
 
     if a.cmd == "watch":
-        line = watch_status(a.root, getattr(a, "heal", False))
-        print(line)
+        print(watch_status(a.root, getattr(a, "heal", False)))
         return 0
     if a.cmd == "relay":
         result = RL.command(B_mod, a)
         code = result.pop("exit_code", 0) if isinstance(result, dict) else 0
-        if isinstance(result, dict) and result.get("notify"):
+        if isinstance(result, dict) and result.get("notify") and getattr(a, "from_hook", False):
             print(result["notify"])
         print(json.dumps(result, ensure_ascii=False))
         return code
@@ -2327,12 +2264,16 @@ def main():
     if a.cmd == "agents":
         if a.agents_cmd == "mode":
             root = Path(a.root).resolve()
-            import runtime_executor_policy as E
-            if E.load(B_mod, root) and (a.exec_mode or a.rev_mode or a.new or a.schedule or a.max_parallel is not None):
-                raise ValueError("Saved ESP/SP is authoritative; update/confirm it with policy, not legacy mode overrides")
             if a.exec_mode or a.rev_mode or a.note or a.new or a.schedule or a.max_parallel is not None or a.task_mode:
+                _require_not_worker(B_mod, root, "`agents mode`")
+                if E.load(B_mod, root) and (a.exec_mode or a.rev_mode or a.new or a.schedule or a.max_parallel is not None):
+                    raise ValueError("Saved ESP/SP is authoritative; update/confirm it with `policy`, not legacy mode overrides")
                 with checkout_lock(root):
-                    modes = set_session_modes(root, a.exec_mode, a.rev_mode, a.note, new=a.new, schedule=a.schedule, max_parallel=a.max_parallel, task_mode=a.task_mode)
+                    RL.require_free_or_director(B_mod, root)
+                    modes = set_session_modes(
+                        root, a.exec_mode, a.rev_mode, a.note, new=a.new,
+                        schedule=a.schedule, max_parallel=a.max_parallel, task_mode=a.task_mode,
+                    )
             else:
                 modes = get_session_modes(root)
             if a.json:
@@ -2341,25 +2282,27 @@ def main():
                 print(f"SESSION_MODES: exec={modes['exec'] or 'ask'} rev={modes['rev'] or 'ask'}" + (f" ({modes['note']})" if modes.get("note") else ""))
                 print(f"WORK: {modes['task_mode']} | {modes['schedule']} | max_parallel={modes['max_parallel']}")
             return 0
-        if a.agents_cmd in ("scan", "list", "quota", "select") and (a.backend == "pool" or a.backend is None and a.registry is None):
-            import runtime_agent_pool as AP
-            return AP.agents(B_mod, a)
-        return A.run_agents(B_mod, a)
+        if getattr(a, "backend", "pool") == "direct":
+            raise ValueError("Legacy --backend direct was removed in Project Brain 4.0; external CLI agents are managed exclusively by CLI Agent Pool (CAP), while native/solo work without CAP")
+        _require_not_worker(B_mod, Path(a.root).resolve(), f"`agents {a.agents_cmd}`")
+        return AP.agents(B_mod, a)
 
     if a.cmd in ("protocol", "security"):
-        import runtime_protocol as R
-        import runtime_security as S
         root = Path(a.root).resolve()
         if not brain_exists(root):
             raise ValueError("Initialize Brain before configuring protocol/security")
+        if (a.cmd == "protocol" and a.enable) or (a.cmd == "security" and a.ref):
+            _require_not_worker(B_mod, root, f"`{a.cmd}`")
         with checkout_lock(root):
             if a.cmd == "protocol":
                 cfg = parse_config(root)
                 if a.enable:
+                    RL.require_free_or_director(B_mod, root)
                     cfg["protocol_version"] = "1"
                     write_atomic(bp(root) / "config.yaml", config_text(root, cfg))
                 print("PROTOCOL: " + ("1" if R.enabled(B_mod, root) else "0"))
             elif a.ref:
+                RL.require_free_or_director(B_mod, root)
                 print(json.dumps(S.configure(B_mod, root, a.ref, a.note), ensure_ascii=False))
             elif a.scan:
                 files = git_paths(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR")
@@ -2369,19 +2312,20 @@ def main():
             else:
                 print(json.dumps(S.policy(B_mod, root) or {"reference": "pending"}))
         return 0
+
     if a.cmd in ("reconcile", "progress", "handoff"):
-        import runtime_protocol as R
         root, tid = _resolve_root_and_task(a.pos1, a.pos2)
-        task = find_task(root, tid)
-        if not task:
-            raise ValueError("Task not found")
+        allow_stop = a.cmd in ("progress", "handoff")
+        _require_not_worker(B_mod, root, f"`{a.cmd}`", allow_stopping=allow_stop)
         with checkout_lock(root):
+            RL.require_free_or_director(B_mod, root, allow_stopping=allow_stop)
+            task = find_task(root, tid)
             if a.cmd == "reconcile":
                 result = R.reconcile(B_mod, root, task, a.note, a.goal_independent, a.keep_evidence)
             elif a.cmd == "progress":
-                result = R.progress(B_mod, root, task, a.next_step, a.failing, a.dirty, a.strategy)
+                result = R.progress(B_mod, root, task, a.next_step, a.failing, a.dirty, a.strategy, allow_stopping=allow_stop)
             else:
-                result = R.handoff(B_mod, root, task)
+                result = R.handoff(B_mod, root, task, allow_stopping=allow_stop)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
@@ -2392,30 +2336,37 @@ def main():
             return 1
         if a.cmd == "score":
             if a.write:
+                _require_not_worker(B_mod, root, "`score --write`")
                 with checkout_lock(root):
-                    return A.cmd_score(B_mod, root, tid=tid, write=True, as_json=a.json)
-            return A.cmd_score(B_mod, root, tid=tid, write=a.write, as_json=a.json)
+                    RL.require_free_or_director(B_mod, root)
+                    return SC.cmd_score(B_mod, root, tid=tid, write=True, as_json=a.json)
+            return SC.cmd_score(B_mod, root, tid=tid, write=False, as_json=a.json)
         if not tid:
             print(f"FAIL {a.cmd} requires a task ID (PB-NNN)", file=sys.stderr)
             return 2
         if a.cmd == "start":
+            _require_not_worker(B_mod, root, "`start`")
             return cmd_start(root, tid, agent=a.agent, takeover=a.takeover, agents_path=a.registry)
         if a.cmd == "check":
+            _require_not_worker(B_mod, root, "`check`")
             with checkout_lock(root):
+                RL.require_free_or_director(B_mod, root)
                 rc, lines = V.check(B_mod, root, tid, timeout=a.timeout, actor=a.actor, rerun=a.rerun)
             for l in lines:
                 print(l)
             return rc
         if a.cmd == "evidence":
+            _require_not_worker(B_mod, root, "`evidence`")
             with checkout_lock(root):
-                rc, lines = V.evidence(
-                    B_mod, root, tid, a.kind, a.note, files=a.file, actor=a.actor, criteria=a.criterion
-                )
+                RL.require_free_or_director(B_mod, root)
+                rc, lines = V.evidence(B_mod, root, tid, a.kind, a.note, files=a.file, actor=a.actor, criteria=a.criterion)
             for l in lines:
                 print(l)
             return rc
         if a.cmd == "review":
+            _require_not_worker(B_mod, root, "`review`")
             with checkout_lock(root):
+                RL.require_free_or_director(B_mod, root)
                 rc, lines = V.review(
                     B_mod, root, tid, a.reviewer, a.verdict, findings=a.finding, agents_path=a.registry, self_review=a.self_review
                 )
@@ -2423,74 +2374,66 @@ def main():
                 print(l)
             return rc
         if a.cmd == "accept":
+            _require_not_worker(B_mod, root, "`accept`")
             with checkout_lock(root):
+                RL.require_free_or_director(B_mod, root)
                 rc, lines = V.accept(B_mod, root, tid, actor=a.actor, agents_path=a.registry, self_review=a.self_review)
             for l in lines:
                 print(l)
             return rc
         if a.cmd == "delegate":
-            import runtime_relay as RL
-            if os.environ.get("CLI_AGENT_POOL_WORKER") and not RL.authorized(B_mod, root):
+            if Core.worker_env_active() and not RL.authorized(B_mod, root):
                 raise ValueError("Pool workers cannot delegate recursively")
-            if a.backend == "pool" or a.backend is None and a.registry is None:
-                import runtime_agent_pool as AP
-                task = find_task(root, tid)
-                if not task:
-                    raise ValueError("task not found")
-                return AP.delegate(B_mod, root, task, A.score_task(B_mod, root, task), a)
-            if a.readback:
-                raise ValueError("Direct jobs use `agents session` and `agents settle` for readback; no worker launched")
-            if a.mode:
-                raise ValueError("--mode response/execute belongs to --backend pool; direct execution has its own contract")
-            return A.delegate_task(
-                B_mod,
-                root,
-                tid,
-                cli_filter=a.cli,
-                model_override=a.model,
-                effort_override=a.effort,
-                dry_run=a.dry_run,
-                force=a.force,
-                timeout=a.timeout,
-                reg_path=a.registry,
-            )
+            if getattr(a, "backend", "pool") == "direct":
+                raise ValueError("Legacy --backend direct was removed in Project Brain 4.0; use CLI Agent Pool (CAP) via `runs` or `delegate`")
+            task = find_task(root, tid)
+            return AP.delegate(B_mod, root, task, SC.score_task(B_mod, root, task), a)
 
     root = Path(a.root).resolve()
     if not root.is_dir():
         print(f"error: not a directory: {root}", file=sys.stderr)
         return 1
     if a.cmd == "brief":
-        import runtime_session as RS
-        return RS.brief(sys.modules[__name__], root)
+        return RS.brief(B_mod, root)
     if a.cmd == "boot":
         if a.new_session and a.read_only:
             raise ValueError("--new-session writes the session record; omit --read-only")
-        if a.read_only:
+        if a.new_session:
+            _require_not_worker(B_mod, root, "`boot --new-session`")
+        worker_ro = Core.worker_env_active() and not RL.authorized(B_mod, root)
+        if a.read_only or worker_ro:
             return cmd_boot(root, maintain=False)
         with startup_lock(root):
             return cmd_boot(root, new_session=a.new_session)
     if a.cmd in ("orient", "intake"):
-        import runtime_session as RS
         if a.cmd == "orient":
-            if a.read_only:
-                return RS.orient(sys.modules[__name__], root, maintain=False)
+            worker_ro = Core.worker_env_active() and not RL.authorized(B_mod, root)
+            if a.read_only or worker_ro:
+                return RS.orient(B_mod, root, maintain=False, startup_fn=M.startup)
             with startup_lock(root):
-                return RS.orient(sys.modules[__name__], root)
+                return RS.orient(B_mod, root, maintain=True, startup_fn=M.startup)
+        _require_not_worker(B_mod, root, "`intake`")
         with checkout_lock(root):
-            print(json.dumps(RS.intake(sys.modules[__name__], root, a.item, a.relation, a.task, a.resolve), ensure_ascii=False))
+            RL.require_free_or_director(B_mod, root)
+            print(json.dumps(RS.intake(B_mod, root, a.item, a.relation, a.task, a.resolve), ensure_ascii=False))
         return 0
     if a.cmd == "new":
+        _require_not_worker(B_mod, root, "`new`")
         return cmd_new(root, a.title, a.depends, a.risk, a.priority, a.tier)
     if a.cmd in ("migrate", "upgrade"):
-        import migrate
+        if a.apply:
+            _require_not_worker(B_mod, root, f"`{a.cmd} --apply`")
         with checkout_lock(root):
-            return migrate.run(root, a.apply, sync_skills=getattr(a, "sync_skills", False))
+            if a.apply:
+                RL.require_free_or_director(B_mod, root)
+            return M.run(root, a.apply, sync_skills=getattr(a, "sync_skills", False))
     if a.cmd == "legacy":
         if a.prepare or a.verify or a.cleanup:
-            import runtime_adopt as D
+            _require_not_worker(B_mod, root, "`legacy`")
             if a.apply:
                 raise ValueError("use import --apply separately before trace verification/cleanup")
             with checkout_lock(root):
+                RL.require_free_or_director(B_mod, root)
                 if a.prepare:
                     result = D.prepare(B_mod, root, a.path)
                 elif a.verify:
@@ -2504,9 +2447,15 @@ def main():
             if result.get("archive"):
                 print("ARCHIVE: " + str(result["archive"]))
             return 0
-        return A.cmd_legacy(B_mod, root, apply=a.apply)
+        if a.apply:
+            _require_not_worker(B_mod, root, "`legacy --apply`")
+            with checkout_lock(root):
+                RL.require_free_or_director(B_mod, root)
+                return D.cmd_legacy(B_mod, root, apply=True, migrate_fn=M.run)
+        return D.cmd_legacy(B_mod, root, apply=False, migrate_fn=M.run)
+    if a.cmd == "init":
+        _require_not_worker(B_mod, root, "`init`")
     return {
-        "boot": cmd_boot,
         "map": cmd_map,
         "init": cmd_init,
         "changed": cmd_changed,
@@ -2520,7 +2469,7 @@ if __name__ == "__main__":
         sys.exit(main())
     except (ValueError, OSError, sqlite3.Error) as exc:
         print(f"FAIL {exc}", file=sys.stderr)
-        if "--from-hook" in sys.argv:
+        if _HOOK_ACTIVE:
             print("CAP_RETRY_AFTER 30")
             sys.exit(75)
         sys.exit(2)

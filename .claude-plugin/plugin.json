@@ -1,8 +1,8 @@
 {
   "name": "project-brain",
   "displayName": "Project Brain",
-  "version": "3.12.0",
-  "description": "Git-native memory, UI/Backend quality enforcement, complexity scoring, CLI agent discovery, quota protection, and sub-agent delegation.",
+  "version": "4.0.0",
+  "description": "Git-native memory, UI/Backend quality enforcement, complexity scoring, source-bound verification, and economical orchestration.",
   "author": {
     "name": "XPersPective",
     "url": "https://github.com/XPersPective"
